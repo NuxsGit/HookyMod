@@ -260,6 +260,27 @@ class AppLogicTests(unittest.TestCase):
         self.assertEqual(len(self.app._dirty_documents()), 1)
         self.assertGreater(len(doc.pack()), 0)
 
+    def test_scan_folder_flows_into_report_window(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        (folder / "Model").mkdir()
+        (folder / "Model" / "test.bfres").write_bytes(synth.make_bfres())
+        (folder / "Tex.bntx").write_bytes(synth.make_bntx(4, 4, synth.rgba8_pixels(4, 4)))
+
+        old_dialog = app_module.filedialog.askdirectory
+        app_module.filedialog.askdirectory = lambda *a, **k: str(folder)
+        self.addCleanup(setattr, app_module.filedialog, "askdirectory", old_dialog)
+
+        received = []
+        self.app._run_bg = lambda label, work, done, failed=None: done(work())
+        self.app._show_scan_report = lambda report: received.append(report)
+        self.app.scan_folder()
+        report = received[-1]
+        self.assertEqual(report["file_count"], 2)
+        self.assertIn("Nintendo", report["engine"])
+        # la fenêtre de rapport se construit sans erreur
+        app_module.App._show_scan_report(self.app, report)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

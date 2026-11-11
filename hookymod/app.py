@@ -17,6 +17,7 @@ import tkinter as tk
 
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
+from . import identify
 from .container import Document, Level, detect_kind
 from .mesh import MeshData, export_obj, load_obj
 from .sarc import SarcArchive
@@ -210,6 +211,7 @@ class App(tk.Tk):
         outils.add_separator()
         outils.add_command(label="Exporter les textures en PNG…", command=self.export_textures)
         outils.add_command(label="Recharger les dictionnaires", command=self.reload_dicts)
+        outils.add_command(label="Scanner un dossier (formats)…", command=self.scan_folder)
         outils.add_command(label="Paramètres…", command=self.settings_dialog)
         menubar.add_cascade(label="Outils", menu=outils)
 
@@ -1139,6 +1141,62 @@ class App(tk.Tk):
             details.append("Erreurs :\n" + "\n".join(errors[:20]))
         if details:
             messagebox.showwarning("Remplacement par lot", "\n\n".join(details), parent=self)
+
+    # ------------------------------------------------------------------ scan
+    @_action
+    def scan_folder(self) -> None:
+        """Identifie les formats d'un dossier (dump inconnu) et affiche un rapport."""
+        folder = filedialog.askdirectory(title="Dossier à scanner (dump du jeu)")
+        if not folder:
+            return
+        root = Path(folder)
+
+        def work():
+            return identify.scan(root, samples=2, hexdump_bytes=32, strings=6)
+
+        self._run_bg("Analyse du dossier…", work, self._show_scan_report)
+
+    def _show_scan_report(self, report: dict) -> None:
+        win = tk.Toplevel(self)
+        win.title(f"Scan — {Path(report['root']).name or report['root']}")
+        win.configure(bg=BG)
+        win.geometry("940x620")
+        win.transient(self)
+        frame = ttk.Frame(win, padding=10)
+        frame.pack(fill="both", expand=True)
+        text = tk.Text(frame, wrap="none", bg=PANEL, fg=FG, insertbackground=FG,
+                       relief="flat", padx=8, pady=8)
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        body = identify.format_report(report)
+        text.insert("1.0", body)
+        text.configure(state="disabled")
+
+        bar = ttk.Frame(win, padding=(10, 0, 10, 10))
+        bar.pack(fill="x")
+
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(body)
+            self.status("Rapport copié dans le presse-papiers.")
+
+        def save():
+            target = filedialog.asksaveasfilename(
+                title="Enregistrer le rapport", defaultextension=".json",
+                filetypes=[("Rapport JSON", "*.json"), ("Texte", "*.txt")])
+            if not target:
+                return
+            path = Path(target)
+            payload = (identify.report_to_json(report) if path.suffix.lower() == ".json"
+                       else body)
+            write_atomic(path, payload.encode("utf-8"))
+            self.status(f"Rapport écrit : {path}")
+
+        ttk.Button(bar, text="Copier le rapport", command=copy).pack(side="left")
+        ttk.Button(bar, text="Enregistrer…", command=save).pack(side="left", padx=8)
+        ttk.Button(bar, text="Fermer", command=win.destroy).pack(side="right")
 
     # ------------------------------------------------------------------ patch
     @_action

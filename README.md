@@ -58,6 +58,26 @@ Everything is Python (Tkinter for the GUI): no proprietary library, no game asse
 * **Settings**: Blender path, zstd compression level, texture preview resolution, dictionary
   status.
 
+### 🔍 Identification d'un dump inconnu
+
+Avant de pouvoir lire les assets, il faut savoir **dans quels formats** ils sont stockés
+(remake PC sur Unreal/Unity, portage Switch, version 3DS, moteur maison…). Le scanner
+intégré répond à cette question sans parseur :
+
+```bash
+python -m hookymod.cli scan "/chemin/vers/le/jeu" --hexdump 32 --strings 6
+python -m hookymod.cli scan "/chemin/vers/le/jeu" --json -o rapport.json
+```
+
+Il parcourt le dossier, reconnaît les magics (SARC, RARC, U8, Yaz0, zstd, BNTX, BFRES,
+BNSH, BYML, AAMP, CMB, CTEX, BCH, `.uasset`, `.pak`, IoStore, UnityFS, `.pck`, ZIP, DDS,
+Ogg…), détaille les échantillons par extension (en-tête + chaînes internes) et propose le
+**moteur probable** avec sa justification. Menu **Outils → Scanner un dossier (formats)…**
+pour la même chose dans l'interface.
+
+Procédure détaillée et liste de ce qu'il faut transmettre pour ajouter un format :
+[`docs/IDENTIFIER_UN_DUMP.md`](docs/IDENTIFIER_UN_DUMP.md).
+
 ### 🖥️ Command line interface (headless, CI-friendly)
 
 The same engine is available without Tkinter:
@@ -71,6 +91,8 @@ python -m hookymod.cli patch pack.zs --find Link --replace Hero -o patched.zs
 python -m hookymod.cli textures pack.zs -e Tex/Butterfly.bntx.zs -o png/
 python -m hookymod.cli obj pack.zs -e Model/Link.bfres -o Link.obj
 python -m hookymod.cli dicts romfs
+python -m hookymod.cli scan romfs --json -o rapport.json
+python -m hookymod.cli carve conteneur_inconnu.bin     # structures à l'intérieur
 ```
 
 ## 🚀 Getting started
@@ -144,7 +166,9 @@ hookymod/
   mesh.py             mesh data, OBJ import/export
   viewer.py           Tkinter 3D viewer (software painter)
   app.py              Tkinter application
+  identify.py         identification des formats (magics) et scan d'un dump
   cli.py              command line interface
+docs/                 guides (identification d'un dump inconnu)
 tests/                unit tests + synthetic SARC/BFRES/BNTX generators
 ```
 
@@ -156,10 +180,17 @@ No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and
 python -m unittest discover -s tests -v
 ```
 
+70 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
+logique de l'interface.
+
 The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
 
 ## ⚠️ Known limitations
 
+* Les formats pris en charge sont ceux d'un pipeline **Nintendo** (SARC, zstd, BFRES,
+  BNTX). Si le dump s'avère être un conteneur Unreal (`.pak` / `.uasset` / IoStore), Unity
+  (`.assets`) ou 3DS (`.zar` / `.cmb` / `.ctex`), utilise `scan` pour le confirmer : les
+  parseurs correspondants ne sont pas encore écrits.
 * Modern BFRES files (v10 / TotK-style) may use externally stored strings; those names
   will be empty, but geometry still loads.
 * Skeletal animations and skinned deformation are **not** played back yet: models are shown

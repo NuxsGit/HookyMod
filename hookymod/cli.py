@@ -2,6 +2,8 @@
 
 Exemples ::
 
+    python -m hookymod.cli scan /chemin/dump_du_jeu
+    python -m hookymod.cli scan /chemin/dump_du_jeu --json -o rapport.json
     python -m hookymod.cli dicts /chemin/romfs
     python -m hookymod.cli list romfs/Pack/Some.pack.zs --romfs romfs
     python -m hookymod.cli extract romfs/Pack/Some.pack.zs -o sortie --decompress
@@ -19,6 +21,7 @@ from pathlib import Path
 
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
+from . import identify
 from .container import Level, detect_kind
 from .mesh import export_obj
 from .sarc import SarcArchive, is_sarc
@@ -411,6 +414,39 @@ def cmd_dicts(args) -> int:
     return 0 if dicts else 1
 
 
+def cmd_carve(args) -> int:
+    path = Path(args.path)
+    data = _read(path)
+    data = data[:args.bytes] if args.bytes else data
+    found = identify.carve(data, limit=args.limit)
+    if not found:
+        print(f"Aucune structure connue dans les {human_size(len(data))} analysés.")
+        print("→ lance « scan » sur le dossier pour identifier le format global.")
+        return 1
+    print(f"{path.name} — {human_size(len(data))} analysés, "
+          f"{len(found)} structure(s) :")
+    for item in found:
+        print(f"  0x{item.offset:08X}  {item.label}")
+    return 0
+
+
+def cmd_scan(args) -> int:
+    root = Path(args.path)
+    report = identify.scan(root, samples=max(1, args.samples), hexdump_bytes=args.hexdump,
+                           strings=args.strings, max_depth=args.depth or None,
+                           limit=args.limit)
+    text = (identify.report_to_json(report) if args.json
+            else identify.format_report(report))
+    if args.output:
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(f"Rapport écrit : {out} ({human_size(len(text.encode('utf-8')))})")
+    else:
+        print(text)
+    return 0
+
+
 # --------------------------------------------------------------------------- parsing
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -480,6 +516,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lod", type=int, default=0)
     p.add_argument("--scale", type=float, default=1.0)
     p.set_defaults(func=cmd_obj)
+
+    p = sub.add_parser("scan", parents=[common],
+                       help="identifie les formats d'un dossier (ou d'un fichier) et le moteur probable")
+    p.add_argument("path")
+    p.add_argument("--samples", type=int, default=3,
+                   help="fichiers analysés par extension (défaut 3)")
+    p.add_argument("--hexdump", type=int, default=0,
+                   help="affiche les N premiers octets des échantillons (défaut 0)")
+    p.add_argument("--strings", type=int, default=0,
+                   help="affiche N chaînes ASCII des échantillons (noms internes, chemins)")
+    p.add_argument("--depth", type=int, default=0, help="profondeur max (0 = illimitée)")
+    p.add_argument("--limit", type=int, default=200000, help="nombre max de fichiers lus")
+    p.add_argument("--json", action="store_true", help="sortie JSON (pour partage)")
+    p.add_argument("--output", "-o", help="écrit le rapport dans un fichier")
+    p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("carve", parents=[common],
+                       help="cherche des structures connues à l'intérieur d'un fichier")
+    p.add_argument("path")
+    p.add_argument("--bytes", type=int, default=4 * 1024 * 1024,
+                   help="octets analysés (défaut 4 Mio, 0 = tout)")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_carve)
 
     p = sub.add_parser("dicts", parents=[common], help="analyse les dictionnaires zstd d'un romfs")
     p.add_argument("path")
