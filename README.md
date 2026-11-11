@@ -1,10 +1,10 @@
 # 🗡️ OoT Remake Asset Explorer & Modding Tool
 
-[![GitHub Stars](https://img.shields.io/github/stars/YOUR_USERNAME/YOUR_REPOSITORY?style=for-the-badge&logo=github&color=gold)](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/YOUR_USERNAME/YOUR_REPOSITORY?style=for-the-badge&logo=github&color=blue)](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY/network/members)
-[![GitHub Issues](https://img.shields.io/github/issues/YOUR_USERNAME/YOUR_REPOSITORY?style=for-the-badge&logo=github&color=red)](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY/issues)
-[![GitHub License](https://img.shields.io/github/license/YOUR_USERNAME/YOUR_REPOSITORY?style=for-the-badge&color=green)](LICENSE)
-[![Release Status](https://img.shields.io/github/v/release/YOUR_USERNAME/YOUR_REPOSITORY?style=for-the-badge&logo=github&color=purple)](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=gold)](https://github.com/NuxsGit/HookyMod/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=blue)](https://github.com/NuxsGit/HookyMod/network/members)
+[![GitHub Issues](https://img.shields.io/github/issues/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=red)](https://github.com/NuxsGit/HookyMod/issues)
+[![GitHub License](https://img.shields.io/github/license/NuxsGit/HookyMod?style=for-the-badge&color=green)](LICENSE)
+[![Release Status](https://img.shields.io/github/v/release/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=purple)](https://github.com/NuxsGit/HookyMod/releases)
 [![Solana Donate](https://img.shields.io/badge/Donate-Solana-00FFA3?style=for-the-badge&logo=solana&logoColor=black)](#-support-the-project)
 
 ## 📌 Overview
