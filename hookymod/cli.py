@@ -344,6 +344,21 @@ def cmd_patch(args) -> int:
     return 0
 
 
+def cmd_doctor(args) -> int:
+    """Environnement d'exécution (et anatomie d'un fichier si ``--path``)."""
+    from . import diagnose
+    print(diagnose.environment_report(args.romfs))
+    if getattr(args, "path", None):
+        path = Path(args.path)
+        dicts = load_dicts(args.romfs, path, args.verbose)
+        level = open_level(path, dicts, _auto_romfs(path))
+        data = _decompress_maybe(level.data, dicts)
+        print()
+        print(diagnose.file_report(data, path.name,
+                                   orin=None if args.orin is None else args.orin))
+    return 0
+
+
 def cmd_textures(args) -> int:
     path = Path(args.path)
     dicts = load_dicts(args.romfs, path, args.verbose)
@@ -351,7 +366,8 @@ def cmd_textures(args) -> int:
     data = _decompress_maybe(_pick_entry(level, args.entry), dicts)
     if data[:4] != b"BNTX":
         raise HookyError(f"Ce n'est pas un BNTX ({detect_kind(data)}).")
-    file = bntx_mod.BntxFile.parse(data, path.name)
+    file = bntx_mod.BntxFile.parse(data, path.name,
+                                   orin=None if args.orin is None else args.orin)
     if args.list or not args.output:
         print(file.info())
         if not args.list:
@@ -687,6 +703,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list", "-l", action="store_true", help="liste seulement")
     p.add_argument("--filter", "-f")
     p.add_argument("--mip", type=int, default=0)
+    swizzle = p.add_mutually_exclusive_group()
+    swizzle.add_argument("--orin", dest="orin", action="store_true", default=None,
+                         help="force la disposition Switch 2 (Tegra T239)")
+    swizzle.add_argument("--x1", dest="orin", action="store_false",
+                         help="force la disposition Switch 1 (Tegra X1)")
     p.set_defaults(func=cmd_textures)
 
     p = sub.add_parser("obj", parents=[common], help="exporte un BFRES en OBJ")
@@ -771,6 +792,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("dicts", parents=[common], help="analyse les dictionnaires zstd d'un romfs")
     p.add_argument("path")
     p.set_defaults(func=cmd_dicts)
+
+    p = sub.add_parser("doctor", parents=[common],
+                       help="diagnostic : modules, Tk, formats, et un fichier si donné")
+    p.add_argument("path", nargs="?")
+    swizzle = p.add_mutually_exclusive_group()
+    swizzle.add_argument("--orin", dest="orin", action="store_true", default=None)
+    swizzle.add_argument("--x1", dest="orin", action="store_false")
+    p.set_defaults(func=cmd_doctor)
     return parser
 
 

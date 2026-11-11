@@ -85,7 +85,9 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
 * **BNTX texture viewer**: list every texture of a file, preview mip levels (image ajustée
   à la fenêtre, cache disque des aperçus, Pillow en secours si Tk ne lit pas le PNG), decode
   BC1/BC2/BC3/BC4/BC5, RGBA8/BGRA8, RGB565, BGR565, RGBA4, ABGR4, RGB5A1, R10G10B10A2, R8, RG8…
-  (Tegra block-linear swizzle is implemented and validated against the reference algorithm).
+  (Tegra block-linear swizzle is implemented for **both** generations: X1/Switch 1 and
+  **Orin/Switch 2**, selected automatically from the BNTX version — `0.4.1.x` = remake
+  Switch 2 — and overridable from the *Pixels* selector or `--orin` / `--x1`).
   BC7 / BC6H / ASTC are supported when `texture2ddecoder` is installed.
 * **Texture → PNG export** (single, filtered or all textures). PNG is written by the app
   itself: no Pillow dependency.
@@ -102,6 +104,14 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
   Modèle 3D (`Ctrl+1/2/3` pour passer de l'un à l'autre).
 * **Fenêtre de chargement** avec barre de progression pour les opérations longues, en
   particulier l'ouverture d'un `.nup` et l'extraction de son `romfs`, et les traductions.
+* **Thèmes sombre et clair** (menu **Affichage**, ou *Paramètres*), appliqués à chaud sans
+  reconstruire l'interface et sans perdre le fichier ouvert : le choix est mémorisé. Le
+  viewer 3D et les fenêtres de diagnostic reprennent les couleurs du thème courant.
+* **Diagnostics** : *Affichage → Diagnostic du fichier courant…* (magic, version, disposition
+  des pixels, sections, mipmaps, avertissements du parseur) et *Aide → Diagnostic de
+  l'installation…* (Python, Tk et support PNG, `zstandard`, `texture2ddecoder`, dictionnaires,
+  chemins de configuration). En ligne de commande :
+  `python -m hookymod.cli doctor [fichier]`.
 
 ### 🛠️ Modding suite
 
@@ -147,6 +157,8 @@ python -m hookymod.cli extract romfs/Pack/Some.pack.zs -o out --decompress
 python -m hookymod.cli replace pack.zs -e Model/Link.bfres -i new.bfres -o new_pack.zs
 python -m hookymod.cli patch pack.zs --find Link --replace Hero -o patched.zs
 python -m hookymod.cli textures pack.zs -e Tex/Butterfly.bntx.zs -o png/
+python -m hookymod.cli textures tex.bntx --orin            # force la disposition Switch 2
+python -m hookymod.cli doctor romfs/Pack/Tex.pack.zs       # modules + anatomie d'un fichier
 python -m hookymod.cli obj pack.zs -e Model/Link.bfres -o Link.obj
 python -m hookymod.cli dicts romfs
 python -m hookymod.cli scan romfs --json -o rapport.json
@@ -164,7 +176,9 @@ python -m hookymod.cli translate pack -p projet -o mods --mod-name MonMod
 * Python **3.10+** with Tkinter (Windows/macOS installers include it; on Debian/Ubuntu:
   `sudo apt install python3-tk`).
 * `zstandard` (required for `.zs` files).
-* *Optional:* `texture2ddecoder` for BC7 / BC6H / ASTC textures.
+* `texture2ddecoder` for BC7 / BC6H /**ASTC** textures — indispensable pour les assets
+  Switch 2 du remake (le décodeur intégré ne couvre que BC1-BC5 et les formats non
+  compressés). `python -m hookymod.cli doctor` indique ce qui manque.
 * A legally obtained, extracted `romfs` folder of the game.
 
 ### Installation
@@ -248,8 +262,8 @@ No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and
 python -m unittest discover -s tests -v
 ```
 
-169 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
-logique de l'interface.
+213 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI,
+les dispositions de pixels Switch 1/Orin, les thèmes et la logique de l'interface.
 
 The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
 
@@ -260,8 +274,12 @@ The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
   être un conteneur Unreal (`.pak` / `.uasset` / IoStore), Unity (`.assets`) ou 3DS
   (`.zar` / `.cmb` / `.ctex`), utilise `scan` pour le confirmer : les parseurs
   correspondants ne sont pas encore écrits.
-* Modern BFRES files (v10 / TotK-style) may use externally stored strings; those names
-  will be empty, but geometry still loads.
+* Modern BFRES files (v10 / Switch 2) may use externally stored strings; those names
+  will be empty, but geometry still loads. External textures referenced from
+  `Tex/<name>.bntx.zs` are not resolved automatically yet: open the BNTX alongside.
+* Sur un asset Switch 2 qui ne s'affiche pas, lancer **Affichage → Diagnostic du fichier
+  courant…** : la version du conteneur et la disposition des pixels (X1/Orin) y figurent,
+  et le sélecteur *Pixels* de l'onglet Textures permet de forcer l'autre disposition.
 * Skeletal animations and skinned deformation are **not** played back yet: models are shown
   in their bind pose.
 * BNTX : PNG → BNTX fonctionne (remplacement dans le fichier d'origine ou création),

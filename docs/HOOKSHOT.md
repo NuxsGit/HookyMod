@@ -138,6 +138,10 @@ Dans l'interface : **Outils → Traduire un romfs pour l'édition PC…**, puis
 * formats encodables : RGBA8/BGRA8 (et sRGB), RGB565/BGR565, RGBA4/BGRA4,
   RGB5A1/BGR5A1, R8, RG8, BC1, BC3, BC4, BC5 ;
 * mips régénérées par filtre boîte, swizzle Tegra identique au décodeur ;
+* la **disposition est conservée** : un BNTX 0.4.1.x du remake (Orin / Switch 2)
+  reste en Orin après remplacement, un BNTX Switch 1 reste en X1 ;
+  `--orin` / `--x1` (CLI) et le sélecteur *Pixels* (onglet Textures) forcent
+  l'autre disposition quand la version du fichier est atypique ;
 * BC7/ASTC ne sont pas encodables (pas d'encodeur libre fiable) : réexporte la
   texture dans un format géré, ou garde le BNTX d'origine tel quel.
 

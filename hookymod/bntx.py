@@ -111,17 +111,34 @@ def pow2_round_up(x: int) -> int:
     return x + 1
 
 
+def gob_offset(x: int, y: int, orin: bool = False) -> int:
+    """Décalage d'un octet (x, y) à l'intérieur d'un GOB de 512 octets.
+
+    Deux dispositions existent :
+
+    * **Tegra X1** (Switch 1, TRM v1.3 p. 1218) : les secteurs de 16 octets sont
+      groupés deux rangées à la fois ;
+    * **Orin** (Tegra T239, Switch 2, TRM Orin) : ils sont groupés **quatre**
+      rangées à la fois (128 octets par groupe au lieu de 64). C'est le
+      « sector swap » que Switch-Toolbox appelle ``is_orin``/``orin_sector_swap``.
+    """
+    if orin:
+        return (((x % 64) // 32) * 256 + ((y % 8) // 4) * 128
+                + ((x % 32) // 16) * 64 + (y % 4) * 16 + (x % 16))
+    return (((x % 64) // 32) * 256 + ((y % 8) // 2) * 64
+            + ((x % 32) // 16) * 32 + (y % 2) * 16 + (x % 16))
+
+
 def get_addr_block_linear(x: int, y: int, image_width: int, bytes_per_pixel: int,
-                          base_address: int, block_height: int) -> int:
-    """Adresse (Tegra X1 TRM) d'un bloc/pixel dans une surface block-linear."""
+                          base_address: int, block_height: int,
+                          orin: bool = False) -> int:
+    """Adresse d'un bloc/pixel dans une surface block-linear (X1 ou Orin)."""
     image_width_in_gobs = div_round_up(image_width * bytes_per_pixel, 64)
     gob = (base_address
            + (y // (8 * block_height)) * 512 * block_height * image_width_in_gobs
            + (x * bytes_per_pixel // 64) * 512 * block_height
            + ((y % (8 * block_height)) // 8) * 512)
-    xb = x * bytes_per_pixel
-    return (gob + ((xb % 64) // 32) * 256 + ((y % 8) // 2) * 64
-            + ((xb % 32) // 16) * 32 + (y % 2) * 16 + (xb % 16))
+    return gob + gob_offset(x * bytes_per_pixel, y, orin)
 
 
 def _surface_size(width: int, height: int, blk_w: int, blk_h: int, bpp: int) -> int:
@@ -141,8 +158,11 @@ def surface_size(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
 
 def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
               tile_mode: int, block_height_log2: int, data: bytes,
-              round_pitch: bool = True) -> bytes:
-    """Transforme une surface swizzlée en données linéaires (bloc/pixel)."""
+              round_pitch: bool = True, orin: bool = False) -> bytes:
+    """Transforme une surface swizzlée en données linéaires (bloc/pixel).
+
+    ``orin=True`` lit la disposition Switch 2 (Tegra T239) au lieu de la X1.
+    """
     wb = div_round_up(width, blk_w)
     hb = div_round_up(height, blk_h)
     needed = wb * hb * bpp
@@ -171,7 +191,7 @@ def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
         row_dst = y * wb * bpp
         row_end = row_dst + wb * bpp
         for x in range(0, wb, per_chunk):
-            src = get_addr_block_linear(x, y, wb, bpp, 0, block_height)
+            src = get_addr_block_linear(x, y, wb, bpp, 0, block_height, orin)
             if src >= size:
                 break
             dst = row_dst + x * bpp
@@ -184,7 +204,7 @@ def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
 
 def swizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
             tile_mode: int, block_height_log2: int, data: bytes,
-            round_pitch: bool = True) -> bytes:
+            round_pitch: bool = True, orin: bool = False) -> bytes:
     """Inverse de :func:`deswizzle` (pour réécrire une texture dans un BNTX).
 
     Le tampon retourné a la taille réelle de la surface swizzlée (souvent plus
@@ -212,7 +232,7 @@ def swizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
     for y in range(hb):
         row_src = y * wb * bpp
         for x in range(0, wb, per_chunk):
-            dst = get_addr_block_linear(x, y, wb, bpp, 0, block_height)
+            dst = get_addr_block_linear(x, y, wb, bpp, 0, block_height, orin)
             count = min(chunk_bytes, (wb - x) * bpp, linear_size - (row_src + x * bpp))
             if count <= 0 or dst >= surface:
                 break
@@ -586,6 +606,8 @@ class BntxTexture:
     comp_sel: tuple = (0, 0, 0, 0)
     warnings: list[str] = field(default_factory=list)
     data_offset: int = 0        # position absolue des données dans le fichier
+    orin: bool = False          # disposition Switch 2 (Tegra T239) au lieu de la X1
+    file_version: int = 0      # version du BNTX qui contient la texture
 
     # ------------------------------------------------------------------ décodage
     def mip_size(self, level: int = 0) -> tuple[int, int]:
@@ -634,7 +656,7 @@ class BntxTexture:
             self.warnings.append(f"swizzle inconnu ({self.swizzle_value})")
         linear = deswizzle(width, height, self.blk_w, self.blk_h, bpp,
                            self.tile_mode, self._shifted_block_height(level), raw,
-                           round_pitch=round_pitch)
+                           round_pitch=round_pitch, orin=self.orin)
         if self.format_name in PIXEL_FORMATS:
             rgba = _decode_pixels(self.format_name, linear, width, height)
         else:
@@ -642,6 +664,13 @@ class BntxTexture:
                                self.blk_w, self.blk_h)
         rgba = apply_component_select(rgba, self.comp_sel)
         return width, height, rgba
+
+    @property
+    def swizzle_label(self) -> str:
+        """« Orin (Switch 2) » ou « X1 (Switch 1) » tel qu'utilisé au décodage."""
+        if self.tile_mode == 1:
+            return "linéaire"
+        return "Orin (Switch 2)" if self.orin else "X1 (Switch 1)"
 
     def to_png(self, level: int = 0) -> bytes:
         width, height, rgba = self.decode(level)
@@ -659,7 +688,8 @@ class BntxTexture:
             f"Format  : {self.format_name} (0x{self.format_code:04X})",
             f"Mips    : {self.mip_count}   ·   Tableau : {self.array_length}",
             f"Tile    : {'linéaire' if self.tile_mode == 1 else 'block-linear'}"
-            f"   ·   blockHeightLog2 : {self.block_height_log2}",
+            f"   ·   blockHeightLog2 : {self.block_height_log2}"
+            f"   ·   swizzle : {self.swizzle_label}",
             f"Taille des données : {self.image_size:,} octets",
         ]
         if self.warnings:
@@ -668,12 +698,25 @@ class BntxTexture:
 
 
 class BntxFile:
-    """Fichier BNTX contenant une ou plusieurs textures."""
+    """Fichier BNTX contenant une ou plusieurs textures.
 
-    def __init__(self, data: bytes, textures: list[BntxTexture], name: str = "") -> None:
+    Les jeux Switch 2 écrivent des BNTX **0.4.x** (« Ounc ») dont les pixels
+    utilisent la disposition *Orin* : la version décide donc du désentrelacement,
+    et ``orin`` peut être forcé par l'appelant si un fichier est atypique.
+    """
+
+    #: Version à partir de laquelle Nintendo utilise la disposition Orin.
+    ORIN_VERSION = 0x00040000
+
+    def __init__(self, data: bytes, textures: list[BntxTexture], name: str = "",
+                 version: int = 0, orin: bool = False,
+                 warnings: list[str] | None = None) -> None:
         self.data = data
         self.textures = textures
         self.name = name
+        self.version = version
+        self.orin = orin
+        self.warnings = warnings or []
 
     def __len__(self) -> int:
         return len(self.textures)
@@ -692,7 +735,14 @@ class BntxFile:
         return None
 
     @classmethod
-    def parse(cls, data: bytes, name: str = "") -> "BntxFile":
+    def parse(cls, data: bytes, name: str = "", orin: bool | None = None) -> "BntxFile":
+        """Analyse un BNTX.
+
+        ``orin=None`` (défaut) choisit la disposition des pixels d'après la
+        version du fichier (0.4.x et au-delà = Switch 2) ; ``True``/``False``
+        force la disposition, ce qui permet de rattraper un fichier atypique
+        depuis l'interface ou la ligne de commande.
+        """
         if data[:4] != MAGIC:
             raise FormatError("Ce n'est pas un fichier BNTX (magic « BNTX » absent).")
         if len(data) < 0x40:
@@ -703,7 +753,9 @@ class BntxFile:
         elif bom == b"\xfe\xff":
             e = ">"
         else:
-            raise FormatError("Fichier BNTX : BOM inconnu.")
+            raise FormatError(
+                "Fichier BNTX : BOM inconnu (0x0C : "
+                f"{bom.hex()}). Ce fichier n'est peut-être pas un BNTX Nintendo.")
         try:
             version = u32(data, 0x08, e)
             first_block = u16(data, 0x16, e)
@@ -713,8 +765,14 @@ class BntxFile:
         except struct.error as exc:
             raise FormatError("Fichier BNTX : en-tête illisible.") from exc
 
+        warnings: list[str] = []
+        use_orin = (version >= cls.ORIN_VERSION) if orin is None else bool(orin)
+
         strings = StringTable()
-        strings.load(data, first_block + 16)
+        try:
+            strings.load(data, first_block + 16)
+        except (struct.error, IndexError):
+            warnings.append("table des chaînes illisible : noms de textures perdus")
         file_name = strings.get(name_offset)
         if not file_name:
             # Le nom du fichier est indexé comme les autres chaînes.
@@ -723,18 +781,77 @@ class BntxFile:
                     file_name = value
                     break
 
+        pointers, pointer_warning = cls._texture_pointers(data, e, count, info_ptrs)
+        if pointer_warning:
+            warnings.append(pointer_warning)
+
         textures: list[BntxTexture] = []
-        if count > 4096:
-            raise FormatError(f"Fichier BNTX : nombre de textures invraisemblable ({count}).")
-        for i in range(count):
-            ptr = u64(data, info_ptrs + 8 * i, e)
+        for i, ptr in enumerate(pointers):
             if ptr + 0x10 > len(data):
-                raise FormatError(f"BTI {i} hors du fichier.")
+                warnings.append(f"BTI {i} hors du fichier (ignoré)")
+                continue
             if data[ptr:ptr + 4] != b"BRTI":
-                raise FormatError(f"BTI {i} : signature « BRTI » absente.")
-            tex = cls._parse_texture(data, ptr + 0x10, e, i, strings)
+                warnings.append(f"BTI {i} : signature « BRTI » absente (ignoré)")
+                continue
+            try:
+                tex = cls._parse_texture(data, ptr + 0x10, e, i, strings)
+            except FormatError as exc:
+                warnings.append(f"texture {i} : {exc}")
+                continue
+            tex.orin = use_orin
+            tex.file_version = version
             textures.append(tex)
-        return cls(data=data, textures=textures, name=name or file_name)
+        if not textures:
+            raise FormatError(
+                "Fichier BNTX : aucune texture lisible."
+                + ("\n\n" + "\n".join(warnings[:6]) if warnings else ""))
+        if use_orin:
+            warnings.append(
+                f"BNTX {version >> 24}.{(version >> 16) & 0xFF}.{(version >> 8) & 0xFF}"
+                " (Switch 2) : disposition Orin utilisée pour les pixels")
+        return cls(data=data, textures=textures, name=name or file_name,
+                   version=version, orin=use_orin, warnings=warnings)
+
+    @staticmethod
+    def _texture_pointers(data: bytes, e: str, count: int,
+                          info_ptrs: int) -> tuple[list[int], str]:
+        """Table des pointeurs de textures, avec repli pour les BNTX atypiques.
+
+        Les jeux Switch 2 utilisent des BNTX 0.4.x : si l'en-tête lu ne donne
+        rien d'exploitable (compteur absurde, pointeurs hors fichier, table
+        déplacée), on retrouve les blocs ``BRTI`` en balayant le fichier — mieux
+        vaut ouvrir une texture que refuser tout le fichier.
+        """
+        plausible = 0 < count <= 4096
+        pointers: list[int] = []
+        if plausible and info_ptrs and info_ptrs + 8 * min(count, 4096) <= len(data):
+            for i in range(count):
+                try:
+                    ptr = u64(data, info_ptrs + 8 * i, e)
+                except struct.error:
+                    pointers = []
+                    break
+                if ptr + 0x10 > len(data) or data[ptr:ptr + 4] != b"BRTI":
+                    pointers = []
+                    break
+                pointers.append(ptr)
+            if len(pointers) == count:
+                return pointers, ""
+
+        # --- repli : balayage des signatures « BRTI » (fichier aligné sur 8/16)
+        scanned: list[int] = []
+        position = data.find(b"BRTI")
+        while position != -1 and len(scanned) < 4096:
+            scanned.append(position)
+            position = data.find(b"BRTI", position + 4)
+        # élimine les faux positifs (un « BRTI » de données doit avoir un nom/pointeurs valides)
+        scanned = [p for p in scanned if p + 0x80 <= len(data)]
+        if not scanned:
+            raise FormatError(
+                "Fichier BNTX : aucune table de textures ni bloc « BRTI » trouvé."
+                f"\nTaille du fichier : {len(data):,} octets")
+        return scanned, ("table des textures illisible : blocs « BRTI » retrouvés "
+                         f"par balayage ({len(scanned)})")
 
     @staticmethod
     def _parse_texture(data: bytes, off: int, e: str, index: int,
@@ -810,12 +927,34 @@ class BntxFile:
         )
         return texture
 
+    @property
+    def oriented_label(self) -> str:
+        """Résumé lisible de la disposition utilisée."""
+        if not self.textures:
+            return "sans texture"
+        tiles = {t.tile_mode for t in self.textures}
+        if tiles == {1}:
+            return "pixels linéaires"
+        return "swizzle Orin (Switch 2)" if self.orin else "swizzle X1 (Switch 1)"
+
+    @property
+    def version_label(self) -> str:
+        """Version lisible : Nintendo numérote « 0.4.1.x » les BNTX Switch 2."""
+        v = self.version
+        return f"{v >> 24}.{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}.{v & 0xFF}"
+
     def info(self) -> str:
         lines = [f"Fichier BNTX : {self.name or '(sans nom)'}",
+                 f"Version : {self.version_label} (0x{self.version:08X})"
+                 f"   ·   swizzle par défaut : "
+                 f"{'Orin (Switch 2)' if self.orin else 'X1 (Switch 1)'}",
                  f"Textures : {len(self.textures)}", ""]
         for tex in self.textures:
             lines.append(f"  • {tex.name or f'#{tex.index}'} — {tex.width}×{tex.height} "
-                         f"— {tex.format_name} — {tex.mip_count} mip(s)")
+                         f"— {tex.format_name} — {tex.mip_count} mip(s)"
+                         f" — {tex.swizzle_label}")
+        if self.warnings:
+            lines += [""] + [f"⚠ {w}" for w in self.warnings]
         return "\n".join(lines)
 
 

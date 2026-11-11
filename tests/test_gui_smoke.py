@@ -719,7 +719,7 @@ class ModelViewerFlowTests(unittest.TestCase):
         self.app = app_module.App()
         self.opened = []
         old_viewer = app_module.open_viewer
-        app_module.open_viewer = lambda master, meshes, title="": \
+        app_module.open_viewer = lambda master, meshes, title="", palette=None: \
             self.opened.append((list(meshes), title))
         self.addCleanup(setattr, app_module, "open_viewer", old_viewer)
 
@@ -748,12 +748,145 @@ class ModelViewerFlowTests(unittest.TestCase):
         self.assertTrue(errors)
         self.assertIn("modèle", errors[0])
 
+    def test_viewer_receives_theme_colors(self):
+        self._open_top("modele.bfres", synth.make_bfres())
+        seen = {}
+        old_viewer = app_module.open_viewer
+        app_module.open_viewer = lambda master, meshes, title="", palette=None: \
+            seen.update(palette or {})
+        try:
+            self.app.view_model()
+        finally:
+            app_module.open_viewer = old_viewer
+        self.assertEqual(seen["bg"], self.app.palette.canvas)
+        self.assertEqual(seen["accent"], self.app.palette.accent)
+
     def test_second_view_reuses_cached_meshes(self):
         self._open_top("modele.bfres", synth.make_bfres())
         self.app.view_model()
         first = self.app._meshes_for_view()
         self.app.view_model()
         self.assertIs(first, self.app._meshes_for_view())
+
+
+@unittest.skipUnless(zs.zstd_available(), "module zstandard requis")
+class AppearanceTests(unittest.TestCase):
+    """Thème, disposition des pixels et diagnostics : réglages persistés."""
+
+    def setUp(self):
+        self._tmp_config = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp_config.close()
+        old = app_module.CONFIG_PATH
+        app_module.CONFIG_PATH = Path(self._tmp_config.name)
+        self.addCleanup(lambda: setattr(app_module, "CONFIG_PATH", old))
+        self.app = app_module.App()
+
+    def test_theme_switch_updates_palette_and_config(self):
+        self.assertEqual(self.app.palette.name, "sombre")
+        self.app.set_theme("clair")
+        self.assertEqual(self.app.palette.name, "clair")
+        self.assertEqual(self.app.palette.label, "Clair")
+        self.assertEqual(self.app.config_data.get("theme"), "clair")
+        self.assertEqual(self.app.theme_var.get(), "clair")
+        self.app.set_theme("sombre")
+        self.assertEqual(self.app.palette.name, "sombre")
+
+    def test_unknown_theme_is_ignored_gracefully(self):
+        self.app.set_theme("tournesol")
+        self.assertEqual(self.app.palette.name, "sombre")
+
+    def test_swizzle_choice_roundtrip(self):
+        self.assertEqual(self.app._swizzle_choice(), "Auto")
+        self.assertIsNone(self.app._orin_setting())
+
+        self.app._set_swizzle_choice("Switch 2 (Orin)")
+        self.assertEqual(self.app.config_data["texture_orin"], "orin")
+        self.assertIs(self.app._orin_setting(), True)
+        self.assertEqual(self.app._swizzle_choice(), "Switch 2 (Orin)")
+
+        self.app._set_swizzle_choice("Switch 1 (X1)")
+        self.assertIs(self.app._orin_setting(), False)
+        self.app._set_swizzle_choice("Auto")
+        self.assertIsNone(self.app._orin_setting())
+
+    def test_swizzle_setting_makes_switch2_texture_readable(self):
+        import synth as synth_mod
+        from hookymod import bntx_encode, util as util_mod
+        rgba = synth_mod.rgba8_pixels(16, 16, seed=4)
+        # BC1 : pixels block-linear, donc la disposition Orin s'applique vraiment
+        data, _ = bntx_encode.png_to_bntx(util_mod.png_bytes(16, 16, rgba),
+                                          format_name="BC1", orin=True)
+        self.app._load_textures_from_data(data, key="switch2")
+        self.assertIn("0.4.1", self.app.texture_info_var.get())
+        self.assertIn("Orin", self.app.texture_info_var.get())
+        self.app._set_swizzle_choice("Switch 1 (X1)")
+        self.app._load_textures_from_data(data, key="switch2")
+        self.assertIn("X1", self.app.texture_info_var.get())
+
+    def test_environment_report_lists_modules(self):
+        report = self.app.environment_report()
+        self.assertIn("zstandard", report)
+        self.assertIn("texture2ddecoder", report)
+
+    def test_file_diagnostics_of_opened_bntx(self):
+        import synth as synth_mod
+        from hookymod import bntx_encode, util as util_mod
+        rgba = synth_mod.rgba8_pixels(8, 8, seed=6)
+        data, _ = bntx_encode.png_to_bntx(util_mod.png_bytes(8, 8, rgba),
+                                          format_name="RGBA8", orin=True)
+        doc = Document(Level("tex.bntx", data, self.app.dicts, rel="tex.bntx"))
+        self.app.documents["k"] = doc
+        self.app.current_key = "k"
+        payload, name = self.app._current_payload()
+        self.assertEqual(name, "tex.bntx")
+        self.assertEqual(payload, data)
+        report = app_module.diagnose.file_report(payload, name)
+        self.assertIn("0.4.1", report)
+
+    def test_select_tab_is_safe_without_display(self):
+        self.app._ensure_textures = lambda: None
+        self.app._ensure_model = lambda: None
+        for index in (0, 1, 2):
+            self.app.select_tab(index)
+
+    def test_show_diagnostics_without_file_explains(self):
+        calls = []
+        old_info = app_module.messagebox.showinfo
+        app_module.messagebox.showinfo = lambda *a, **k: calls.append(a)
+        try:
+            self.app.show_diagnostics()
+        finally:
+            app_module.messagebox.showinfo = old_info
+        self.assertTrue(calls)
+        self.assertIn("Aucun fichier", str(calls[0]))
+
+    def test_show_diagnostics_on_open_file_shows_report(self):
+        shown = {}
+        self.app._show_text_window = lambda title, text: shown.update(
+            title=title, text=text)
+        import synth as synth_mod
+        from hookymod import bntx_encode, util as util_mod
+        rgba = synth_mod.rgba8_pixels(8, 8, seed=9)
+        data, _ = bntx_encode.png_to_bntx(util_mod.png_bytes(8, 8, rgba),
+                                          format_name="BC1", orin=True)
+        doc = Document(Level("tex.bntx", data, self.app.dicts, rel="tex.bntx"))
+        self.app.documents["k"] = doc
+        self.app.current_key = "k"
+        self.app.show_diagnostics()
+        self.assertIn("tex.bntx", shown["title"])
+        self.assertIn("0.4.1.0", shown["text"])
+
+    def test_show_environment_diagnostics_shows_report(self):
+        shown = {}
+        self.app._show_text_window = lambda title, text: shown.update(
+            title=title, text=text)
+        self.app.show_environment_diagnostics()
+        self.assertIn("installation", shown["title"])
+        self.assertIn("Python", shown["text"])
+
+    def test_text_window_builds_without_display(self):
+        self.app._show_text_window("Diagnostic", "contenu")
+        self.app._update_state_dot()
 
 
 if __name__ == "__main__":

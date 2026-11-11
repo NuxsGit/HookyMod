@@ -17,8 +17,10 @@ import tkinter as tk
 
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
+from . import diagnose
 from . import identify
 from . import nup as nup_mod
+from . import theme as theme_mod
 from . import restbl as restbl_mod
 from . import translate as translate_mod
 from .container import Document, Level, detect_kind
@@ -30,8 +32,13 @@ from .viewer import open_viewer
 from .zs import DEFAULT_LEVEL, ZstdDicts, find_dict_files, frame_info, is_zstd, zstd_available
 
 APP_NAME = "HookyMod · Asset Explorer"
-BG, PANEL, PANEL2, FG, MUTED, ACC = ("#1b1d23", "#23262e", "#2a2e37",
-                                    "#e6e8ec", "#8b93a1", "#4c8dff")
+APP_TAGLINE = "Assets Switch 2 · Hookshot"
+
+#: Palette de départ (les widgets « bruts » sont recolorés au changement de thème).
+_DEFAULT = theme_mod.get_palette(theme_mod.DEFAULT_THEME)
+BG, PANEL, PANEL2, FG, MUTED, ACC = (_DEFAULT.bg, _DEFAULT.surface,
+                                     _DEFAULT.surface2, _DEFAULT.fg,
+                                     _DEFAULT.muted, _DEFAULT.accent)
 CONFIG_PATH = Path(os.environ.get("HOOKYMOD_CONFIG",
                                   Path.home() / ".config" / "hookymod" / "config.json"))
 OLD_CONFIG_PATH = Path.home() / ".asset_explorer.json"
@@ -63,6 +70,11 @@ except Exception:
     traceback.print_exc()
     sys.exit(1)
 '''
+
+#: Dispositions de pixels proposées dans l'onglet Textures (Switch 1 / Switch 2).
+SWIZZLE_CHOICES = ("Auto", "Switch 1 (X1)", "Switch 2 (Orin)")
+_SWIZZLE_TO_CONFIG = {"Auto": "auto", "Switch 1 (X1)": "x1", "Switch 2 (Orin)": "orin"}
+_CONFIG_TO_SWIZZLE = {value: label for label, value in _SWIZZLE_TO_CONFIG.items()}
 
 TEXT_EXT = {".txt", ".xml", ".json", ".yml", ".yaml", ".csv", ".md", ".ini",
             ".html", ".css", ".js", ".py", ".byml", ".aamp"}
@@ -236,13 +248,15 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1500x860")
-        self.minsize(1000, 600)
+        self.geometry("1520x880")
+        self.minsize(1020, 620)
         self.configure(bg=BG)
-        self._apply_theme()
 
         # --- état
         self.config_data = self._load_config()
+        self.palette = theme_mod.get_palette(self.config_data.get("theme"))
+        self.configure(bg=self.palette.bg)
+        self._apply_theme()
         self.dicts = ZstdDicts()
         self.romfs: Path | None = None
         self.documents: dict[str, Document] = {}
@@ -261,6 +275,7 @@ class App(tk.Tk):
         self._texture_previews: dict[tuple, tuple[Path, int, int]] = {}
         self._mesh_cache: dict[tuple, list[MeshData]] = {}
         self._popups: list[LoadingPopup] = []
+        self._striped_rows: list = []
         self._active_source: str = ""
 
         self.filter_var = tk.StringVar()
@@ -272,6 +287,7 @@ class App(tk.Tk):
         self._build_toolbar()
         self._build_body()
         self._build_status()
+        self._apply_theme()   # les widgets Tk bruts (Text, Canvas) naissent colorés
         self._bind_shortcuts()
         self._load_dicts_from_config()
 
@@ -292,42 +308,52 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------ thème
     def _apply_theme(self) -> None:
-        style = ttk.Style(self)
+        """Applique la palette courante (ttk + widgets Tk bruts)."""
+        theme_mod.apply_theme(ttk.Style(self), self.palette)
+        self._recolor_widgets()
+
+    def set_theme(self, name: str) -> None:
+        """Change de thème à chaud, sans reconstruire l'interface."""
+        self.palette = theme_mod.get_palette(name)
+        self.config_data["theme"] = self.palette.name
+        self.configure(bg=self.palette.bg)
+        self._save_config()
         try:
-            style.theme_use("clam")
+            self._apply_theme()
+            if self.theme_var.get() != self.palette.name:
+                self.theme_var.set(self.palette.name)
+            self.status(f"Thème {self.palette.label.lower()} appliqué.")
         except tk.TclError:
             pass
-        style.configure(".", background=BG, foreground=FG, fieldbackground=PANEL,
-                        bordercolor=PANEL2, lightcolor=BG, darkcolor=BG,
-                        troughcolor=BG, font=("Segoe UI", 10))
-        style.configure("TButton", background=PANEL2, foreground=FG, padding=(10, 6),
-                        borderwidth=0, focuscolor=PANEL2)
-        style.map("TButton", background=[("active", "#353a46")])
-        style.configure("Accent.TButton", background=ACC, foreground="white")
-        style.map("Accent.TButton", background=[("active", "#6aa1ff")])
-        style.configure("Treeview", background=PANEL, fieldbackground=PANEL,
-                        foreground=FG, rowheight=25, borderwidth=0)
-        style.configure("Treeview.Heading", background=PANEL2, foreground=FG,
-                        relief="flat", font=("Segoe UI", 10, "bold"))
-        style.map("Treeview", background=[("selected", ACC)],
-                  foreground=[("selected", "white")])
-        style.configure("TEntry", fieldbackground=PANEL, foreground=FG,
-                        insertcolor=FG, padding=5)
-        style.configure("TCombobox", fieldbackground=PANEL, background=PANEL2,
-                        foreground=FG, arrowcolor=FG)
-        style.configure("Muted.TLabel", background=BG, foreground=MUTED)
-        style.configure("Panel.TLabel", background=PANEL, foreground=FG)
-        style.configure("Status.TLabel", background=PANEL, foreground=MUTED,
-                        padding=(10, 6))
-        style.configure("TCheckbutton", background=BG, foreground=FG)
-        style.configure("TLabelframe", background=BG, foreground=FG)
-        style.configure("TLabelframe.Label", background=BG, foreground=MUTED)
-        style.configure("TNotebook", background=BG, borderwidth=0)
-        style.configure("TNotebook.Tab", background=PANEL2, foreground=FG,
-                        padding=(14, 7))
-        style.map("TNotebook.Tab", background=[("selected", PANEL)],
-                  foreground=[("selected", "white")])
-        style.configure("Vertical.TScrollbar", background=PANEL2, arrowcolor=FG)
+
+    def _recolor_widgets(self) -> None:
+        """Recolore les widgets Tk « bruts » que ttk ne gère pas."""
+        p = self.palette
+        for widget, options in (
+            (getattr(self, "preview", None),
+             dict(bg=p.surface, fg=p.fg, insertbackground=p.fg,
+                  selectbackground=p.accent, selectforeground=p.accent_fg)),
+            (getattr(self, "model_text", None),
+             dict(bg=p.surface, fg=p.fg, insertbackground=p.fg,
+                  selectbackground=p.accent, selectforeground=p.accent_fg)),
+            (getattr(self, "texture_canvas", None),
+             dict(bg=p.canvas, highlightthickness=0)),
+        ):
+            if widget is None or callable(widget):
+                continue
+            try:
+                widget.configure(**options)
+            except tk.TclError:
+                pass
+        for tree in (getattr(self, "entry_tree", None), getattr(self, "texture_tree", None),
+                     getattr(self, "fs", None)):
+            if tree is None or callable(tree):
+                continue
+            try:
+                tree.tag_configure("pair", background=p.row_alt)
+                tree.tag_configure("impair", background=p.surface)
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------------ menus
     def _build_menu(self) -> None:
@@ -369,34 +395,66 @@ class App(tk.Tk):
         outils.add_command(label="Paramètres…", command=self.settings_dialog)
         menubar.add_cascade(label="Outils", menu=outils)
 
+        affichage = tk.Menu(menubar, tearoff=0)
+        self.theme_var = tk.StringVar(value=self.palette.name)
+        for key, label in (("sombre", "Thème sombre"), ("clair", "Thème clair")):
+            affichage.add_radiobutton(label=label, value=key, variable=self.theme_var,
+                                      command=lambda k=key: self.set_theme(k))
+        affichage.add_separator()
+        affichage.add_command(label="Onglet Aperçu", command=lambda: self.select_tab(0),
+                              accelerator="Ctrl+1")
+        affichage.add_command(label="Onglet Textures", command=lambda: self.select_tab(1),
+                              accelerator="Ctrl+2")
+        affichage.add_command(label="Onglet Modèle 3D", command=lambda: self.select_tab(2),
+                              accelerator="Ctrl+3")
+        affichage.add_separator()
+        affichage.add_command(label="Diagnostic du fichier courant…",
+                              command=self.show_diagnostics)
+        menubar.add_cascade(label="Affichage", menu=affichage)
+
         aide = tk.Menu(menubar, tearoff=0)
         aide.add_command(label="Raccourcis clavier", command=self.show_shortcuts)
+        aide.add_command(label="Diagnostic de l'installation…",
+                         command=self.show_environment_diagnostics)
         aide.add_command(label="À propos", command=self.show_about)
         menubar.add_cascade(label="Aide", menu=aide)
         self.config(menu=menubar)
 
     def _build_toolbar(self) -> None:
-        """Barre d'outils : uniquement les actions globales, jamais de doublon.
+        """Bandeau de marque + barre d'outils des actions globales.
 
         Les actions liées à un contenu précis vivent à un seul endroit :
         extraction/remplacement dans le menu « Édition », textures et modèle 3D
         dans leurs onglets respectifs.
         """
-        bar = ttk.Frame(self, padding=(10, 10, 10, 4))
-        bar.pack(fill="x")
+        head = ttk.Frame(self, style="Header.TFrame", padding=(14, 10, 14, 2))
+        head.pack(fill="x")
+        brand = ttk.Frame(head, style="Header.TFrame")
+        brand.pack(side="left")
+        ttk.Label(brand, text="HookyMod", style="BrandAccent.TLabel").pack(side="left")
+        ttk.Label(brand, text="Asset Explorer", style="Brand.TLabel").pack(
+            side="left", padx=(6, 0))
+        ttk.Label(brand, text=APP_TAGLINE, style="Muted.TLabel").pack(
+            side="left", padx=(14, 0))
+        self.romfs_badge = ttk.Label(head, textvariable=self.romfs_var,
+                                     style="Badge.TLabel")
+        self.romfs_badge.pack(side="right")
+
+        bar = ttk.Frame(self, style="Toolbar.TFrame", padding=(10, 8, 10, 8))
+        bar.pack(fill="x", pady=(6, 0))
         for text, method, style, tooltip in TOOLBAR_ACTIONS:
             button = ttk.Button(bar, text=text, command=getattr(self, method), style=style)
             button.pack(side="left", padx=(0, 6))
             self._tooltip(button, tooltip)
-        ttk.Button(bar, text="⚙", width=3, command=self.settings_dialog).pack(side="right")
-
-        sub = ttk.Frame(self, padding=(10, 0, 10, 6))
-        sub.pack(fill="x")
-        ttk.Label(sub, textvariable=self.romfs_var, style="Muted.TLabel").pack(side="left")
+        ttk.Button(bar, text="⚙", width=3, style="Tool.TButton",
+                   command=self.settings_dialog).pack(side="right")
+        self.env_var = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.env_var, style="Muted.TLabel").pack(
+            side="right", padx=(0, 10))
 
     def _build_body(self) -> None:
         paned = ttk.PanedWindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        paned.pack(fill="both", expand=True, padx=14, pady=(10, 8))
 
         # --- 1. explorateur romfs
         left = ttk.Frame(paned)
@@ -457,8 +515,8 @@ class App(tk.Tk):
         paned.add(self.notebook, weight=4)
 
     def _build_texture_tab(self) -> None:
-        self.texture_tab = ttk.Frame(self.notebook, padding=6)
-        top = ttk.Frame(self.texture_tab)
+        self.texture_tab = ttk.Frame(self.notebook, padding=8, style="Surface.TFrame")
+        top = ttk.Frame(self.texture_tab, style="Surface.TFrame")
         top.pack(fill="x")
         self.texture_info_var = tk.StringVar(
             value="Sélectionne un fichier .bntx pour afficher ses textures.")
@@ -470,14 +528,21 @@ class App(tk.Tk):
                                     state="readonly")
         self.mip_box.pack(side="left")
         self.mip_box.bind("<<ComboboxSelected>>", lambda e: self._redraw_texture())
+        ttk.Label(top, text="Pixels", style="Panel.TLabel").pack(side="left", padx=(8, 2))
+        self.swizzle_var = tk.StringVar(value=self._swizzle_choice())
+        self.swizzle_box = ttk.Combobox(top, textvariable=self.swizzle_var, width=10,
+                                        values=list(SWIZZLE_CHOICES), state="readonly")
+        self.swizzle_box.pack(side="left")
+        self.swizzle_box.bind("<<ComboboxSelected>>",
+                              lambda e: self._set_swizzle_choice(self.swizzle_var.get()))
         ttk.Button(top, text="Ajuster", width=8,
                    command=lambda: self._redraw_texture(keep_view=False)).pack(
             side="left", padx=(6, 0))
         ttk.Button(top, text="PNG…", width=6, command=self.export_selected_texture).pack(
             side="left", padx=(6, 0))
 
-        body = ttk.Frame(self.texture_tab)
-        body.pack(fill="both", expand=True, pady=(6, 0))
+        body = ttk.Frame(self.texture_tab, style="Surface.TFrame")
+        body.pack(fill="both", expand=True, pady=(8, 0))
         self.texture_tree = ttk.Treeview(body, columns=("name", "size", "format"),
                                          show="headings", selectmode="browse")
         for column, title, width in (("name", "Texture", 180), ("size", "Taille", 90),
@@ -490,8 +555,8 @@ class App(tk.Tk):
         tscroll.pack(side="left", fill="y")
         self.texture_tree.bind("<<TreeviewSelect>>", lambda e: self._redraw_texture())
 
-        canvas_frame = ttk.Frame(body)
-        canvas_frame.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        canvas_frame = ttk.Frame(body, style="Surface.TFrame")
+        canvas_frame.pack(side="left", fill="both", expand=True, padx=(8, 0))
         self.texture_canvas = tk.Canvas(canvas_frame, bg="#111318", highlightthickness=0)
         hscroll = ttk.Scrollbar(canvas_frame, orient="horizontal",
                                 command=self.texture_canvas.xview)
@@ -506,8 +571,8 @@ class App(tk.Tk):
         self.notebook.add(self.texture_tab, text="Textures")
 
     def _build_model_tab(self) -> None:
-        self.model_tab = ttk.Frame(self.notebook, padding=8)
-        controls = ttk.Frame(self.model_tab)
+        self.model_tab = ttk.Frame(self.notebook, padding=10, style="Surface.TFrame")
+        controls = ttk.Frame(self.model_tab, style="Surface.TFrame")
         controls.pack(fill="x")
         ttk.Button(controls, text="Voir en 3D", style="Accent.TButton",
                    command=self.view_model).pack(side="left")
@@ -522,7 +587,7 @@ class App(tk.Tk):
         self.lod_box.pack(side="left")
         self.lod_box.bind("<<ComboboxSelected>>", lambda e: self._mesh_cache.clear())
         ttk.Label(controls, text="le BFRES n'est analysé qu'à l'ouverture de cet onglet",
-                  style="Panel.TLabel").pack(side="right")
+                  style="PanelMuted.TLabel").pack(side="right")
         self.model_text = tk.Text(self.model_tab, bg=PANEL, fg=FG, relief="flat",
                                   font=("Consolas", 10), wrap="word", padx=8, pady=6)
         self.model_text.pack(fill="both", expand=True, pady=(8, 0))
@@ -582,6 +647,31 @@ class App(tk.Tk):
             return None
         return data, f"{self.current_key}"
 
+    def _swizzle_choice(self) -> str:
+        """Libellé courant du sélecteur de disposition des pixels."""
+        value = str(self.config_data.get("texture_orin", "auto")).lower()
+        return _CONFIG_TO_SWIZZLE.get(value, "Auto")
+
+    def _set_swizzle_choice(self, label: str) -> None:
+        """Force la disposition des pixels puis recharge les textures affichées."""
+        self.config_data["texture_orin"] = _SWIZZLE_TO_CONFIG.get(label, "auto")
+        self._save_config()
+        self._bntx_cache.clear()
+        self._texture_previews.clear()
+        self.texture_file = None
+        self.swizzle_var.set(self._swizzle_choice())
+        self.status(f"Disposition des pixels : {label.lower()}.")
+        self._ensure_textures()
+
+    def _orin_setting(self) -> bool | None:
+        """Disposition des pixels demandée par l'utilisateur (None = automatique)."""
+        value = str(self.config_data.get("texture_orin", "auto")).lower()
+        if value in ("x1", "switch1", "switch 1", "non", "false"):
+            return False
+        if value in ("orin", "switch2", "switch 2", "oui", "true"):
+            return True
+        return None
+
     def _entry_payload(self, entry) -> bytes:
         """Données d'une entrée, décompressées si possible (jamais d'exception)."""
         data = entry.data
@@ -618,8 +708,11 @@ class App(tk.Tk):
         self._load_bfres_from_data(data, key=key)
 
     def _build_status(self) -> None:
-        bar = ttk.Frame(self)
+        bar = ttk.Frame(self, style="Surface.TFrame")
         bar.pack(fill="x")
+        self.state_dot = ttk.Label(bar, text="●", style="Status.TLabel")
+        self.state_dot.configure(foreground=self.palette.ok)
+        self.state_dot.pack(side="left", padx=(4, 0))
         ttk.Label(bar, textvariable=self.status_var, style="Status.TLabel",
                   anchor="w").pack(side="left", fill="x", expand=True)
         self.mod_label = ttk.Label(bar, text="", style="Status.TLabel")
@@ -715,6 +808,8 @@ class App(tk.Tk):
         self._set_preview(
             "HookyMod · Asset Explorer\n"
             "========================\n\n"
+            "Édite les assets du remake Ocarina of Time (Switch 2) et prépare des mods\n"
+            "pour Hookshot.\n\n"
             "1. « romfs… » : choisis le dossier romfs de ton dump (les dictionnaires zstd\n"
             "   de Pack/ZsDic.pack.zs sont chargés automatiquement).\n"
             "   « .nup… » : ouvre directement un paquet Switch 2 et extrais son romfs.\n"
@@ -723,6 +818,13 @@ class App(tk.Tk):
             "4. Les onglets s'ouvrent tout seuls selon le contenu : « Textures » pour un\n"
             "   .bntx, « Modèle 3D » pour un .bfres (analysés à l'affichage seulement).\n"
             "5. Modifie (menu Édition) puis « Exporter en mod ».\n\n"
+            "--- Si un fichier ne s'affiche pas --------------------------------------\n"
+            "• Affichage → « Diagnostic du fichier courant… » (magic, version, disposition\n"
+            "  des pixels, sections) : c'est le premier réflexe à avoir.\n"
+            "• Aide → « Diagnostic de l'installation… » : vérifie texture2ddecoder\n"
+            "  (ASTC/BC7 des jeux Switch 2), zstandard et l'aperçu PNG de Tk.\n"
+            "• Onglet Textures : le sélecteur « Pixels » force Switch 1 (X1) ou Switch 2\n"
+            "  (Orin) si la version du BNTX est atypique.\n\n"
             "Fichiers reconnus en détail : archives SARC, .zs (zstd), .bfres (modèles 3D),\n"
             ".bntx (textures), .obj (maillages).\n"
         )
@@ -742,18 +844,44 @@ class App(tk.Tk):
         self.model_text.configure(state="disabled")
 
     def _refresh_romfs_label(self) -> None:
-        romfs = f"romfs : {self.romfs}" if self.romfs else "romfs : non défini"
-        self.romfs_var.set(f"{romfs}   ·   dictionnaires : {len(self.dicts)}")
-        zstd_note = "" if zstd_available() else "   ·   ⚠ module zstandard absent"
-        bc_note = "" if bntx_mod._t2d is not None else "   ·   BC7/ASTC limités"
-        self.romfs_var.set(self.romfs_var.get() + zstd_note + bc_note)
+        """Badge romfs (court) + état de l'environnement (discret)."""
+        if self.romfs:
+            self.romfs_var.set(f"romfs · {self.romfs.name or self.romfs}")
+            try:
+                self.romfs_badge.configure(textvariable=self.romfs_var)
+            except tk.TclError:
+                pass
+        else:
+            self.romfs_var.set("romfs · non défini")
+        parts = [f"{len(self.dicts)} dictionnaire(s)"]
+        if not zstd_available():
+            parts.append("⚠ zstandard absent")
+        if bntx_mod._t2d is None:
+            parts.append("ASTC/BC7 non décodables")
+        if self.romfs:
+            parts.insert(0, str(self.romfs))
+        env = getattr(self, "env_var", None)
+        if env is not None:
+            env.set("   ·   ".join(parts))
 
     def _set_busy(self, busy: bool, label: str = "") -> None:
         self._busy = max(0, self._busy + (1 if busy else -1))
         if busy and label:
             self.status(label)
         self.configure(cursor="watch" if self._busy else "")
+        self._update_state_dot()
         self.update_idletasks()
+
+    def _update_state_dot(self) -> None:
+        """Pastille d'état : bleu = travail en cours, vert = prêt."""
+        dot = getattr(self, "state_dot", None)
+        if dot is None:
+            return
+        try:
+            dot.configure(foreground=self.palette.accent if self._busy
+                          else self.palette.ok)
+        except tk.TclError:
+            pass
 
     def _run_bg(self, label: str, work, done, failed=None) -> None:
         """Exécute ``work`` dans un fil, puis ``done(result)`` dans le fil Tk."""
@@ -1046,12 +1174,15 @@ class App(tk.Tk):
         if level.archive is None:
             return
         query = self.filter_var.get().lower()
+        shown = 0
         for index, entry in enumerate(level.archive.entries):
             if query and query not in entry.name.lower():
                 continue
             self.entry_tree.insert("", "end", iid=str(index),
                                    values=(entry.name, human_size(len(entry.data)),
-                                           detect_kind(entry.data)))
+                                           detect_kind(entry.data)),
+                                   tags=("pair" if shown % 2 else "impair",))
+            shown += 1
 
     def _refresh_preview(self) -> None:
         """Rafraîchit l'aperçu **sans** analyser BNTX/BFRES (chargement à la demande)."""
@@ -1986,7 +2117,7 @@ class App(tk.Tk):
         try:
             file = self._bntx_cache.get(key)
             if file is None:
-                file = bntx_mod.BntxFile.parse(data)
+                file = bntx_mod.BntxFile.parse(data, orin=self._orin_setting())
                 self._bntx_cache[key] = file
         except HookyError as exc:
             self.texture_info_var.set(f"BNTX illisible : {exc}")
@@ -1998,9 +2129,11 @@ class App(tk.Tk):
             self.texture_tree.insert("", "end", iid=str(index),
                                      values=(texture.name or f"#{texture.index}",
                                              f"{texture.width}×{texture.height}",
-                                             texture.format_name))
+                                             texture.format_name),
+                                     tags=("pair" if index % 2 else "impair",))
+        detail = f"BNTX {file.version_label} · {file.oriented_label}"
         self.texture_info_var.set(
-            f"{len(file.textures)} texture(s) — {file.name or 'BNTX'}"
+            f"{len(file.textures)} texture(s) — {file.name or 'BNTX'} — {detail}"
             + ("" if file.textures else "   (aucune texture dans ce fichier)"))
         children = self.texture_tree.get_children()
         if children:
@@ -2321,10 +2454,10 @@ class App(tk.Tk):
                         raise HookyError(f"BFRES illisible : {exc}") from exc
                     self._bfres_cache[f"{self.current_key}!{entry.name}"] = file
                 meshes = self._meshes_for_view(file=file)
-                open_viewer(self, meshes, f"Viewer 3D — {entry.name}")
+                self._open_viewer(meshes, f"Viewer 3D — {entry.name}")
                 return
             if entry.name.lower().endswith(".obj"):
-                open_viewer(self, [load_obj(payload)], f"Viewer 3D — {entry.name}")
+                self._open_viewer([load_obj(payload)], f"Viewer 3D — {entry.name}")
                 return
             raise HookyError(
                 f"« {entry.name} » n'est pas un modèle : sélectionne un .bfres ou un .obj.")
@@ -2334,13 +2467,20 @@ class App(tk.Tk):
             if doc.top.data[:4] == b"FRES":
                 self._ensure_model()
                 meshes = self._meshes_for_view()
-                open_viewer(self, meshes, f"Viewer 3D — {name}")
+                self._open_viewer(meshes, f"Viewer 3D — {name}")
                 return
             if name.lower().endswith(".obj"):
-                open_viewer(self, [load_obj(doc.top.data)], f"Viewer 3D — {name}")
+                self._open_viewer([load_obj(doc.top.data)], f"Viewer 3D — {name}")
                 return
-        meshes = self._meshes_for_view()
-        open_viewer(self, meshes, "Viewer 3D")
+        self._open_viewer(self._meshes_for_view(), "Viewer 3D")
+
+    def _open_viewer(self, meshes, title: str):
+        """Ouvre la fenêtre 3D avec les couleurs du thème courant."""
+        p = self.palette
+        return open_viewer(self, meshes, title, palette={
+            "bg": p.canvas, "panel": p.surface2, "fg": p.fg,
+            "muted": p.muted, "accent": p.accent,
+        })
 
     @_action
     def export_model_obj(self) -> None:
@@ -2479,18 +2619,34 @@ class App(tk.Tk):
         ttk.Spinbox(frame, from_=128, to=4096, increment=128, textvariable=preview_var,
                     width=8).grid(row=2, column=1, sticky="w", pady=4)
 
+        theme_var = tk.StringVar(value=self.palette.label)
+        ttk.Label(frame, text="Thème").grid(row=3, column=0, sticky="w", pady=4)
+        theme_box = ttk.Combobox(frame, textvariable=theme_var, width=12, state="readonly",
+                                 values=[p.label for p in theme_mod.THEMES.values()])
+        theme_box.grid(row=3, column=1, sticky="w", pady=4)
+        theme_box.bind("<<ComboboxSelected>>", lambda e: self.set_theme(
+            "clair" if theme_var.get().lower().startswith("clair") else "sombre"))
+
+        swizzle_var = tk.StringVar(value=self._swizzle_choice())
+        ttk.Label(frame, text="Disposition des pixels (textures)").grid(
+            row=4, column=0, sticky="w", pady=4)
+        ttk.Combobox(frame, textvariable=swizzle_var, width=18, state="readonly",
+                     values=list(SWIZZLE_CHOICES)).grid(row=4, column=1, sticky="w", pady=4)
+
         info = (f"romfs : {self.romfs or 'non défini'}\n"
                 f"dictionnaires zstd : {len(self.dicts)}\n"
                 f"module zstandard : {'oui' if zstd_available() else 'NON (pip install zstandard)'}\n"
-                f"texture2ddecoder (BC7/ASTC) : "
-                f"{'oui' if bntx_mod._t2d is not None else 'non (optionnel)'}")
+                f"texture2ddecoder (ASTC/BC7) : "
+                f"{'oui' if bntx_mod._t2d is not None else 'NON (pip install texture2ddecoder)'}\n"
+                "« Auto » convient à la plupart des fichiers : la version du BNTX\n"
+                "décide de la disposition (Switch 1 = X1, Switch 2 = Orin).")
         ttk.Label(frame, text=info, style="Muted.TLabel", justify="left").grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(10, 4))
+            row=5, column=0, columnspan=3, sticky="w", pady=(10, 4))
         if self.dicts.sources:
             ttk.Label(frame, text="Fichiers de dictionnaires :\n" +
                       "\n".join(str(p) for p in self.dicts.sources),
                       style="Muted.TLabel", justify="left").grid(
-                row=4, column=0, columnspan=3, sticky="w")
+                row=6, column=0, columnspan=3, sticky="w")
 
         def save_settings() -> None:
             self.config_data["blender"] = blender_var.get().strip()
@@ -2504,16 +2660,87 @@ class App(tk.Tk):
                 self.config_data["preview_max"] = max(128, min(4096, preview))
             except ValueError:
                 pass
+            self.config_data["texture_orin"] = _SWIZZLE_TO_CONFIG.get(
+                swizzle_var.get(), "auto")
+            if hasattr(self, "swizzle_var"):
+                self.swizzle_var.set(self._swizzle_choice())
+            self._bntx_cache.clear()
+            self._texture_previews.clear()
+            self.texture_file = None
             self._save_config()
             win.destroy()
             self.status("Paramètres enregistrés.")
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=5, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        buttons.grid(row=7, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Annuler", command=win.destroy).pack(side="right", padx=(6, 0))
         ttk.Button(buttons, text="Enregistrer", style="Accent.TButton",
                    command=save_settings).pack(side="right")
         win.grab_set()
+
+    # ------------------------------------------------------------------ diagnostics
+    def _current_payload(self) -> tuple[bytes, str]:
+        """Octets et nom de ce qui est affiché (entrée sélectionnée sinon fichier)."""
+        doc = self.current
+        if doc is None:
+            return b"", ""
+        indices = self._selected_indices()
+        if doc.top.archive is not None and len(indices) == 1:
+            entry = doc.top.archive.entries[indices[0]]
+            return self._entry_payload(entry), entry.name
+        try:
+            return doc.top.data, doc.top.name
+        except HookyError:
+            return b"", doc.top.name
+
+    @_action
+    def show_diagnostics(self) -> None:
+        """Anatomie du fichier courant : magic, version, disposition, sections."""
+        data, name = self._current_payload()
+        if not data:
+            messagebox.showinfo("Diagnostic",
+                                "Aucun fichier ouvert : ouvre d'abord un asset.",
+                                parent=self)
+            return
+        text = diagnose.file_report(data, name, orin=self._orin_setting())
+        self._show_text_window(f"Diagnostic — {name}", text)
+
+    def environment_report(self) -> str:
+        return diagnose.environment_report(self.romfs, len(self.dicts),
+                                           self.palette.label)
+
+    @_action
+    def show_environment_diagnostics(self) -> None:
+        self._show_text_window("Diagnostic de l'installation",
+                              self.environment_report())
+
+    def _show_text_window(self, title: str, text: str) -> None:
+        """Fenêtre de texte monospace, lecture seule, avec copie."""
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.geometry("860x620")
+        win.configure(bg=self.palette.bg)
+        win.transient(self)
+        frame = ttk.Frame(win, padding=10)
+        frame.pack(fill="both", expand=True)
+        body = tk.Text(frame, wrap="none", font=("Consolas", 10),
+                       bg=self.palette.surface, fg=self.palette.fg, relief="flat",
+                       padx=12, pady=10, insertbackground=self.palette.fg,
+                       selectbackground=self.palette.accent)
+        scroll = ttk.Scrollbar(frame, command=body.yview)
+        body.configure(yscrollcommand=scroll.set)
+        body.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        body.insert("1.0", text)
+        body.configure(state="disabled")
+        buttons = ttk.Frame(win, padding=(10, 0, 10, 10))
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Fermer", command=win.destroy).pack(side="right")
+        ttk.Button(buttons, text="Copier",
+                   command=lambda: (self.clipboard_clear(),
+                                    self.clipboard_append(text),
+                                    self.status("Diagnostic copié dans le presse-papiers."))
+                   ).pack(side="right", padx=(0, 6))
 
     # ------------------------------------------------------------------ aide
     @_action
@@ -2539,8 +2766,10 @@ class App(tk.Tk):
         messagebox.showinfo(
             "À propos",
             f"{APP_NAME}\n\n"
-            "Explorateur et outilleur d'assets pour dumps romfs Switch :\n"
-            "SARC, zstd (.zs + dictionnaires), BFRES, BNTX.\n\n"
+            "Assets du remake Switch 2 d'Ocarina of Time pour le port PC Hookshot :\n"
+            "SARC, zstd (.zs + dictionnaires), BFRES, BNTX (Switch 1 X1 et Switch 2 Orin).\n\n"
+            f"Thème : {self.palette.label} (Affichage → thème, sans redémarrer)\n"
+            "Diagnostics : Affichage → fichier courant, Aide → installation.\n\n"
             "Aucun asset du jeu n'est inclus : fournis ton propre dump.\n"
             "Projet indépendant, non affilié à Nintendo.", parent=self)
 

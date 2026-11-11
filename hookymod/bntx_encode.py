@@ -392,7 +392,7 @@ def replace_texture(template: bytes, rgba: bytes, width: int, height: int,
         swizzled = bntx_mod.swizzle(level_w, level_h, texture.blk_w, texture.blk_h,
                                     texture.bpp, texture.tile_mode,
                                     _shifted_block_height(texture, level), encoded,
-                                    round_pitch=round_pitch)
+                                    round_pitch=round_pitch, orin=texture.orin)
         chunk = swizzled[:space]
         out[offset:offset + len(chunk)] = chunk
         written += len(chunk)
@@ -403,28 +403,35 @@ def replace_texture(template: bytes, rgba: bytes, width: int, height: int,
 
 # --------------------------------------------------------------------------- création
 def _string_table(entries: list[str]) -> bytes:
-    """Table de chaînes BNTX (magic _STR + entrées terminées par NUL)."""
+    """Entrées d'une table ``_STR`` : ``u16 longueur`` + texte + NUL, alignées.
+
+    Le bloc complet (magic ``_STR``, taille, nombre d'entrées) est écrit par
+    :func:`build_bntx` : les entrées commencent 24 octets après le magic.
+    """
     payload = bytearray()
     for entry in entries:
-        raw = entry.encode("utf-8") + b"\x00"
-        payload += raw
+        raw = entry.encode("utf-8")
+        payload += struct.pack("<H", len(raw)) + raw + b"\x00"
         if len(payload) % 2:
             payload += b"\x00"
-    head = struct.pack("<IH", len(entries), len(payload))
-    body = head + bytes(payload)
-    return body
+    return bytes(payload)
 
 
 def build_bntx(name: str, width: int, height: int, rgba: bytes,
                format_name: str = "RGBA8", mips: int | None = None,
-               version: int = 0x00040000, alignment_shift: int = 12,
-               texture_name: str = "") -> bytes:
+               version: int | None = None, alignment_shift: int = 12,
+               texture_name: str = "", orin: bool = False) -> bytes:
     """Construit un fichier BNTX complet à une texture.
 
     Le résultat est autonome (une texture, ``mips`` niveaux générés). Pour un
     mod, préfère :func:`replace_texture` quand la texture existe déjà : les
     en-têtes du jeu (version, drapeaux, alignement) restent alors intacts.
+
+    ``orin=True`` produit un fichier Switch 2 (version 0.4.x, disposition Orin) ;
+    par défaut le fichier est en disposition Switch 1 (version 0.3).
     """
+    if version is None:
+        version = 0x00040100 if orin else 0x00030000
     code = NAME_TO_CODE.get(format_name.upper())
     if code is None:
         raise HookyError(f"Format inconnu : {format_name}. Choix : "
@@ -457,7 +464,7 @@ def build_bntx(name: str, width: int, height: int, rgba: bytes,
         else:
             effective = 0
         swizzled = bntx_mod.swizzle(level_w, level_h, blk_w, blk_h, bpp, tile_mode,
-                                    effective, encoded)
+                                    effective, encoded, orin=orin)
         padded = bntx_mod.surface_size(level_w, level_h, blk_w, blk_h, bpp,
                                        tile_mode, effective)
         surfaces.append(swizzled if len(swizzled) >= padded else
@@ -478,14 +485,22 @@ def build_bntx(name: str, width: int, height: int, rgba: bytes,
     strings_at = mip_ptr_at + mip_ptr_size
     strings_payload = _string_table([display_name, texture_label])
     str_block = strings_at
-    str_block_size = 16 + len(strings_payload)
+    # _STR : magic (4) + 8 octets réservés + u32 nombre + u32 réservé
+    #        + entrées (chacune : u16 longueur, texte, NUL)
+    str_header = 24
+    str_block_size = str_header + len(strings_payload)
+    name_pos = str_block + str_header
+    # position de la 2ᵉ chaîne (nom de la texture), avec l'alignement pair
+    tex_name_pos = name_pos + 2 + len(display_name.encode("utf-8")) + 1
+    if (tex_name_pos - name_pos) % 2:
+        tex_name_pos += 1
     data_at = align(str_block + str_block_size, 1 << max(4, alignment_shift))
     total = data_at + sum(len(surface) for surface in surfaces)
 
     out = bytearray(total)
     # --- en-tête
     struct.pack_into("<8sIHBB", out, 0, b"BNTX", version, 0xFEFF, alignment_shift, 6)
-    struct.pack_into("<I", out, 0x10, 0x10)            # nom du fichier dans _STR
+    struct.pack_into("<I", out, 0x10, name_pos)        # nom du fichier dans _STR
     struct.pack_into("<HH", out, 0x14, 0, str_block)   # flags, premier bloc
     struct.pack_into("<I", out, 0x18, 0)               # table de relocalisation
     struct.pack_into("<I", out, 0x1C, total)
@@ -513,11 +528,10 @@ def build_bntx(name: str, width: int, height: int, rgba: bytes,
     struct.pack_into("<I", out, at + 32, 1)            # arrayLength
     layout = block_height_log2 & 7
     struct.pack_into("<I", out, at + 36, layout)
+    struct.pack_into("<Q", out, at + 76, tex_name_pos)   # nom de la texture
     struct.pack_into("<I", out, at + 64, sum(len(s) for s in surfaces))
     struct.pack_into("<I", out, at + 68, 1 << max(4, alignment_shift))
     struct.pack_into("<BBBB", out, at + 72, 0, 1, 2, 3)
-    struct.pack_into("<Q", out, at + 76, 0x10 + len(display_name) + 1 + (
-        1 if (len(display_name) + 1) % 2 else 0))
     struct.pack_into("<Q", out, at + 92, mip_ptr_at)
 
     # --- pointeurs de mips
@@ -529,16 +543,22 @@ def build_bntx(name: str, width: int, height: int, rgba: bytes,
 
     # --- bloc de chaînes
     out[str_block:str_block + 4] = b"_STR"
-    struct.pack_into("<I", out, str_block + 4, len(strings_payload) + 8)
-    out[str_block + 16:str_block + 16 + len(strings_payload)] = strings_payload
+    struct.pack_into("<I", out, str_block + 4, str_block_size)
+    struct.pack_into("<I", out, str_block + 16, 2)     # nombre de chaînes
+    out[name_pos:name_pos + len(strings_payload)] = strings_payload
     return bytes(out)
 
 
 # --------------------------------------------------------------------------- API simple
 def png_to_bntx(png: bytes, template: bytes | None = None, texture: str = "",
                 index: int | None = None, format_name: str = "RGBA8",
-                mips: int | None = None, name: str = "") -> tuple[bytes, ReplaceReport]:
-    """Convertit un PNG en BNTX (remplacement si ``template`` est fourni)."""
+                mips: int | None = None, name: str = "",
+                orin: bool = False) -> tuple[bytes, ReplaceReport]:
+    """Convertit un PNG en BNTX (remplacement si ``template`` est fourni).
+
+    Sans gabarit, ``orin=True`` produit un fichier Switch 2 (0.4.x, Orin) ;
+    avec un gabarit, c'est la disposition du fichier d'origine qui s'applique.
+    """
     try:
         width, height, rgba = decode_png(png)
     except Exception as exc:  # noqa: BLE001 - message destiné à l'utilisateur
@@ -546,7 +566,7 @@ def png_to_bntx(png: bytes, template: bytes | None = None, texture: str = "",
     if template:
         return replace_texture(template, rgba, width, height, texture, index)
     data = build_bntx(name or "texture.bntx", width, height, rgba, format_name, mips,
-                      texture_name=texture)
+                      texture_name=texture, orin=orin)
     report = ReplaceReport(texture, width, height, bntx_mod.format_info(
         NAME_TO_CODE[format_name.upper()])[0], mips or mip_levels_for(width, height),
         len(data))
