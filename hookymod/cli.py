@@ -344,6 +344,21 @@ def cmd_patch(args) -> int:
     return 0
 
 
+def cmd_doctor(args) -> int:
+    """Environnement d'exécution (et anatomie d'un fichier si ``--path``)."""
+    from . import diagnose
+    print(diagnose.environment_report(args.romfs))
+    if getattr(args, "path", None):
+        path = Path(args.path)
+        dicts = load_dicts(args.romfs, path, args.verbose)
+        level = open_level(path, dicts, _auto_romfs(path))
+        data = _decompress_maybe(level.data, dicts)
+        print()
+        print(diagnose.file_report(data, path.name,
+                                   orin=None if args.orin is None else args.orin))
+    return 0
+
+
 def cmd_textures(args) -> int:
     path = Path(args.path)
     dicts = load_dicts(args.romfs, path, args.verbose)
@@ -351,7 +366,8 @@ def cmd_textures(args) -> int:
     data = _decompress_maybe(_pick_entry(level, args.entry), dicts)
     if data[:4] != b"BNTX":
         raise HookyError(f"Ce n'est pas un BNTX ({detect_kind(data)}).")
-    file = bntx_mod.BntxFile.parse(data, path.name)
+    file = bntx_mod.BntxFile.parse(data, path.name,
+                                   orin=None if args.orin is None else args.orin)
     if args.list or not args.output:
         print(file.info())
         if not args.list:
@@ -392,6 +408,56 @@ def cmd_obj(args) -> int:
     out = Path(args.output) if args.output else path.with_suffix(".obj")
     export_obj(meshes, out, scale=args.scale)
     print(f"Écrit : {out} ({sum(len(m.faces) for m in meshes):,} triangles)")
+    return 0
+
+
+def _parse_size(text: str) -> tuple[int, int]:
+    """``"960x720"`` (ou ``"960X720"``, ``"960,720"``) → ``(960, 720)`` bornés."""
+    raw = str(text).lower().replace("×", "x").replace(",", "x").replace(" ", "")
+    parts = raw.split("x")
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        raise HookyError(f"Taille invalide : « {text} » (attendu 960x720).") from None
+    return max(64, min(4096, width)), max(64, min(4096, height))
+
+
+def cmd_view(args) -> int:
+    """Rend un modèle en PNG — affichage possible **sans** interface graphique."""
+    from . import render as render_mod
+    from .mesh import load_obj
+    path = Path(args.path)
+    dicts = load_dicts(args.romfs, path, args.verbose)
+    level = open_level(path, dicts, _auto_romfs(path))
+    data = _decompress_maybe(_pick_entry(level, args.entry), dicts)
+
+    if data[:4] == b"FRES":
+        file = bfres_mod.BfresFile.parse(data)
+        meshes = bfres_mod.meshes_from_file(file, lod=args.lod, budget=args.faces)
+        kind = f"BFRES v{file.version_major}"
+    elif data[:5] == b"# OBJ" or data.lstrip()[:1] in (b"v", b"#"):
+        meshes = [load_obj(data)]
+        kind = "OBJ"
+    else:
+        raise HookyError(f"Ce n'est pas un modèle affichable ({detect_kind(data)}).")
+
+    width, height = _parse_size(args.size)
+    if args.views > 1:
+        png = render_mod.turntable_png(meshes, views=args.views, width=width,
+                                       height=height, pitch=args.pitch,
+                                       zoom=args.zoom)
+    else:
+        png = render_mod.render_png(meshes, width, height, yaw=args.yaw,
+                                    pitch=args.pitch, zoom=args.zoom,
+                                    max_faces=args.faces,
+                                    supersample=args.supersample)
+    out = Path(args.output) if args.output else path.with_suffix(".png")
+    write_atomic(out, png)
+    faces = sum(len(mesh.faces) for mesh in meshes)
+    print(f"{kind} — {len(meshes)} maillage(s), {faces:,} triangles")
+    print(f"Écrit : {out} ({width}x{height})")
+    if args.views == 1:
+        print("Vues : --yaw / --pitch, planche de rotations : --views 4")
     return 0
 
 
@@ -687,7 +753,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list", "-l", action="store_true", help="liste seulement")
     p.add_argument("--filter", "-f")
     p.add_argument("--mip", type=int, default=0)
+    swizzle = p.add_mutually_exclusive_group()
+    swizzle.add_argument("--orin", dest="orin", action="store_true", default=None,
+                         help="force la disposition Switch 2 (Tegra T239)")
+    swizzle.add_argument("--x1", dest="orin", action="store_false",
+                         help="force la disposition Switch 1 (Tegra X1)")
     p.set_defaults(func=cmd_textures)
+
+    p = sub.add_parser("view", parents=[common],
+                       help="rend un modèle en PNG (aucune fenêtre requise)")
+    p.add_argument("path")
+    p.add_argument("--entry", "-e")
+    p.add_argument("--output", "-o")
+    p.add_argument("--size", default="960x720",
+                   help="largeur x hauteur (défaut 960x720)")
+    p.add_argument("--yaw", type=float, default=0.6)
+    p.add_argument("--pitch", type=float, default=-0.3)
+    p.add_argument("--zoom", type=float, default=1.0)
+    p.add_argument("--lod", type=int, default=0)
+    p.add_argument("--views", type=int, default=1,
+                   help="planche de N rotations (0 à 360°)")
+    p.add_argument("--faces", type=int, default=None, help="budget de faces")
+    p.add_argument("--supersample", type=int, default=2,
+                   help="anti-aliasing 1-4 (défaut 2)")
+    p.set_defaults(func=cmd_view)
 
     p = sub.add_parser("obj", parents=[common], help="exporte un BFRES en OBJ")
     p.add_argument("path")
@@ -771,6 +860,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("dicts", parents=[common], help="analyse les dictionnaires zstd d'un romfs")
     p.add_argument("path")
     p.set_defaults(func=cmd_dicts)
+
+    p = sub.add_parser("doctor", parents=[common],
+                       help="diagnostic : modules, Tk, formats, et un fichier si donné")
+    p.add_argument("path", nargs="?")
+    swizzle = p.add_mutually_exclusive_group()
+    swizzle.add_argument("--orin", dest="orin", action="store_true", default=None)
+    swizzle.add_argument("--x1", dest="orin", action="store_false")
+    p.set_defaults(func=cmd_doctor)
     return parser
 
 

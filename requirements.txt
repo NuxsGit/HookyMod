@@ -1,10 +1,13 @@
 # Dépendance obligatoire : lecture/écriture des fichiers .zs (zstd)
 zstandard>=0.21
 
-# Optionnel : décodage matériel des textures BC7 / BC6 / ASTC
-# (sans ce paquet, seuls BC1/BC2/BC3/BC4/BC5 et les formats non compressés
-#  sont décodés — tout le reste de l'application continue de fonctionner).
-# texture2ddecoder>=1.0.5
+# Recommandé : le remake Switch 2 utilise de l'ASTC (et du BC7) que le décodeur
+# intégré ne couvre pas. Sans ce paquet, ces textures s'affichent en erreur
+# explicite ; tout le reste de l'application continue de fonctionner.
+texture2ddecoder>=1.0.5
+
+# Optionnel : accélère l'encodage PNG des aperçus (repli intégré sinon).
+# Pillow>=10.0
 
 # Tkinter est fourni avec Python (paquet système python3-tk sous Linux).
 # Aucune autre dépendance n'est nécessaire : le PNG, l'OBJ et le rendu 3D

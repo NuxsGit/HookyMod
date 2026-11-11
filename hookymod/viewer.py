@@ -16,12 +16,26 @@ vrais modèles (souvent 100 000 faces), le viewer :
 from __future__ import annotations
 
 import math
-import tkinter as tk
 from dataclasses import dataclass, field
-from tkinter import messagebox, ttk
 
 from .mesh import MeshData
 from .util import HookyError
+
+try:  # Tkinter est absent de certaines installations (Windows sans tcl/tk)
+    import tkinter as tk
+    from tkinter import messagebox, ttk
+    TK_AVAILABLE = True
+    TK_ERROR = ""
+except Exception as exc:  # noqa: BLE001 - on veut la cause exacte
+    tk = None            # type: ignore[assignment]
+    messagebox = None    # type: ignore[assignment]
+    ttk = None           # type: ignore[assignment]
+    TK_AVAILABLE = False
+    TK_ERROR = f"{type(exc).__name__}: {exc}"
+
+#: Sans Tkinter, la géométrie et le rendu hors écran restent utilisables :
+#: seule la fenêtre est indisponible.
+_TkBase = tk.Toplevel if TK_AVAILABLE else object
 
 BG = "#16181d"
 PANEL = "#23262e"
@@ -196,7 +210,10 @@ def order_visible_faces(faces, projected, budget: int, cull: bool = True,
         visible.append(((p0[2] + p1[2] + p2[2]) / 3.0, index))
     if not visible:
         return []
-    visible.sort(reverse=True)
+    # La profondeur projetée croît vers la caméra : on dessine donc du plus
+    # petit z (le plus loin) au plus grand, pour que le peintre respecte
+    # l'occlusion (une face proche recouvre bien une face lointaine).
+    visible.sort()
     step = max(1, len(visible) // max(1, budget))
     return [index for _, index in visible[::step][:budget]]
 
@@ -226,19 +243,26 @@ def shade_color(color, normal, yaw: float, pitch: float) -> str:
 
 
 # --------------------------------------------------------------------------- fenêtre
-class MeshViewer(tk.Toplevel):
+class MeshViewer(_TkBase):  # type: ignore[misc,valid-type]
     """Fenêtre de prévisualisation 3D.
 
     Commandes : glisser = tourner · clic droit / Maj+glisser = déplacer ·
     molette = zoom · W = fil de fer · B = faces arrière · F = recadrer.
     """
 
-    def __init__(self, master, meshes, title: str = "Viewer 3D") -> None:
+    def __init__(self, master, meshes, title: str = "Viewer 3D",
+                 palette: dict | None = None) -> None:
         super().__init__(master)
         self.title(title)
         self.geometry("900x700")
         self.minsize(480, 360)
-        self.configure(bg=BG)
+        #: couleurs de l'application (thème sombre/clair) ; retombe sur les valeurs
+        #: historiques quand le viewer est ouvert seul.
+        colors = {"bg": BG, "panel": PANEL, "fg": FG, "muted": MUTED, "accent": ACCENT}
+        if palette:
+            colors.update({k: v for k, v in palette.items() if v})
+        self.colors = colors
+        self.configure(bg=colors["bg"])
 
         if isinstance(meshes, MeshData):
             meshes = [meshes]
@@ -277,9 +301,10 @@ class MeshViewer(tk.Toplevel):
 
     # ------------------------------------------------------------------ interface
     def _build_ui(self) -> None:
+        bg, muted = self.colors["bg"], self.colors["muted"]
         style = ttk.Style(self)
         try:
-            style.configure("Viewer.TLabel", background=BG, foreground=MUTED)
+            style.configure("Viewer.TLabel", background=bg, foreground=muted)
         except tk.TclError:
             pass
 
@@ -293,12 +318,12 @@ class MeshViewer(tk.Toplevel):
                               ("Cull", self.toggle_cull)):
             ttk.Button(bar, text=text, command=command).pack(side="right", padx=(4, 0))
 
-        holder = tk.Frame(self, bg=BG)
+        holder = tk.Frame(self, bg=bg)
         holder.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(holder, bg=BG, highlightthickness=0, cursor="fleur",
+        self.canvas = tk.Canvas(holder, bg=bg, highlightthickness=0, cursor="fleur",
                                 takefocus=True)
         self.canvas.pack(fill="both", expand=True)
-        self.hint = tk.Label(self, bg=BG, fg=MUTED, anchor="w",
+        self.hint = tk.Label(self, bg=bg, fg=muted, anchor="w",
                              text="glisser : tourner · clic droit : déplacer · molette : zoom · "
                                   "W fil de fer · B faces arrière · F recadrer")
         self.hint.pack(fill="x", padx=8, pady=(0, 4))
@@ -404,7 +429,7 @@ class MeshViewer(tk.Toplevel):
             p0, p1, p2 = projected(a), projected(b), projected(c)
             if self.wire:
                 canvas.create_polygon(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1],
-                                      fill="", outline=ACCENT)
+                                      fill="", outline=self.colors["accent"])
                 drawn += 1
                 continue
             color = shade_color(self.face_colors[index], self.face_normals[index],
@@ -430,10 +455,22 @@ class MeshViewer(tk.Toplevel):
         self.info_var.set(text)
 
 
-def open_viewer(master, meshes, title: str = "Viewer 3D") -> MeshViewer | None:
+def open_viewer(master, meshes, title: str = "Viewer 3D",
+                palette: dict | None = None) -> MeshViewer | None:
     """Ouvre le viewer en gérant proprement les erreurs (retourne None si échec)."""
+    if not TK_AVAILABLE:
+        messagebox_text = ("Tkinter est indisponible sur cette installation "
+                           f"({TK_ERROR}). Le viewer 3D ne peut pas s'ouvrir ; "
+                           "utilise « python -m hookymod.cli view fichier.bfres "
+                           "-o apercu.png » pour obtenir une image.")
+        try:
+            from tkinter import messagebox as box
+            box.showerror("Viewer 3D", messagebox_text, parent=master)
+        except Exception:  # noqa: BLE001
+            print(messagebox_text)
+        return None
     try:
-        return MeshViewer(master, meshes, title)
+        return MeshViewer(master, meshes, title, palette=palette)
     except HookyError as exc:
         messagebox.showerror("Viewer 3D", str(exc), parent=master)
         return None
