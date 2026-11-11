@@ -140,6 +140,7 @@ def _install_stub_tkinter() -> None:
 _install_stub_tkinter()
 
 import synth  # noqa: E402
+import synth_nup  # noqa: E402
 
 import hookymod.app as app_module  # noqa: E402
 import hookymod.viewer as viewer_module  # noqa: E402
@@ -259,6 +260,47 @@ class AppLogicTests(unittest.TestCase):
         self.assertTrue(doc.modified())
         self.assertEqual(len(self.app._dirty_documents()), 1)
         self.assertGreater(len(doc.pack()), 0)
+
+    def test_open_nup_extracts_and_loads_romfs(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        package = folder / "game.nup"
+        package.write_bytes(synth_nup.make_sample_nup())
+        out = folder / "extract"
+        out.mkdir()
+
+        old_open = app_module.filedialog.askopenfilename
+        old_dir = app_module.filedialog.askdirectory
+        app_module.filedialog.askopenfilename = lambda *a, **k: str(package)
+        app_module.filedialog.askdirectory = lambda *a, **k: str(out)
+        self.addCleanup(setattr, app_module.filedialog, "askopenfilename", old_open)
+        self.addCleanup(setattr, app_module.filedialog, "askdirectory", old_dir)
+        self.app._run_bg = lambda label, work, done, failed=None: done(work())
+        self.app.open_nup()
+        self.assertTrue((out / "romfs" / "Model" / "test.bfres").exists())
+        self.assertEqual(self.app.romfs, out / "romfs")
+
+    def test_update_size_table_grows_entries(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        romfs = folder / "romfs"
+        resource = romfs / "System" / "Resource"
+        resource.mkdir(parents=True)
+        name = "ResourceSizeTable.Product.100.rsizetable"
+        (resource / name).write_bytes(synth.make_restbl({"Model/Test.bfres": 64}))
+        self.app.romfs = romfs
+        mod = folder / "mod"
+        notes = self.app._update_size_table(mod, {"Model/Test.bfres": 4096})
+        self.assertTrue(notes)
+        written = mod / "romfs" / "System" / "Resource" / name
+        self.assertTrue(written.exists())
+        from hookymod import restbl
+        table = restbl.ResourceSizeTable.parse(written.read_bytes())
+        self.assertGreaterEqual(table.get("Model/Test.bfres"), 4096)
+
+    def test_update_size_table_noop_without_table(self):
+        self.app.romfs = Path(tempfile.mkdtemp())
+        self.assertEqual(self.app._update_size_table(Path("/tmp"), {"a": 10}), [])
 
     def test_scan_folder_flows_into_report_window(self):
         folder = Path(tempfile.mkdtemp())

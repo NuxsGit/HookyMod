@@ -95,6 +95,9 @@ un parseur.
 
 Selon le résultat :
 
+* **`.nup` (Switch 2)** → déjà pris en charge : `python -m hookymod.cli nup game.nup
+  --extract dump --verify`, puis on retombe sur le pipeline Nintendo ci-dessous. Voir
+  [`HOOKSHOT.md`](HOOKSHOT.md).
 * **SARC / zstd / BFRES / BNTX** → déjà pris en charge (exploration, extraction,
   remplacement, textures PNG, modèles OBJ/3D, patchs, export de mod).
 * **ZAR / CMB / CTEX (3DS)** → parseurs à ajouter ; la structure est proche de ce qui existe

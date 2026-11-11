@@ -359,3 +359,16 @@ def make_bfres() -> bytes:
     blob.raw(buffer_base, struct.pack("<3H", 0, 1, 2))
     blob.raw(buffer_base + 8, struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
     return blob.bytes()
+
+
+def make_restbl(entries: dict[str, int], version: int = 3,
+                named: bytes = b"", named_count: int = 0) -> bytes:
+    """Table RESTBL synthétique (``{chemin: taille réservée}``)."""
+    import struct
+    import zlib
+
+    body = b"".join(
+        struct.pack("<II", zlib.crc32(path.encode()) & 0xFFFFFFFF, size)
+        for path, size in sorted(entries.items(), key=lambda kv: zlib.crc32(kv[0].encode())))
+    header = b"RESTBL" + struct.pack("<IIII", version, 64, len(entries), named_count)
+    return header + body + named

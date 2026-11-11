@@ -33,6 +33,8 @@ class Magic:
 
 MAGICS: tuple[Magic, ...] = (
     # ---------------- archives Nintendo / Grezzo
+    Magic("nup", "paquet NUP (dump Nintendo Switch 2)", "Nintendo Switch 2", b"NUP\x01"),
+    Magic("nso2", "exécutable NSO2 (Switch 2)", "Nintendo Switch 2", b"NSO0"),
     Magic("sarc", "archive SARC (Nintendo)", "Nintendo", b"SARC"),
     Magic("rarc", "archive RARC (GameCube / Wii)", "Nintendo", b"RARC"),
     Magic("u8", "archive U8 (Wii)", "Nintendo", b"U\xaa8-"),
@@ -90,6 +92,8 @@ MAGICS: tuple[Magic, ...] = (
 
 # Hints donnés par l'extension quand aucun magic ne correspond.
 EXTENSIONS: dict[str, tuple[str, str]] = {
+    ".nup": ("nup", "paquet Switch 2 (romfs + exefs)"),
+    ".nso": ("nso2", "exécutable NSO"),
     ".zs": ("zstd", "compression zstd"),
     ".zst": ("zstd", "compression zstd"),
     ".szs": ("yaz0", "compression Yaz0 (SZS est une Yaz0)"),
@@ -251,6 +255,8 @@ def sniff_file(path: Path, head: int = 4096) -> list[Found]:
 
 # Poids des formats dans la détection du moteur (nombre de fichiers vu).
 ENGINE_WEIGHTS: dict[str, dict[str, int]] = {
+    "Nintendo (Switch 2)": {"nup": 5, "nso2": 2, "sarc": 2, "bfres": 2, "bntx": 2,
+                            "zstd": 1, "byml": 1, "aamp": 1, "bnsh": 1},
     "Unreal Engine": {"uasset": 4, "iostore": 4, "ue_pak": 2},
     "Unity": {"unityfs": 4, "unity_asset": 3, "unityweb": 3, "unityraw": 2},
     "Godot": {"godot": 5},
@@ -262,6 +268,8 @@ ENGINE_WEIGHTS: dict[str, dict[str, int]] = {
 }
 
 ENGINE_REASONS = {
+    "Nintendo (Switch 2)": "paquet .nup / NSO2 : dump Switch 2, romfs + exefs "
+                           "(Hookshot lit directement ce format)",
     "Unreal Engine": "conteneurs Unreal (.uasset / .pak / IoStore) : les assets sont "
                      "dans des paquets binaires, pas dans un romfs",
     "Unity": "bundles UnityFS / SerializedFiles : les assets sont dans des .assets",

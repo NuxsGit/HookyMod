@@ -22,6 +22,8 @@ from pathlib import Path
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
 from . import identify
+from . import nup as nup_mod
+from . import restbl as restbl_mod
 from .container import Level, detect_kind
 from .mesh import export_obj
 from .sarc import SarcArchive, is_sarc
@@ -430,6 +432,136 @@ def cmd_carve(args) -> int:
     return 0
 
 
+def _parse_sizes(values: list[str] | None) -> dict[str, int]:
+    pairs: dict[str, int] = {}
+    for item in values or []:
+        path, _, size = item.rpartition("=")
+        if not path or not size.strip().isdigit():
+            raise HookyError(f"Format attendu CHEMIN=TAILLE, reçu « {item} ».")
+        pairs[path.replace("\\", "/")] = int(size)
+    return pairs
+
+
+def cmd_restbl(args) -> int:
+    target = Path(args.path)
+    dicts = load_dicts(args.romfs, target, args.verbose)
+    if target.is_dir():
+        table, table_path, raw = restbl_mod.load_table(target, dicts)
+        source = table_path
+    else:
+        table_path = target
+        raw = target.read_bytes()
+        if target.suffix.lower() == ".zs":
+            from .zs import DictMissing
+            try:
+                data = dicts.decompress(raw)
+            except DictMissing as exc:
+                raise HookyError(f"{exc}\nOuvre le romfs (--romfs) pour charger "
+                                 "ZsDic.pack.zs.") from exc
+        else:
+            data = raw
+        table = restbl_mod.ResourceSizeTable.parse(data)
+        source = table_path
+
+    for line in table.summary():
+        print(line)
+    print(f"Source : {source}")
+
+    changed = False
+    for path, size in _parse_sizes(args.set_sizes).items():
+        table.set(path, size)
+        print(f"  fixé : {path} = {human_size(size)}")
+        changed = True
+    for path, size in _parse_sizes(args.ensure_sizes).items():
+        if table.ensure(path, size):
+            print(f"  agrandi : {path} → {human_size(table.get(path) or 0)}")
+            changed = True
+        else:
+            print(f"  déjà suffisant : {path} ({human_size(table.get(path) or 0)})")
+
+    if args.list:
+        for key, size in sorted(table.sizes.items(), key=lambda kv: -kv[1])[:args.limit]:
+            print(f"  0x{key:08X}  {human_size(size):>10}")
+        if len(table) > args.limit:
+            print(f"  … {len(table) - args.limit} entrée(s) de plus")
+
+    for path in args.get or []:
+        size = table.get(path)
+        if size is None:
+            print(f"Entrée absente de la table : {path}", file=sys.stderr)
+            return 1
+        print(f"{path} : {size} octets ({human_size(size)})")
+
+    if args.output:
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.suffix.lower() == ".zs" and len(dicts):
+            from .zs import frame_info
+            wanted = args.dictionary_id
+            if wanted is None:
+                try:
+                    wanted, _ = frame_info(raw) if raw[:4] == b"\x28\xb5\x2f\xfd" else (None, None)
+                except FormatError:
+                    wanted = None
+            if wanted is None:
+                wanted = next(iter(dicts.by_id))
+            data = dicts.compress(table.build(), wanted, args.level)
+        else:
+            data = table.build()
+        write_atomic(out, data)
+        print(f"Table écrite : {out} ({human_size(len(data))})")
+    elif changed:
+        print("(utilise -o pour écrire la table modifiée)")
+    return 0
+
+
+def cmd_nup(args) -> int:
+    package = nup_mod.NupPackage.open(Path(args.path))
+    with package:
+        if args.verify:
+            problems = package.verify(args.title if args.title is not None else None,
+                                      deep=args.deep)
+            if problems:
+                print(f"{len(problems)} anomalie(s) :")
+                for problem in problems:
+                    print(f"  • {problem}")
+                return 1
+            print("Paquet sain : aucune anomalie (TOC, bornes"
+                  + ", SHA-256 et en-têtes .zs)" if args.deep else
+                  "Paquet sain : aucune anomalie (TOC et bornes)")
+            if not args.extract and not args.list:
+                return 0
+        if args.list or not args.extract:
+            for line in package.summary():
+                print(line)
+            for title in ([package.title(args.title)] if args.title is not None
+                          else package.titles):
+                print()
+                print(f"Titre #{title.index} {title.label}")
+                for rel, entry in package.members(title.index, args.only):
+                    print(f"  {rel:<58} {human_size(entry.size):>10}  {entry.codec_name}")
+            if not args.extract:
+                return 0
+
+        def progress(done: int, total: int) -> None:
+            if args.verbose:
+                print(f"\r# {done}/{total}", end="", file=sys.stderr)
+
+        print()
+        print(f"Extraction vers {args.extract}…")
+        result = package.extract(args.extract, title=args.title, only=args.only,
+                                 progress=progress if args.verbose else None)
+        if args.verbose:
+            print(file=sys.stderr)
+        print(f"{result.count} fichier(s) extrait(s) — "
+              f"{human_size(result.total_bytes)}")
+        if result.heads:
+            print(f"⚠ {len(result.heads)} .zs dont l'en-tête n'est pas zstd")
+        for problem in result.problems[:20]:
+            print(f"  • {problem}", file=sys.stderr)
+        return 0 if not result.problems else 1
+
+
 def cmd_scan(args) -> int:
     root = Path(args.path)
     report = identify.scan(root, samples=max(1, args.samples), hexdump_bytes=args.hexdump,
@@ -517,6 +649,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scale", type=float, default=1.0)
     p.set_defaults(func=cmd_obj)
 
+    p = sub.add_parser("nup", parents=[common],
+                       help="lit un paquet .nup (dump Nintendo Switch 2) : liste / extraction")
+    p.add_argument("path")
+    p.add_argument("--list", "-l", action="store_true", help="liste le contenu (défaut)")
+    p.add_argument("--extract", "-x", help="dossier de destination")
+    p.add_argument("--title", help="titre (index, identifiant ou version)")
+    p.add_argument("--only", choices=["exefs", "romfs"], help="n'extraire qu'une partie")
+    p.add_argument("--verify", action="store_true", help="contrôle d'intégrité")
+    p.add_argument("--deep", action="store_true",
+                   help="avec --verify : décompresse et compare les SHA-256")
+    p.set_defaults(func=cmd_nup)
+
     p = sub.add_parser("scan", parents=[common],
                        help="identifie les formats d'un dossier (ou d'un fichier) et le moteur probable")
     p.add_argument("path")
@@ -531,6 +675,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="sortie JSON (pour partage)")
     p.add_argument("--output", "-o", help="écrit le rapport dans un fichier")
     p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("restbl", parents=[common],
+                       help="lit / agrandit la table des tailles de ressources (RESTBL)")
+    p.add_argument("path", help="romfs, ou fichier .rsizetable[.zs]")
+    p.add_argument("--list", "-l", action="store_true", help="liste les entrées")
+    p.add_argument("--limit", type=int, default=40, help="entrées affichées (défaut 40)")
+    p.add_argument("--get", action="append", metavar="CHEMIN",
+                   help="affiche la taille réservée (répétable)")
+    p.add_argument("--set", dest="set_sizes", action="append", metavar="CHEMIN=TAILLE",
+                   help="fixe une entrée (répétable)")
+    p.add_argument("--ensure", dest="ensure_sizes", action="append",
+                   metavar="CHEMIN=TAILLE",
+                   help="agrandit l'entrée si nécessaire (répétable)")
+    p.add_argument("--dictionary-id", type=int,
+                   help="identifiant du dictionnaire zstd pour une sortie .zs")
+    p.add_argument("--output", "-o",
+                   help="écrit la table (suffixe .zs pour recompresser)")
+    p.set_defaults(func=cmd_restbl)
 
     p = sub.add_parser("carve", parents=[common],
                        help="cherche des structures connues à l'intérieur d'un fichier")

@@ -18,6 +18,25 @@ Everything is Python (Tkinter for the GUI): no proprietary library, no game asse
 
 ## ⚡ Features
 
+### 🎮 Remake Switch 2 (Hookshot) — lecture des `.nup`
+
+Le remake *Ocarina of Time* Switch 2 n'expose pas ses fichiers : ils arrivent dans un paquet
+`.nup`, que le portage PC **Hookshot** sait lire. HookyMod lit ce paquet directement :
+
+```bash
+python -m hookymod.cli nup game.nup --verify --deep --extract dump --only romfs
+```
+
+* liste des titres, `exefs/` et `romfs/`, codec par fichier (brut ou zstd) ;
+* extraction fidèle (décompression des membres compressés par le paquet, sans toucher aux
+  `.zs` du jeu qui sont déjà des frames zstd), contrôle SHA-256 et en-têtes `.zs` ;
+* le romfs extrait s'ouvre ensuite dans l'explorateur, comme n'importe quel dump.
+
+Pour le modding, l'export écrit `romfs/<chemin>` (donc `mods/<nom>/romfs/...` pour
+Hookshot) et **agrandit automatiquement la table des tailles de ressources** quand un
+fichier modifié est plus gros que la réservation du jeu — sans quoi le jeu ignore le
+fichier. Détails : [`docs/HOOKSHOT.md`](docs/HOOKSHOT.md).
+
 ### 🗂️ Asset inspection & navigation
 
 * **RomFS browser** with lazy folder tree, instant filtering and recursive search.
@@ -93,6 +112,8 @@ python -m hookymod.cli obj pack.zs -e Model/Link.bfres -o Link.obj
 python -m hookymod.cli dicts romfs
 python -m hookymod.cli scan romfs --json -o rapport.json
 python -m hookymod.cli carve conteneur_inconnu.bin     # structures à l'intérieur
+python -m hookymod.cli nup game.nup --list             # paquet Switch 2
+python -m hookymod.cli restbl romfs --get Model/Link.bfres
 ```
 
 ## 🚀 Getting started
@@ -166,9 +187,11 @@ hookymod/
   mesh.py             mesh data, OBJ import/export
   viewer.py           Tkinter 3D viewer (software painter)
   app.py              Tkinter application
+  nup.py              paquets .nup (dumps Switch 2) : lecture, vérification, extraction
+  restbl.py           table des tailles de ressources (RESTBL) : lecture et agrandissement
   identify.py         identification des formats (magics) et scan d'un dump
   cli.py              command line interface
-docs/                 guides (identification d'un dump inconnu)
+docs/                 guides (dump inconnu, modding Switch 2 / Hookshot)
 tests/                unit tests + synthetic SARC/BFRES/BNTX generators
 ```
 
@@ -180,7 +203,7 @@ No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and
 python -m unittest discover -s tests -v
 ```
 
-70 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
+109 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
 logique de l'interface.
 
 The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
@@ -188,9 +211,10 @@ The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
 ## ⚠️ Known limitations
 
 * Les formats pris en charge sont ceux d'un pipeline **Nintendo** (SARC, zstd, BFRES,
-  BNTX). Si le dump s'avère être un conteneur Unreal (`.pak` / `.uasset` / IoStore), Unity
-  (`.assets`) ou 3DS (`.zar` / `.cmb` / `.ctex`), utilise `scan` pour le confirmer : les
-  parseurs correspondants ne sont pas encore écrits.
+  BNTX), y compris ceux du remake Switch 2 une fois le `.nup` extrait. Si le dump s'avère
+  être un conteneur Unreal (`.pak` / `.uasset` / IoStore), Unity (`.assets`) ou 3DS
+  (`.zar` / `.cmb` / `.ctex`), utilise `scan` pour le confirmer : les parseurs
+  correspondants ne sont pas encore écrits.
 * Modern BFRES files (v10 / TotK-style) may use externally stored strings; those names
   will be empty, but geometry still loads.
 * Skeletal animations and skinned deformation are **not** played back yet: models are shown

@@ -18,6 +18,8 @@ import tkinter as tk
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
 from . import identify
+from . import nup as nup_mod
+from . import restbl as restbl_mod
 from .container import Document, Level, detect_kind
 from .mesh import MeshData, export_obj, load_obj
 from .sarc import SarcArchive
@@ -184,6 +186,7 @@ class App(tk.Tk):
                             accelerator="Ctrl+R")
         fichier.add_command(label="Ouvrir un fichier…", command=self.open_file,
                             accelerator="Ctrl+O")
+        fichier.add_command(label="Ouvrir un paquet .nup (Switch 2)…", command=self.open_nup)
         fichier.add_separator()
         fichier.add_command(label="Enregistrer sous…", command=self.save, accelerator="Ctrl+S")
         fichier.add_command(label="Exporter en mod…", command=self.export_mod,
@@ -1198,6 +1201,87 @@ class App(tk.Tk):
         ttk.Button(bar, text="Enregistrer…", command=save).pack(side="left", padx=8)
         ttk.Button(bar, text="Fermer", command=win.destroy).pack(side="right")
 
+    # ------------------------------------------------------------------ switch 2
+    @_action
+    def open_nup(self) -> None:
+        """Ouvre un paquet .nup (dump Switch 2) et extrait son romfs."""
+        choice = filedialog.askopenfilename(
+            title="Ouvrir un paquet .nup (dump Nintendo Switch 2)",
+            filetypes=[("Paquet Switch 2", "*.nup"), ("Tous les fichiers", "*.*")])
+        if not choice:
+            return
+        package_path = Path(choice)
+        destination = filedialog.askdirectory(
+            title="Dossier d'extraction (romfs et exefs seront écrits dedans)")
+        if not destination:
+            return
+        target = Path(destination)
+
+        def work():
+            package = nup_mod.NupPackage.open(package_path)
+            with package:
+                summary = package.summary()
+                result = package.extract(target)
+            return summary, result, target
+
+        self._run_bg("Extraction du .nup…", work, self._nup_extracted)
+
+    def _nup_extracted(self, payload) -> None:
+        summary, result, target = payload
+        romfs = target / "romfs"
+        self._use_romfs(romfs if romfs.is_dir() else target)
+        message = (f"{result.count} fichier(s) extrait(s) — "
+                   f"{human_size(result.total_bytes)}\n{target}\n\n"
+                   + "\n".join(summary[:6]))
+        if result.heads:
+            message += (f"\n\n⚠ {len(result.heads)} fichier(s) .zs dont l'en-tête n'est "
+                        "pas zstd (fichiers abîmés ou non compressés).")
+        if result.problems:
+            message += ("\n\nProblèmes :\n" + "\n".join(result.problems[:10]))
+        messagebox.showinfo("Paquet .nup", message, parent=self)
+
+    def _update_size_table(self, base: Path, sizes: dict[str, int]) -> list[str]:
+        """Agrandit la table de tailles du mod si un fichier dépasse sa réservation."""
+        if not self.romfs or not sizes:
+            return []
+        try:
+            table, source, raw = restbl_mod.load_table(self.romfs, self.dicts)
+        except HookyError:
+            return []
+        problems = table.check(sizes)
+        if not problems:
+            return []
+        detail = "\n".join(problems[:10])
+        if not messagebox.askyesno(
+                "Table de tailles des ressources",
+                "Ces fichiers dépassent la taille réservée par le jeu :\n\n"
+                f"{detail}\n\nLe jeu ne chargerait pas les fichiers trop gros. "
+                "Agrandir la table et l'inclure dans le mod ?", parent=self):
+            return ["Table non modifiée : un fichier plus gros peut ne pas être chargé."]
+        changes = table.grow_for(sizes)
+        payload = table.build()
+        if source.suffix.lower() == ".zs":
+            dictionary = None
+            try:
+                dictionary, _ = frame_info(raw)
+            except HookyError:
+                dictionary = None
+            if not dictionary and len(self.dicts):
+                dictionary = next(iter(self.dicts.by_id))
+            if not dictionary:
+                return ["Table non écrite : dictionnaire zstd introuvable "
+                        "(ouvre le romfs pour charger ZsDic.pack.zs)."]
+            try:
+                payload = self.dicts.compress(payload, dictionary, DEFAULT_LEVEL)
+            except HookyError as exc:
+                return [f"Table non écrite : {exc}"]
+        destination = base / "romfs" / "System" / "Resource" / source.name
+        try:
+            write_atomic(destination, payload)
+        except (HookyError, OSError) as exc:
+            return [f"Table non écrite : {exc}"]
+        return [f"{source.name} agrandie ({len(changes)} entrée(s)) et incluse dans le mod."]
+
     # ------------------------------------------------------------------ patch
     @_action
     def patch_dialog(self) -> None:
@@ -1406,6 +1490,7 @@ class App(tk.Tk):
         base = Path(folder)
         written = []
         warnings = []
+        sizes: dict[str, int] = {}
         for doc in docs:
             try:
                 root = doc.collapse()
@@ -1417,8 +1502,11 @@ class App(tk.Tk):
                 if target is None:
                     warnings.append(f"{root.name} : chemin invalide.")
                     continue
-                write_atomic(target, doc.pack())
+                payload = doc.pack()
+                write_atomic(target, payload)
                 written.append(str(target))
+                if rel and "!/" not in rel:
+                    sizes[rel] = len(payload)
             except (HookyError, OSError) as exc:
                 warnings.append(f"{doc.root.name} : {exc}")
         self._refresh_all()
@@ -1426,9 +1514,12 @@ class App(tk.Tk):
             messagebox.showerror("Exporter en mod",
                                  "Aucun fichier écrit.\n\n" + "\n".join(warnings), parent=self)
             return
+        notes = self._update_size_table(base, sizes)
         message = (f"{len(written)} fichier(s) écrit(s) dans :\n{base / 'romfs'}\n\n"
-                   "Copie le dossier « romfs » dans le dossier de mods de ton loader "
-                   "(LayeredFS / émulateur).")
+                   "Pour Hookshot, place ce dossier dans « mods/<nom>/romfs » ; "
+                   "pour un émulateur, copie son contenu dans le mod LayeredFS.")
+        if notes:
+            message += "\n\nTable de tailles :\n" + "\n".join(notes)
         if warnings:
             message += "\n\nAvertissements :\n" + "\n".join(warnings)
         self.status(f"Mod exporté : {len(written)} fichier(s)")
