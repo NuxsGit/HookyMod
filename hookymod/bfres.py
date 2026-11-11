@@ -203,6 +203,8 @@ class VertexBuffer:
     sizes: list[int] = field(default_factory=list)
     vertex_count: int = 0
     gpu_alignment: int = 8
+    buffer_offsets: list[int] = field(default_factory=list)   # absolus, dans le fichier
+    header_offset: int = 0
 
     def attrib(self, *names: str) -> VertexAttrib | None:
         for attribute in self.attributes:
@@ -235,6 +237,12 @@ class Mesh:
     first_vertex: int = 0
     submeshes: list[SubMesh] = field(default_factory=list)
     indices_raw: bytes = b""
+    struct_offset: int = 0        # position de la structure Mesh
+    index_data_offset: int = 0    # position absolue des indices
+    submesh_array_offset: int = 0
+    index_count_offset: int = 0   # emplacements des champs à réécrire
+    first_vertex_offset: int = 0
+    face_buffer_offset: int = 0
 
     def indices(self) -> list[int]:
         code = {0: ("B", 1), 1: ("H", 2), 2: ("I", 4)}.get(self.index_format, ("H", 2))
@@ -248,6 +256,18 @@ class Mesh:
         if self.first_vertex:
             values = tuple(v + self.first_vertex for v in values)
         return list(values)
+
+    def face_count(self) -> int:
+        """Nombre de triangles, sans décoder ni convertir les indices (rapide)."""
+        count = self.index_count or (len(self.indices_raw) //
+                                     {0: 1, 1: 2, 2: 4}.get(self.index_format, 2))
+        if self.primitive == 0x03:
+            return max(0, count // 3)
+        if self.primitive == 0x04:
+            return max(0, count - 2)
+        if self.primitive == 0x07:
+            return max(0, count // 6)
+        return 0
 
     def triangles(self) -> list[tuple[int, int, int]]:
         indices = self.indices()
@@ -286,6 +306,12 @@ class Shape:
         if not self.meshes:
             return []
         return self.meshes[min(lod, len(self.meshes) - 1)].triangles()
+
+    def face_count(self, lod: int = 0) -> int:
+        """Nombre de triangles d'un LOD, sans construire le maillage."""
+        if not self.meshes:
+            return 0
+        return self.meshes[min(lod, len(self.meshes) - 1)].face_count()
 
     def build_mesh(self, lod: int = 0, warnings: list[str] | None = None) -> MeshData | None:
         warnings = warnings if warnings is not None else []
@@ -381,14 +407,14 @@ class Model:
 
     def mesh_info(self) -> str:
         lines = [f"Modèle : {self.name or f'#{self.index}'}"]
-        meshes = self.build_meshes(0, []) if self.shapes else []
-        total_v = sum(len(m.positions) for m in meshes)
-        total_f = sum(len(m.faces) for m in meshes)
-        lines.append(f"Formes  : {len(self.shapes)}   ·   Matériaux : {len(self.materials)}")
+        shapes = self.shapes
+        total_v = sum(s.vtx_buffer.vertex_count for s in shapes if s.vtx_buffer)
+        total_f = sum(s.face_count(0) for s in shapes)
+        lines.append(f"Formes  : {len(shapes)}   ·   Matériaux : {len(self.materials)}")
         lines.append(f"Géométrie (LOD0) : {total_v:,} sommets · {total_f:,} triangles")
         if self.materials:
             lines.append("Matériaux : " + ", ".join(m.name or "?" for m in self.materials[:12]))
-        for shape in self.shapes[:40]:
+        for shape in shapes[:40]:
             vtx = shape.vtx_buffer
             count = vtx.vertex_count if vtx else 0
             lods = len(shape.meshes)
@@ -744,6 +770,7 @@ class BfresFile:
         saved = cur.pos
         cur.seek(offset)
         vtx = VertexBuffer()
+        vtx.header_offset = offset
         if self.version_major >= 9:
             cur.u32()
         else:
@@ -794,7 +821,9 @@ class BfresFile:
                 size = vtx.sizes[i] if i < len(vtx.sizes) else 0
                 if size <= 0 or cur.pos + size > len(self.data):
                     vtx.buffers.append(b"")
+                    vtx.buffer_offsets.append(0)
                     continue
+                vtx.buffer_offsets.append(cur.pos)
                 vtx.buffers.append(cur.raw(size))
         cur.pos = saved
         return vtx
@@ -819,16 +848,20 @@ class BfresFile:
         saved = cur.pos
         cur.seek(offset)
         mesh = Mesh()
+        mesh.struct_offset = offset
         submesh_array = cur.offset()
         cur.offset()  # memory pool
         cur.offset()  # tampon d'index (non utilisé directement)
         size = cur.u32()
         cur.u32()     # drapeaux
         cur.skip(40)  # BufferSize
-        face_buffer_offset = cur.u32()
+        mesh.face_buffer_offset = cur.u32()
+        face_buffer_offset = mesh.face_buffer_offset
         mesh.primitive = cur.u32()
         mesh.index_format = cur.u32()
+        mesh.index_count_offset = cur.pos
         mesh.index_count = cur.u32()
+        mesh.first_vertex_offset = cur.pos
         mesh.first_vertex = cur.u32()
         num_submesh = cur.u16()
         cur.u16()
@@ -839,8 +872,10 @@ class BfresFile:
                 submesh = SubMesh(offset=cur.u32(), count=cur.u32())
                 mesh.submeshes.append(submesh)
 
+        mesh.submesh_array_offset = submesh_array
         data_offset = self.buffer_offset + face_buffer_offset
         if size and data_offset and data_offset + size <= len(self.data):
+            mesh.index_data_offset = data_offset
             mesh.indices_raw = self.data[data_offset:data_offset + size]
         cur.pos = saved
         return mesh

@@ -50,11 +50,40 @@ fichier. Détails : [`docs/HOOKSHOT.md`](docs/HOOKSHOT.md).
   (compressed entries are shown decompressed).
 * **Type detection** for SARC, zstd, BFRES, BNTX, BNSH, BYML, AAMP, Yaz0, RIFF/Ogg…
 
+### 🔁 Traducteur romfs ↔ PC (PNG, OBJ, Blender)
+
+Le jeu ne lit ni PNG ni OBJ : le traducteur fait l'aller-retour.
+
+```bash
+python -m hookymod.cli translate unpack --romfs dump/romfs -p mon_projet
+python -m hookymod.cli translate status -p mon_projet
+python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
+```
+
+* `pc/` contient l'arborescence éditable : **textures en PNG**, **modèles en OBJ**
+  (Blender), fichiers bruts décompressés ; `origin/` garde les fichiers du jeu qui
+  servent de gabarits, et `manifest.json` suit les conversions.
+* **PNG → BNTX** : remplacement dans le BNTX d'origine (format, swizzle, mips et
+  taille de fichier conservés), ou création complète ; BC1/BC3/BC4/BC5 et formats
+  non compressés sont encodés, mips générées.
+* **OBJ / .blend → BFRES** : `translate blend` convertit un `.blend` en OBJ via
+  Blender, puis la géométrie est réimportée dans le BFRES du jeu (positions,
+  normales, UV0), en gardant matériaux, os et disposition des sommets.
+* `pack` n'écrit que les fichiers modifiés, recompresse les `.zs` avec le bon
+  dictionnaire et **met à jour la table des tailles** : le résultat est directement
+  un mod `mods/<nom>/romfs/...` pour Hookshot.
+
 ### 🎨 Rendering & 3D pipeline
 
 * **Real-time 3D viewer** for BFRES models (and `.obj`): orbit / pan / zoom, wireframe,
   back-face culling, flat shading, automatic normals when the model has none.
-* **BNTX texture viewer**: list every texture of a file, preview mip levels, decode
+* **Rien n'est chargé sans être regardé** : un BFRES n'est analysé qu'à l'ouverture de
+  l'onglet « Modèle 3D », les maillages ne sont construits qu'au clic sur « Voir en 3D »,
+  puis mis en cache. Le dessin écarte les faces invisibles, borne le nombre de polygones
+  à la surface de la fenêtre (moins pendant une rotation) et ne projette que les sommets
+  utiles : un modèle de 250 000 triangles reste manipulable.
+* **BNTX texture viewer**: list every texture of a file, preview mip levels (image ajustée
+  à la fenêtre, cache disque des aperçus, Pillow en secours si Tk ne lit pas le PNG), decode
   BC1/BC2/BC3/BC4/BC5, RGBA8/BGRA8, RGB565, BGR565, RGBA4, ABGR4, RGB5A1, R10G10B10A2, R8, RG8…
   (Tegra block-linear swizzle is implemented and validated against the reference algorithm).
   BC7 / BC6H / ASTC are supported when `texture2ddecoder` is installed.
@@ -63,6 +92,16 @@ fichier. Détails : [`docs/HOOKSHOT.md`](docs/HOOKSHOT.md).
 * **BFRES → OBJ export** with positions, UVs, normals and generated materials.
 * **One-click Blender export (`.blend`)**: BFRES is converted to OBJ then imported by
   Blender in background mode — **no BFRES import add-on required anymore**.
+
+### 🧭 Interface : une action, un seul endroit
+
+* Barre d'outils réduite aux actions globales (romfs, ouvrir, `.nup`, retour, enregistrer,
+  exporter en mod) ; extraction/remplacement/patch dans le menu **Édition** ; textures et
+  modèle 3D dans leurs onglets. Plus aucun bouton en double.
+* Les onglets suivent le contenu : un `.bntx` ouvre l'onglet Textures, un `.bfres` l'onglet
+  Modèle 3D (`Ctrl+1/2/3` pour passer de l'un à l'autre).
+* **Fenêtre de chargement** avec barre de progression pour les opérations longues, en
+  particulier l'ouverture d'un `.nup` et l'extraction de son `romfs`, et les traductions.
 
 ### 🛠️ Modding suite
 
@@ -114,6 +153,8 @@ python -m hookymod.cli scan romfs --json -o rapport.json
 python -m hookymod.cli carve conteneur_inconnu.bin     # structures à l'intérieur
 python -m hookymod.cli nup game.nup --list             # paquet Switch 2
 python -m hookymod.cli restbl romfs --get Model/Link.bfres
+python -m hookymod.cli translate unpack --romfs romfs -p projet   # PNG + OBJ
+python -m hookymod.cli translate pack -p projet -o mods --mod-name MonMod
 ```
 
 ## 🚀 Getting started
@@ -168,6 +209,7 @@ Every source file is plain Python; the tool also runs from a checkout without in
 | `Ctrl+E` | Export as mod |
 | `Ctrl+P` | Patch dialog |
 | `Ctrl+B` | Convert to `.blend` |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Onglets Aperçu / Textures / Modèle 3D |
 | `Alt+←` | Go up one archive level |
 | `F5` | Refresh preview |
 
@@ -189,6 +231,9 @@ hookymod/
   app.py              Tkinter application
   nup.py              paquets .nup (dumps Switch 2) : lecture, vérification, extraction
   restbl.py           table des tailles de ressources (RESTBL) : lecture et agrandissement
+  translate.py        traducteur romfs ↔ PC (projet pc/ + origin/ + manifest)
+  bntx_encode.py      PNG → BNTX (BC1/BC3/BC4/BC5, formats simples, mips, swizzle)
+  bfres_import.py     OBJ / Blender → BFRES (géométrie réécrite dans le fichier d'origine)
   identify.py         identification des formats (magics) et scan d'un dump
   cli.py              command line interface
 docs/                 guides (dump inconnu, modding Switch 2 / Hookshot)
@@ -203,7 +248,7 @@ No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and
 python -m unittest discover -s tests -v
 ```
 
-109 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
+169 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
 logique de l'interface.
 
 The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
@@ -219,8 +264,12 @@ The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
   will be empty, but geometry still loads.
 * Skeletal animations and skinned deformation are **not** played back yet: models are shown
   in their bind pose.
-* BNTX textures are decoded and exported, but **re-encoding a modified PNG back into a BNTX
-  is not implemented** — replace the whole `.bntx` (or the archive entry) instead.
+* BNTX : PNG → BNTX fonctionne (remplacement dans le fichier d'origine ou création),
+  sauf BC7/ASTC qui n'ont pas d'encodeur. Un BNTX reconstruit de zéro doit être
+  validé en jeu.
+* BFRES : la géométrie est réimportée dans le fichier d'origine, mais **la taille des
+  tampons ne peut pas augmenter** (pas de BFRES reconstruit depuis zéro) et les
+  boîtes englobantes ne sont pas recalculées.
 * BFRES internal textures (FTEX) are not decoded; use the separate `.bntx` files.
 * Wii U BFRES (big endian) is explicitly rejected.
 * BC6 (HDR) textures are decoded approximately / require `texture2ddecoder`.

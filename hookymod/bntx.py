@@ -128,6 +128,17 @@ def _surface_size(width: int, height: int, blk_w: int, blk_h: int, bpp: int) -> 
     return div_round_up(width, blk_w) * div_round_up(height, blk_h) * bpp
 
 
+def surface_size(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
+                 tile_mode: int, block_height_log2: int) -> int:
+    """Taille réellement occupée par un mip sur disque (alignements inclus)."""
+    blocks_w = div_round_up(width, blk_w)
+    blocks_h = div_round_up(height, blk_h)
+    if tile_mode == 1:
+        return align_up(blocks_w * bpp, 32) * blocks_h
+    block_height = 1 << max(0, min(5, block_height_log2))
+    return align_up(blocks_w * bpp, 64) * align_up(blocks_h, block_height * 8)
+
+
 def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
               tile_mode: int, block_height_log2: int, data: bytes,
               round_pitch: bool = True) -> bytes:
@@ -574,6 +585,7 @@ class BntxTexture:
     mip_offsets: list[int] = field(default_factory=list)
     comp_sel: tuple = (0, 0, 0, 0)
     warnings: list[str] = field(default_factory=list)
+    data_offset: int = 0        # position absolue des données dans le fichier
 
     # ------------------------------------------------------------------ décodage
     def mip_size(self, level: int = 0) -> tuple[int, int]:
@@ -601,20 +613,28 @@ class BntxTexture:
             raise HookyError("Texture de taille nulle.")
 
         bpp = self.bpp
-        surface = div_round_up(width, self.blk_w) * div_round_up(height, self.blk_h) * bpp
+        surface = _surface_size(width, height, self.blk_w, self.blk_h, bpp)
+        padded = surface_size(width, height, self.blk_w, self.blk_h, bpp,
+                              self.tile_mode, self._shifted_block_height(level))
         offset = self.mip_offsets[level] if level < len(self.mip_offsets) else 0
-        raw = self.data[offset:offset + surface]
-        if len(raw) < surface:
+        available = len(self.data) - offset
+        if level + 1 < len(self.mip_offsets):
+            available = min(available, self.mip_offsets[level + 1] - offset)
+        round_pitch = available >= padded
+        read_size = padded if round_pitch else surface
+        raw = self.data[offset:offset + read_size]
+        if len(raw) < read_size:
             if len(raw) == 0:
                 raise HookyError(f"« {self.name} » : données de texture absentes.")
             # Texture tronquée : complète avec des zéros pour ne pas planter.
-            raw = raw + b"\x00" * (surface - len(raw))
+            raw = raw + b"\x00" * (read_size - len(raw))
 
         self.warnings = []
         if self.swizzle_value not in (0, 1):
             self.warnings.append(f"swizzle inconnu ({self.swizzle_value})")
         linear = deswizzle(width, height, self.blk_w, self.blk_h, bpp,
-                           self.tile_mode, self._shifted_block_height(level), raw)
+                           self.tile_mode, self._shifted_block_height(level), raw,
+                           round_pitch=round_pitch)
         if self.format_name in PIXEL_FORMATS:
             rgba = _decode_pixels(self.format_name, linear, width, height)
         else:
@@ -785,6 +805,7 @@ class BntxFile:
             image_size=image_size,
             data=payload,
             mip_offsets=mip_offsets,
+            data_offset=base,
             comp_sel=comp_sel,
         )
         return texture
