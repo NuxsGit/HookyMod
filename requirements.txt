@@ -1,0 +1,11 @@
+# Dépendance obligatoire : lecture/écriture des fichiers .zs (zstd)
+zstandard>=0.21
+
+# Optionnel : décodage matériel des textures BC7 / BC6 / ASTC
+# (sans ce paquet, seuls BC1/BC2/BC3/BC4/BC5 et les formats non compressés
+#  sont décodés — tout le reste de l'application continue de fonctionner).
+# texture2ddecoder>=1.0.5
+
+# Tkinter est fourni avec Python (paquet système python3-tk sous Linux).
+# Aucune autre dépendance n'est nécessaire : le PNG, l'OBJ et le rendu 3D
+# sont générés par le code du projet.
