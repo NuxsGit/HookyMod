@@ -50,6 +50,29 @@ fichier. Détails : [`docs/HOOKSHOT.md`](docs/HOOKSHOT.md).
   (compressed entries are shown decompressed).
 * **Type detection** for SARC, zstd, BFRES, BNTX, BNSH, BYML, AAMP, Yaz0, RIFF/Ogg…
 
+### 🔁 Traducteur romfs ↔ PC (PNG, OBJ, Blender)
+
+Le jeu ne lit ni PNG ni OBJ : le traducteur fait l'aller-retour.
+
+```bash
+python -m hookymod.cli translate unpack --romfs dump/romfs -p mon_projet
+python -m hookymod.cli translate status -p mon_projet
+python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
+```
+
+* `pc/` contient l'arborescence éditable : **textures en PNG**, **modèles en OBJ**
+  (Blender), fichiers bruts décompressés ; `origin/` garde les fichiers du jeu qui
+  servent de gabarits, et `manifest.json` suit les conversions.
+* **PNG → BNTX** : remplacement dans le BNTX d'origine (format, swizzle, mips et
+  taille de fichier conservés), ou création complète ; BC1/BC3/BC4/BC5 et formats
+  non compressés sont encodés, mips générées.
+* **OBJ / .blend → BFRES** : `translate blend` convertit un `.blend` en OBJ via
+  Blender, puis la géométrie est réimportée dans le BFRES du jeu (positions,
+  normales, UV0), en gardant matériaux, os et disposition des sommets.
+* `pack` n'écrit que les fichiers modifiés, recompresse les `.zs` avec le bon
+  dictionnaire et **met à jour la table des tailles** : le résultat est directement
+  un mod `mods/<nom>/romfs/...` pour Hookshot.
+
 ### 🎨 Rendering & 3D pipeline
 
 * **Real-time 3D viewer** for BFRES models (and `.obj`): orbit / pan / zoom, wireframe,
@@ -114,6 +137,8 @@ python -m hookymod.cli scan romfs --json -o rapport.json
 python -m hookymod.cli carve conteneur_inconnu.bin     # structures à l'intérieur
 python -m hookymod.cli nup game.nup --list             # paquet Switch 2
 python -m hookymod.cli restbl romfs --get Model/Link.bfres
+python -m hookymod.cli translate unpack --romfs romfs -p projet   # PNG + OBJ
+python -m hookymod.cli translate pack -p projet -o mods --mod-name MonMod
 ```
 
 ## 🚀 Getting started
@@ -189,6 +214,9 @@ hookymod/
   app.py              Tkinter application
   nup.py              paquets .nup (dumps Switch 2) : lecture, vérification, extraction
   restbl.py           table des tailles de ressources (RESTBL) : lecture et agrandissement
+  translate.py        traducteur romfs ↔ PC (projet pc/ + origin/ + manifest)
+  bntx_encode.py      PNG → BNTX (BC1/BC3/BC4/BC5, formats simples, mips, swizzle)
+  bfres_import.py     OBJ / Blender → BFRES (géométrie réécrite dans le fichier d'origine)
   identify.py         identification des formats (magics) et scan d'un dump
   cli.py              command line interface
 docs/                 guides (dump inconnu, modding Switch 2 / Hookshot)
@@ -203,7 +231,7 @@ No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and
 python -m unittest discover -s tests -v
 ```
 
-109 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
+138 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
 logique de l'interface.
 
 The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
@@ -219,8 +247,12 @@ The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
   will be empty, but geometry still loads.
 * Skeletal animations and skinned deformation are **not** played back yet: models are shown
   in their bind pose.
-* BNTX textures are decoded and exported, but **re-encoding a modified PNG back into a BNTX
-  is not implemented** — replace the whole `.bntx` (or the archive entry) instead.
+* BNTX : PNG → BNTX fonctionne (remplacement dans le fichier d'origine ou création),
+  sauf BC7/ASTC qui n'ont pas d'encodeur. Un BNTX reconstruit de zéro doit être
+  validé en jeu.
+* BFRES : la géométrie est réimportée dans le fichier d'origine, mais **la taille des
+  tampons ne peut pas augmenter** (pas de BFRES reconstruit depuis zéro) et les
+  boîtes englobantes ne sont pas recalculées.
 * BFRES internal textures (FTEX) are not decoded; use the separate `.bntx` files.
 * Wii U BFRES (big endian) is explicitly rejected.
 * BC6 (HDR) textures are decoded approximately / require `texture2ddecoder`.

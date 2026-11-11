@@ -24,6 +24,7 @@ from . import bntx as bntx_mod
 from . import identify
 from . import nup as nup_mod
 from . import restbl as restbl_mod
+from . import translate as translate_mod
 from .container import Level, detect_kind
 from .mesh import export_obj
 from .sarc import SarcArchive, is_sarc
@@ -442,6 +443,54 @@ def _parse_sizes(values: list[str] | None) -> dict[str, int]:
     return pairs
 
 
+def cmd_translate(args) -> int:
+    if args.action in ("unpack", "pack", "status") and not args.project:
+        raise HookyError("précise --project (dossier du projet).")
+    if args.action == "unpack":
+        manifest = translate_mod.unpack(args.romfs, args.project, only=args.filter,
+                                        limit=args.limit,
+                                        progress=(lambda done, total: print(
+                                            f"\r# {done}/{total}", end="",
+                                            file=sys.stderr)) if args.verbose else None)
+        if args.verbose:
+            print(file=sys.stderr)
+        kinds: dict[str, int] = {}
+        for entry in manifest.entries:
+            kinds[entry.kind] = kinds.get(entry.kind, 0) + 1
+        print(f"Projet créé : {args.project}")
+        print(f"Entrées : {len(manifest.entries)} ("
+              + ", ".join(f"{kind} ×{count}" for kind, count in sorted(kinds.items()))
+              + ")")
+        print(f"À éditer : {Path(args.project) / 'pc'}")
+        if manifest.errors:
+            print(f"⚠ {len(manifest.errors)} avertissement(s) :")
+            for error in manifest.errors[:10]:
+                print(f"  • {error}")
+        return 0
+    if args.action == "blend":
+        if not args.blend or not args.obj:
+            raise HookyError("précise --blend et --obj.")
+        path = translate_mod.blender_export_obj(args.blend, args.obj, args.blender)
+        print(f"OBJ écrit : {path} ({human_size(path.stat().st_size)})")
+        print("Réimporte-le ensuite avec : translate pack")
+        return 0
+    if args.action == "status":
+        for line in translate_mod.status(args.project):
+            print(line)
+        return 0
+    if args.action == "pack":
+        result = translate_mod.pack(args.project, args.output,
+                                    all_files=args.all, mod_name=args.mod_name or "",
+                                    update_table=not args.no_table)
+        for line in result.summary():
+            print(line)
+        root = Path(args.output) / (args.mod_name or "") / "romfs"
+        if result.written:
+            print(f"Fichiers écrits sous : {root}")
+        return 0 if not result.errors else 1
+    raise HookyError(f"action inconnue : {args.action}")
+
+
 def cmd_restbl(args) -> int:
     target = Path(args.path)
     dicts = load_dicts(args.romfs, target, args.verbose)
@@ -675,6 +724,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="sortie JSON (pour partage)")
     p.add_argument("--output", "-o", help="écrit le rapport dans un fichier")
     p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("translate", parents=[common],
+                       help="traduit un romfs en projet PC éditable (PNG/OBJ) et retour")
+    p.add_argument("action", choices=["unpack", "pack", "status", "blend"])
+    p.add_argument("--project", "-p", help="dossier du projet (unpack/pack/status)")
+    p.add_argument("--output", "-o", help="dossier de sortie (pack)")
+    p.add_argument("--all", action="store_true",
+                   help="pack : réécrire tous les fichiers, pas seulement les modifiés")
+    p.add_argument("--mod-name", help="pack : écrire dans <sortie>/<nom>/romfs (mod Hookshot)")
+    p.add_argument("--no-table", action="store_true",
+                   help="pack : ne pas mettre à jour la table des tailles")
+    p.add_argument("--filter", "-f", help="unpack : filtre sur le chemin")
+    p.add_argument("--blend", help="blend : fichier .blend à convertir")
+    p.add_argument("--obj", help="blend : OBJ de sortie")
+    p.add_argument("--blender", help="blend : chemin de l'exécutable Blender")
+    p.add_argument("--limit", type=int, help="unpack : nombre maximum de fichiers")
+    p.set_defaults(func=cmd_translate)
 
     p = sub.add_parser("restbl", parents=[common],
                        help="lit / agrandit la table des tailles de ressources (RESTBL)")

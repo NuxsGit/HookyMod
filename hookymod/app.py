@@ -20,6 +20,7 @@ from . import bntx as bntx_mod
 from . import identify
 from . import nup as nup_mod
 from . import restbl as restbl_mod
+from . import translate as translate_mod
 from .container import Document, Level, detect_kind
 from .mesh import MeshData, export_obj, load_obj
 from .sarc import SarcArchive
@@ -215,6 +216,11 @@ class App(tk.Tk):
         outils.add_command(label="Exporter les textures en PNG…", command=self.export_textures)
         outils.add_command(label="Recharger les dictionnaires", command=self.reload_dicts)
         outils.add_command(label="Scanner un dossier (formats)…", command=self.scan_folder)
+        outils.add_separator()
+        outils.add_command(label="Traduire un romfs pour l'édition PC…",
+                           command=self.translate_unpack)
+        outils.add_command(label="Reconstruire un mod depuis un projet…",
+                           command=self.translate_pack)
         outils.add_command(label="Paramètres…", command=self.settings_dialog)
         menubar.add_cascade(label="Outils", menu=outils)
 
@@ -1200,6 +1206,67 @@ class App(tk.Tk):
         ttk.Button(bar, text="Copier le rapport", command=copy).pack(side="left")
         ttk.Button(bar, text="Enregistrer…", command=save).pack(side="left", padx=8)
         ttk.Button(bar, text="Fermer", command=win.destroy).pack(side="right")
+
+    # ------------------------------------------------------------------ traduction
+    @_action
+    def translate_unpack(self) -> None:
+        """Convertit un romfs en projet PC (textures PNG, modèles OBJ)."""
+        source = filedialog.askdirectory(
+            title="romfs à traduire (ou son parent)",
+            initialdir=str(self.romfs) if self.romfs else "")
+        if not source:
+            return
+        folder = filedialog.askdirectory(title="Dossier du projet (pc/ et origin/ seront créés)")
+        if not folder:
+            return
+        project = Path(folder)
+
+        def work():
+            return translate_mod.unpack(source, project)
+
+        def done(manifest):
+            kinds: dict[str, int] = {}
+            for entry in manifest.entries:
+                kinds[entry.kind] = kinds.get(entry.kind, 0) + 1
+            message = (f"Projet créé : {project}\n\n"
+                       f"{len(manifest.entries)} entrée(s) : "
+                       + ", ".join(f"{kind} ×{count}"
+                                    for kind, count in sorted(kinds.items()))
+                       + f"\n\nÀ éditer : {project / 'pc'}"
+                       "\n(les PNG s'ouvrent dans GIMP/Photoshop, les OBJ dans Blender)")
+            if manifest.errors:
+                message += (f"\n\n⚠ {len(manifest.errors)} avertissement(s) :\n"
+                            + "\n".join(manifest.errors[:8]))
+            self.status(f"Projet de traduction : {project}")
+            messagebox.showinfo("Traduction pour PC", message, parent=self)
+
+        self._run_bg("Traduction du romfs…", work, done)
+
+    @_action
+    def translate_pack(self) -> None:
+        """Reconstruit les fichiers modifiés d'un projet en mod romfs."""
+        folder = filedialog.askdirectory(title="Projet de traduction (manifest.json)")
+        if not folder:
+            return
+        project = Path(folder)
+        destination = filedialog.askdirectory(
+            title="Dossier du mod (le sous-dossier romfs/ sera créé dedans)")
+        if not destination:
+            return
+
+        def work():
+            return translate_mod.pack(project, destination)
+
+        def done(result):
+            message = "\n".join(result.summary())
+            if result.written:
+                message += f"\n\nÉcrit sous : {Path(destination) / 'romfs'}"
+                self.status(f"Mod reconstruit : {len(result.written)} fichier(s)")
+            else:
+                self.status("Aucun fichier modifié dans le projet.")
+            messagebox.showinfo("Reconstruire le mod", message, parent=self)
+
+        self._run_bg("Reconstruction du mod…", work, done)
 
     # ------------------------------------------------------------------ switch 2
     @_action

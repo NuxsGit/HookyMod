@@ -302,6 +302,35 @@ class AppLogicTests(unittest.TestCase):
         self.app.romfs = Path(tempfile.mkdtemp())
         self.assertEqual(self.app._update_size_table(Path("/tmp"), {"a": 10}), [])
 
+    def test_translate_unpack_and_pack_from_gui(self):
+        import shutil
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(folder, ignore_errors=True))
+        romfs = folder / "romfs"
+        (romfs / "Model").mkdir(parents=True)
+        (romfs / "Model" / "test.bfres").write_bytes(synth.make_bfres())
+        project = folder / "projet"
+        mods = folder / "mods"
+        mods.mkdir()
+
+        old_dir = app_module.filedialog.askdirectory
+        answers = [str(romfs), str(project)]
+        app_module.filedialog.askdirectory = lambda *a, **k: answers.pop(0) if answers else ""
+        self.addCleanup(setattr, app_module.filedialog, "askdirectory", old_dir)
+        self.app._run_bg = lambda label, work, done, failed=None: done(work())
+        self.app.translate_unpack()
+        self.assertTrue((project / "pc" / "Model" / "test.bfres_m0_s0.obj").exists())
+
+        answers.extend([str(project), str(mods)])
+        self.app.translate_pack()   # rien de modifié : ne doit rien écrire
+        self.assertFalse((mods / "romfs").exists())
+
+        obj = project / "pc" / "Model" / "test.bfres_m0_s0.obj"
+        obj.write_text(obj.read_text().replace("v 0 0 0", "v 2 2 2", 1))
+        answers.extend([str(project), str(mods)])
+        self.app.translate_pack()
+        self.assertTrue((mods / "romfs" / "Model" / "test.bfres").exists())
+
     def test_scan_folder_flows_into_report_window(self):
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))

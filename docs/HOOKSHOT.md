@@ -81,7 +81,67 @@ La clé est le CRC-32 du chemin relatif au romfs, suffixe `.zs` retiré
 (`Model/Link.bfres.zs` → `Model/Link.bfres`). Les entrées sont triées par CRC après
 modification, comme le jeu l'exige pour sa recherche dichotomique.
 
-## 4. Déroulé complet
+## 4. Traducteur romfs ↔ PC (PNG, OBJ, Blender)
+
+C'est la pièce qui manquait pour modder confortablement : le jeu ne lit ni PNG
+ni OBJ, et un BNTX/BFRES ne s'édite pas dans GIMP ou Blender. Le traducteur fait
+l'aller-retour, sans jamais perdre les en-têtes d'origine.
+
+```
+mon_projet/
+  pc/            ← ce que tu édites (Windows / Linux)
+    Textures/tex.bntx.png      (GIMP / Photoshop / Krita)
+    Model/Link.bfres_m0_s0.obj (Blender)
+    Pack/Data.pack             (fichiers bruts décompressés)
+  origin/        ← copie des fichiers du jeu (gabarits pour la reconstruction)
+  manifest.json  ← correspondance, format, compression, paramètres
+```
+
+```bash
+# romfs → projet éditable
+python -m hookymod.cli translate unpack --romfs dump/romfs -p mon_projet
+
+# ce qui a changé depuis l'extraction
+python -m hookymod.cli translate status -p mon_projet
+
+# (optionnel) .blend → OBJ, à placer à la place de l'OBJ du projet
+python -m hookymod.cli translate blend --blend Link.blend --obj mon_projet/pc/Model/Link.bfres_m0_s0.obj
+
+# projet → mod Hookshot (seulement les fichiers modifiés)
+python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
+
+# ou romfs complet (installation propre)
+python -m hookymod.cli translate pack -p mon_projet -o rebuild --all
+```
+
+Dans l'interface : **Outils → Traduire un romfs pour l'édition PC…**, puis
+**Outils → Reconstruire un mod depuis un projet…**.
+
+### PNG → BNTX
+
+* remplacement dans le BNTX d'origine : mêmes dimensions, format, swizzle et
+  mips → **le fichier garde exactement sa taille**, rien d'autre ne bouge ;
+* formats encodables : RGBA8/BGRA8 (et sRGB), RGB565/BGR565, RGBA4/BGRA4,
+  RGB5A1/BGR5A1, R8, RG8, BC1, BC3, BC4, BC5 ;
+* mips régénérées par filtre boîte, swizzle Tegra identique au décodeur ;
+* BC7/ASTC ne sont pas encodables (pas d'encodeur libre fiable) : réexporte la
+  texture dans un format géré, ou garde le BNTX d'origine tel quel.
+
+### OBJ / BLEND → BFRES
+
+Un BFRES n'est pas qu'un maillage : matériaux, os, animations, offsets absolus.
+Le traducteur réimporte donc **la géométrie** dans le BFRES du jeu, en gardant
+attributs, strides, tampons d'index et le reste du fichier :
+
+* positions, normales et UV0 sont réécrites (formats half/float/unorm/snorm) ;
+* la nouvelle géométrie doit tenir dans les tampons existants (même nombre de
+  sommets et d'indices au maximum) : décime le maillage sinon, ou réimporte dans
+  un BFRES plus dense ;
+* les autres attributs (tangentes, couleurs, skinning) sont laissés intacts ;
+* les boîtes englobantes ne sont pas recalculées — si le volume change beaucoup,
+  le culling du jeu peut faire disparaître le modèle par moments (limite connue).
+
+## 4 bis. Déroulé complet
 
 ```bash
 # 1. vérifier l'emballage et extraire
@@ -112,6 +172,11 @@ python -m hookymod.cli replace dump/romfs/Pack/Model.pack.zs \
   décompresser ; l'outil l'indique explicitement au lieu d'échouer silencieusement.
 * **formats internes inconnus** : lance `scan` puis `carve` ; le rapport dit s'il s'agit
   bien de SARC/zstd/BNTX/BFRES ou d'autre chose.
+* **BNTX créé de zéro** : possible (`--format RGBA8`), mais préfère le remplacement
+  dans un BNTX du jeu : la version, l'alignement et les drapeaux restent ceux
+  auxquels le jeu s'attend.
+* **agrandir un BFRES** (plus de sommets/indices) : non supporté ; il faudrait
+  reconstruire tout l'arbre du fichier.
 
 ## 6. Licences
 

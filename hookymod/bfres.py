@@ -203,6 +203,8 @@ class VertexBuffer:
     sizes: list[int] = field(default_factory=list)
     vertex_count: int = 0
     gpu_alignment: int = 8
+    buffer_offsets: list[int] = field(default_factory=list)   # absolus, dans le fichier
+    header_offset: int = 0
 
     def attrib(self, *names: str) -> VertexAttrib | None:
         for attribute in self.attributes:
@@ -235,6 +237,12 @@ class Mesh:
     first_vertex: int = 0
     submeshes: list[SubMesh] = field(default_factory=list)
     indices_raw: bytes = b""
+    struct_offset: int = 0        # position de la structure Mesh
+    index_data_offset: int = 0    # position absolue des indices
+    submesh_array_offset: int = 0
+    index_count_offset: int = 0   # emplacements des champs à réécrire
+    first_vertex_offset: int = 0
+    face_buffer_offset: int = 0
 
     def indices(self) -> list[int]:
         code = {0: ("B", 1), 1: ("H", 2), 2: ("I", 4)}.get(self.index_format, ("H", 2))
@@ -744,6 +752,7 @@ class BfresFile:
         saved = cur.pos
         cur.seek(offset)
         vtx = VertexBuffer()
+        vtx.header_offset = offset
         if self.version_major >= 9:
             cur.u32()
         else:
@@ -794,7 +803,9 @@ class BfresFile:
                 size = vtx.sizes[i] if i < len(vtx.sizes) else 0
                 if size <= 0 or cur.pos + size > len(self.data):
                     vtx.buffers.append(b"")
+                    vtx.buffer_offsets.append(0)
                     continue
+                vtx.buffer_offsets.append(cur.pos)
                 vtx.buffers.append(cur.raw(size))
         cur.pos = saved
         return vtx
@@ -819,16 +830,20 @@ class BfresFile:
         saved = cur.pos
         cur.seek(offset)
         mesh = Mesh()
+        mesh.struct_offset = offset
         submesh_array = cur.offset()
         cur.offset()  # memory pool
         cur.offset()  # tampon d'index (non utilisé directement)
         size = cur.u32()
         cur.u32()     # drapeaux
         cur.skip(40)  # BufferSize
-        face_buffer_offset = cur.u32()
+        mesh.face_buffer_offset = cur.u32()
+        face_buffer_offset = mesh.face_buffer_offset
         mesh.primitive = cur.u32()
         mesh.index_format = cur.u32()
+        mesh.index_count_offset = cur.pos
         mesh.index_count = cur.u32()
+        mesh.first_vertex_offset = cur.pos
         mesh.first_vertex = cur.u32()
         num_submesh = cur.u16()
         cur.u16()
@@ -839,8 +854,10 @@ class BfresFile:
                 submesh = SubMesh(offset=cur.u32(), count=cur.u32())
                 mesh.submeshes.append(submesh)
 
+        mesh.submesh_array_offset = submesh_array
         data_offset = self.buffer_offset + face_buffer_offset
         if size and data_offset and data_offset + size <= len(self.data):
+            mesh.index_data_offset = data_offset
             mesh.indices_raw = self.data[data_offset:data_offset + size]
         cur.pos = saved
         return mesh
