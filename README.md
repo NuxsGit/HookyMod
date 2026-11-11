@@ -85,8 +85,9 @@ Contributions are welcome! If you'd like to add support for new formats or fix b
 
 If you find this tool useful and would like to support ongoing development and research, donations via Solana are greatly appreciated!
 
+SOL Address: 
 ```text
-SOL Address: y8eeEqNTo7pANwRVvwsrNDu9gpPTFYW5FrP2oMUtfhZ
+y8eeEqNTo7pANwRVvwsrNDu9gpPTFYW5FrP2oMUtfhZ
 ```
 
 *(Thank you for your support!)*
