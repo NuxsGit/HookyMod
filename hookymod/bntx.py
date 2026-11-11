@@ -330,6 +330,16 @@ def _decode_bc4(data: bytes, width: int, height: int, signed: bool = False) -> b
     return bytes(out)
 
 
+def _deinterleave(data: bytes, first: int, last: int, stride: int = 16) -> bytes:
+    """Extrait ``data[i*stride+first : i*stride+last]`` pour chaque bloc.
+
+    BC2/BC3 stockent, par bloc de 16 octets, 8 octets d'alpha puis 8 octets de
+    couleur : les moitiés ne sont donc pas contiguës dans le fichier.
+    """
+    blocks = len(data) // stride
+    return b"".join(data[i * stride + first:i * stride + last] for i in range(blocks))
+
+
 def _compose_bc5(data: bytes, width: int, height: int, signed: bool = False) -> bytes:
     """BC5 = deux blocs BC4 entrelacés par bloc 4×4 (R puis G)."""
     blocks = len(data) // 16
@@ -355,7 +365,7 @@ def _decode_bcn(name: str, data: bytes, width: int, height: int,
             return _decode_bc1(data, width, height)
         if name.startswith("BC2"):
             # BC2 = alpha 4 bits + bloc couleur BC1 (mode 4 couleurs)
-            color = _decode_bc1(data[8:], width, height)
+            color = _decode_bc1(_deinterleave(data, 8, 16), width, height)
             out = bytearray(color)
             bw, bh = div_round_up(width, 4), div_round_up(height, 4)
             for by in range(bh):
@@ -375,9 +385,9 @@ def _decode_bcn(name: str, data: bytes, width: int, height: int,
                             a = (alphas >> (4 * (py * 4 + px))) & 0xF
                             out[(y * width + x) * 4 + 3] = a * 17
             return bytes(out)
-        # BC3
-        color = _decode_bc1(data[8:], width, height)
-        alpha = _decode_bc4(data[:8], width, height)
+        # BC3 = alpha BC4 (8 octets) + couleur BC1 (8 octets), par bloc
+        color = _decode_bc1(_deinterleave(data, 8, 16), width, height)
+        alpha = _decode_bc4(_deinterleave(data, 0, 8), width, height)
         out = bytearray(color)
         out[3::4] = alpha[0::4]
         return bytes(out)

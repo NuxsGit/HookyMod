@@ -1,0 +1,109 @@
+# Ouvrir les assets de Ocarina of Time (remake Switch 2, 2026)
+
+Notes vérifiées le 11 novembre 2026 à partir des sources publiques listées en bas.
+Elles expliquent **pourquoi un fichier ne s'affiche pas** et **quels outils
+savent déjà le lire**, sans reprendre de code sous GPL.
+
+## 1. Ce qu'est le jeu
+
+* Remake de *Ocarina of Time* sorti le **5 novembre 2026** sur Switch 2 ;
+  build de référence **E0F3CCFA**, update **v131072**, titre `0400486024DEC000`.
+* Moteur : **ModuleSystem**, celui de *Tears of the Kingdom* (nom de code « Owl »).
+  Conséquence directe : le romfs, les formats et la plupart des noms de classes
+  sont ceux de TotK — un `.bfres.zs`, un `.bntx.zs`, un `.pack.zs` et un
+  `.bgyml` se lisent avec la même boîte à outils.
+* romfs : **186 587 fichiers, ~26 Go**.
+
+| Dossier | Contenu | Extension |
+|---|---|---|
+| `Tex` | 20 667 textures (9,4 Go) | `<Nom>.bntx.zs` |
+| `Model` | 7 896 modèles + animations | `<Nom>.<Nom>.bfres.zs`, `<Nom>_Animation.anim.bfres.zs` |
+| `Pack` | 8 385 *acteur packs* (Link = `Player_Base`, `Player_Child`, `Player_Adult`) | `*.pack.zs` (SARC) |
+| `TerrainArc`, `Bake`, `PreComputedCulling` | terrain, éclairage cuit, occlusion | `.extm`, `.bkprb`, `.bcul` |
+| `AS` | 919 graphes d'animation | `*.root.asb.zs` |
+| `Banc` | 247 cartes (une par zone) | `.bcett.byml.zs` |
+| `Mals` | textes (16 langues, 540 MSBT chacune) | `*.sarc.zs` |
+| `System` | table des tailles de ressources | `*.rsizetable.zs` |
+
+## 2. Compression : `.zs` + dictionnaires
+
+Presque tout est du **zstd**. Beaucoup de frames exigent un des quatre
+dictionnaires du jeu, rangés dans `Pack/ZsDic.pack.zs` (zstd simple → SARC de
+fichiers `.zsdic`) :
+
+| `dict_id` | Fichier | Sert à |
+|---:|---|---|
+| 1 | `zs.zsdic` | tout le reste (textures, modèles…) |
+| 2 | `bkprb.zsdic` | éclairage cuit |
+| 3 | `bcett.byml.zsdic` | placement des cartes |
+| 4 | `pack.zsdic` | acteur packs `.pack.zs` |
+
+HookyMod charge ces dictionnaires automatiquement dès que le dossier `romfs`
+est choisi (menu **Fichier → Choisir un dossier romfs…**) ; sans eux, un `.zs`
+« ne s'ouvre pas » alors que le fichier est intact. Vérification en une ligne :
+
+```bash
+python -m hookymod.cli doctor romfs/Tex/<Nom>.bntx.zs
+```
+
+## 3. Pourquoi un asset ne s'affiche pas
+
+1. **Tkinter absent** → aucune fenêtre ne s'ouvre (c'est le cas le plus fréquent
+   sur Windows). `python -m hookymod.cli doctor` l'affiche en clair. Voir §4.
+2. **Modèle sans ses textures** : le BFRES ne contient pas les textures, elles
+   vivent à part dans `Tex/<Nom>.bntx.zs`. Ouvrir la texture correspondante
+   (ou l'exporter en PNG) est donc une étape normale, pas un bug.
+3. **`.zs` non décompressé** faute de dictionnaire (voir §2).
+4. **Mod qui « ne fait rien » en jeu** : le fichier a grossi au-delà de sa
+   réservation dans
+   `System/Resource/ResourceSizeTable.Product.111.Nin_Ounce_NVN2.rsizetable.zs`
+   (format RESTBL v1, entrée = CRC-32 du chemin sans `.zs` + taille réservée).
+   Le jeu refuse alors le fichier. HookyMod sait lire/corriger cette table
+   (`restbl`, `translate pack`) ; `tools/rstb_set.py` du dépôt communautaire fait
+   la même chose.
+5. **Format non géré** : `.ainb` (logique), `.asb` (animations), `.bcett.byml`
+   (placement), `.bkprb` (éclairage cuit), `.bcul` (occlusion) ne sont pas encore
+   analysés par HookyMod ; le diagnostic le dit explicitement au lieu d'échouer
+   en silence.
+
+## 4. Voir quelque chose **sans** fenêtre
+
+```bash
+python -m hookymod.cli doctor                              # modules, Tk, dictionnaires
+python -m hookymod.cli ls romfs/Tex                        # inventaire (via le romfs)
+python -m hookymod.cli textures romfs/Tex/<Nom>.bntx.zs -o png/   # textures en PNG
+python -m hookymod.cli view romfs/Model/<Nom>.<Nom>.bfres.zs -o modele.png
+python -m hookymod.cli view ... --views 4 --size 480x480    # planche de rotations
+python -m hookymod.cli obj  romfs/Model/<Nom>.<Nom>.bfres.zs -o modele.obj
+```
+
+Sur Windows, pour retrouver l'interface : réinstaller Python depuis python.org
+en cochant **« tcl/tk and IDLE »** (ou lancer `py -3.12 -m hookymod.app`).
+Sous Debian/Ubuntu : `sudo apt install python3-tk`.
+
+## 5. Outils existants qui traduisent déjà ces formats
+
+| Outil | Ce qu'il fait | Remarque |
+|---|---|---|
+| [OctoSquiddy/Switch-2-Toolbox](https://github.com/OctoSquiddy/Switch-2-Toolbox) | fork de Switch-Toolbox avec **BFRES v10** (Switch 2), **BNTX 0.4.1.x** (« Ounc »), chargement automatique des textures externes du dossier `Tex` | nécessite `Pack/ZsDic.pack.zs` décompressé dans `Lib/ZstdDictionaries` ([issue #757](https://github.com/KillzXGaming/Switch-Toolbox/issues/757)). GPL v3. |
+| [Kabosune/oot-remake-modding](https://github.com/Kabosune/oot-remake-modding) | `zstool.py` (ls/cat/extract `.zs` + SARC + BYML), `zsmod.py` (édition de nombres), `asbtool.py` (ASB), `rstb_set.py` (table des tailles), `nxpatch.py` | orienté code/paramètres, pas les modèles ; c'est la référence la plus à jour sur la structure du romfs. |
+| [CosmicDreamsOfCode/BfresToCast](https://github.com/CosmicDreamsOfCode/BfresToCast) | conversion BFRES → Cast (glTF/FBX) | PR #8 : textures externes, ASTC, tableaux, blend shapes. |
+| [NotRexed/Hookshot](https://github.com/NotRexed/Hookshot) | recompilation statique du jeu pour PC (Vulkan) ; `nx2/prompt_assets.py` documente `.nup`, dictionnaires, RESTBL | ne sert pas à éditer des assets. |
+| [zortos293/Lichii](https://github.com/zortos293/Lichii) | émulateur (lignée yuzu/Eden) | décode ASTC/BC7 à l'exécution. |
+| TotK tools (TotkToolkit, etc.) | mêmes formats côté TotK | beaucoup de connaissances sont transférables. |
+
+Conclusion pratique : **la traduction est possible** — Switch-2-Toolbox (fork
+Switch 2) pour ouvrir/modifier modèles et textures, `zstool.py` pour inspecter
+`.zs`/SARC/BYML, `zsmod.py` pour les valeurs, `rstb_set.py` pour la table des
+tailles. HookyMod reste l'outil « tout-en-un » côté ligne de commande et
+diagnostic, avec un périmètre volontairement limité à SARC / zstd / BFRES /
+BNTX / OBJ / PNG.
+
+## 6. Sources
+
+* `docs/romfs.md` et `docs/engine.md` de `Kabosune/oot-remake-modding` (build
+  E0F3CCFA, update v131072) — structure du romfs, dictionnaires zstd, RESTBL v1.
+* `tools/zstool.py` du même dépôt — implémentation de référence SARC/zstd/BYML.
+* `OctoSquiddy/Switch-2-Toolbox` — BFRES v10, BNTX 0.4.1.x, textures externes.
+* `NotRexed/Hookshot` (`nx2/prompt_assets.py`) — `.nup`, dictionnaires, RESTBL.
+* `KillzXGaming/tegra_swizzle` — formules de swizzle X1 et Orin.

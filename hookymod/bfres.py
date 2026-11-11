@@ -529,6 +529,39 @@ class Cursor:
             self.pos = saved
 
 
+def meshes_from_file(file: "BfresFile", lod: int = 0,
+                     budget: int | None = None) -> list:
+    """Maillages d'un BFRES, LOD donné, sous un budget de faces optionnel.
+
+    Utilisé par l'aperçu hors interface (``cli view``) : même conversion que le
+    viewer, sans Tkinter ni cache d'application.
+    """
+    from .mesh import MeshData  # import local : mesh ne dépend pas de bfres
+
+    meshes: list[MeshData] = []
+    total = 0
+    for model in file.models:
+        for shape in model.shapes:
+            if budget is not None and total >= budget:
+                break
+            try:
+                mesh = shape.build_mesh(lod, file.warnings)
+            except HookyError:
+                continue
+            if mesh is None or not mesh.faces:
+                continue
+            if 0 <= shape.material_index < len(model.materials):
+                mesh.material = model.materials[shape.material_index].name
+            meshes.append(mesh)
+            total += len(mesh.faces)
+        if budget is not None and total >= budget:
+            break
+    if not meshes:
+        raise HookyError("Aucun maillage exploitable dans ce BFRES.\n\n"
+                         + "\n".join(file.warnings[:8]))
+    return meshes
+
+
 class BfresFile:
     """Fichier BFRES (Switch)."""
 

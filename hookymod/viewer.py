@@ -16,12 +16,26 @@ vrais modèles (souvent 100 000 faces), le viewer :
 from __future__ import annotations
 
 import math
-import tkinter as tk
 from dataclasses import dataclass, field
-from tkinter import messagebox, ttk
 
 from .mesh import MeshData
 from .util import HookyError
+
+try:  # Tkinter est absent de certaines installations (Windows sans tcl/tk)
+    import tkinter as tk
+    from tkinter import messagebox, ttk
+    TK_AVAILABLE = True
+    TK_ERROR = ""
+except Exception as exc:  # noqa: BLE001 - on veut la cause exacte
+    tk = None            # type: ignore[assignment]
+    messagebox = None    # type: ignore[assignment]
+    ttk = None           # type: ignore[assignment]
+    TK_AVAILABLE = False
+    TK_ERROR = f"{type(exc).__name__}: {exc}"
+
+#: Sans Tkinter, la géométrie et le rendu hors écran restent utilisables :
+#: seule la fenêtre est indisponible.
+_TkBase = tk.Toplevel if TK_AVAILABLE else object
 
 BG = "#16181d"
 PANEL = "#23262e"
@@ -196,7 +210,10 @@ def order_visible_faces(faces, projected, budget: int, cull: bool = True,
         visible.append(((p0[2] + p1[2] + p2[2]) / 3.0, index))
     if not visible:
         return []
-    visible.sort(reverse=True)
+    # La profondeur projetée croît vers la caméra : on dessine donc du plus
+    # petit z (le plus loin) au plus grand, pour que le peintre respecte
+    # l'occlusion (une face proche recouvre bien une face lointaine).
+    visible.sort()
     step = max(1, len(visible) // max(1, budget))
     return [index for _, index in visible[::step][:budget]]
 
@@ -226,7 +243,7 @@ def shade_color(color, normal, yaw: float, pitch: float) -> str:
 
 
 # --------------------------------------------------------------------------- fenêtre
-class MeshViewer(tk.Toplevel):
+class MeshViewer(_TkBase):  # type: ignore[misc,valid-type]
     """Fenêtre de prévisualisation 3D.
 
     Commandes : glisser = tourner · clic droit / Maj+glisser = déplacer ·
@@ -441,6 +458,17 @@ class MeshViewer(tk.Toplevel):
 def open_viewer(master, meshes, title: str = "Viewer 3D",
                 palette: dict | None = None) -> MeshViewer | None:
     """Ouvre le viewer en gérant proprement les erreurs (retourne None si échec)."""
+    if not TK_AVAILABLE:
+        messagebox_text = ("Tkinter est indisponible sur cette installation "
+                           f"({TK_ERROR}). Le viewer 3D ne peut pas s'ouvrir ; "
+                           "utilise « python -m hookymod.cli view fichier.bfres "
+                           "-o apercu.png » pour obtenir une image.")
+        try:
+            from tkinter import messagebox as box
+            box.showerror("Viewer 3D", messagebox_text, parent=master)
+        except Exception:  # noqa: BLE001
+            print(messagebox_text)
+        return None
     try:
         return MeshViewer(master, meshes, title, palette=palette)
     except HookyError as exc:

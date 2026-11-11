@@ -12,8 +12,24 @@ import tempfile
 import threading
 import traceback
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
-import tkinter as tk
+
+try:  # Tkinter manque sur certaines installations (Windows sans tcl/tk, embeddable)
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+    TK_AVAILABLE = True
+    TK_ERROR = ""
+except Exception as exc:  # noqa: BLE001 - on remonte la cause exacte
+    tk = None            # type: ignore[assignment]
+    filedialog = None    # type: ignore[assignment]
+    messagebox = None    # type: ignore[assignment]
+    ttk = None           # type: ignore[assignment]
+    TK_AVAILABLE = False
+    TK_ERROR = f"{type(exc).__name__}: {exc}"
+
+#: Sans Tkinter, l'application ne peut pas s'ouvrir : on garde la cause pour
+#: :func:`main`, qui affiche la marche à suivre (et la solution de repli CLI).
+_TkAppBase = tk.Tk if TK_AVAILABLE else object
+_TkToplevelBase = tk.Toplevel if TK_AVAILABLE else object
 
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
@@ -136,7 +152,7 @@ def find_blender(configured: str = "") -> str:
     return ""
 
 
-class LoadingPopup(tk.Toplevel):
+class LoadingPopup(_TkToplevelBase):  # type: ignore[misc,valid-type]
     """Petite fenêtre « Chargement… » non bloquante, avec barre de progression.
 
     Utilisée pour les opérations longues et opaques (ouverture/extraction d'un
@@ -243,7 +259,7 @@ class LoadingPopup(tk.Toplevel):
             pass
 
 
-class App(tk.Tk):
+class App(_TkAppBase):  # type: ignore[misc,valid-type]
     # ------------------------------------------------------------------ init
     def __init__(self) -> None:
         super().__init__()
@@ -2785,14 +2801,35 @@ class App(tk.Tk):
         self.destroy()
 
 
+MISSING_TK_HELP = """\
+Impossible d'ouvrir l'interface : Tkinter n'est pas disponible.
+
+%s
+
+Que faire ?
+  Windows  Python                  réinstalle Python depuis python.org en cochant
+                                  « tcl/tk and IDLE » (ou lance « py -3.12 -m hookymod.app »)
+  Debian   python3-tk              sudo apt install python3-tk
+  macOS    python.org              prends l'installeur officiel de python.org
+
+En attendant, tout reste utilisable sans fenêtre :
+  python -m hookymod.cli doctor                     état de l'installation
+  python -m hookymod.cli inspect romfs/Pack/X.zs    contenu d'une archive
+  python -m hookymod.cli textures X.bntx -o png/    textures en PNG
+  python -m hookymod.cli view X.bfres -o modele.png modèle en image (3D)
+  python -m hookymod.cli --help                     toutes les commandes
+"""
+
+
 def main() -> int:
     """Point d'entrée de l'application graphique."""
+    if not TK_AVAILABLE:
+        print(MISSING_TK_HELP % f"Détail : {TK_ERROR}", file=sys.stderr)
+        return 1
     try:
         app = App()
     except tk.TclError as exc:
-        print("Impossible d'ouvrir la fenêtre Tkinter :", exc, file=sys.stderr)
-        print("Astuce : utilise l'interface en ligne de commande : "
-              "python -m hookymod.cli --help", file=sys.stderr)
+        print(MISSING_TK_HELP % f"Détail : {exc}", file=sys.stderr)
         return 1
     app.mainloop()
     return 0

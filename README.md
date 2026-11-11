@@ -91,6 +91,10 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
   BC7 / BC6H / ASTC are supported when `texture2ddecoder` is installed.
 * **Texture → PNG export** (single, filtered or all textures). PNG is written by the app
   itself: no Pillow dependency.
+* **Rendu PNG hors interface** (`cli view`) : maillage rasterisé avec tampon de
+  profondeur (donc occlusion correcte), anti-aliasing, planche de rotations. C'est
+  la voie de secours quand Tkinter n'est pas installé — et un moyen rapide de
+  jeter un œil à un modèle depuis un terminal.
 * **BFRES → OBJ export** with positions, UVs, normals and generated materials.
 * **One-click Blender export (`.blend`)**: BFRES is converted to OBJ then imported by
   Blender in background mode — **no BFRES import add-on required anymore**.
@@ -157,6 +161,8 @@ python -m hookymod.cli extract romfs/Pack/Some.pack.zs -o out --decompress
 python -m hookymod.cli replace pack.zs -e Model/Link.bfres -i new.bfres -o new_pack.zs
 python -m hookymod.cli patch pack.zs --find Link --replace Hero -o patched.zs
 python -m hookymod.cli textures pack.zs -e Tex/Butterfly.bntx.zs -o png/
+python -m hookymod.cli view romfs/Model/Link.bfres.zs -o link.png   # rendu sans fenêtre
+python -m hookymod.cli view modele.bfres --views 4 --size 480x480  # planche de rotations
 python -m hookymod.cli textures tex.bntx --orin            # force la disposition Switch 2
 python -m hookymod.cli doctor romfs/Pack/Tex.pack.zs       # modules + anatomie d'un fichier
 python -m hookymod.cli obj pack.zs -e Model/Link.bfres -o Link.obj
@@ -170,6 +176,18 @@ python -m hookymod.cli translate pack -p projet -o mods --mod-name MonMod
 ```
 
 ## 🚀 Getting started
+
+### Si la fenêtre ne s'ouvre pas (Tkinter absent)
+
+`python -m hookymod.cli doctor` dit immédiatement si Tkinter est disponible.
+S'il manque, tout le reste fonctionne sans fenêtre : `textures` exporte les PNG,
+`view` rend un modèle en image, `obj` exporte le maillage.
+
+En attendant, la lecture d'un asset passe par les mêmes fichiers : un modèle
+`.bfres.zs` **ne contient pas ses textures**, elles sont dans `Tex/*.bntx.zs`.
+
+Guide complet (structure du romfs du remake, dictionnaires zstd, table des
+tailles, outils existants) : [`docs/OUVRIR_LES_ASSETS.md`](docs/OUVRIR_LES_ASSETS.md).
 
 ### Requirements
 
@@ -262,7 +280,7 @@ No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and
 python -m unittest discover -s tests -v
 ```
 
-213 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI,
+236 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI,
 les dispositions de pixels Switch 1/Orin, les thèmes et la logique de l'interface.
 
 The GUI modules are also covered by a headless smoke test (stubbed Tkinter).

@@ -87,7 +87,8 @@ def environment_report(romfs: Path | str | None = None, dicts: int = 0,
     lines.append(f"  {'BC7 / BC6H':<22} {bc7}")
     lines.append(f"  {'BC1-BC5, RGBA8…':<22} oui (décodeur intégré)")
     lines.append("")
-    lines.append(f"  romfs                  {romfs or 'non défini'}")
+    romfs_text = Path(romfs).as_posix() if romfs else "non défini"
+    lines.append(f"  romfs                  {romfs_text}")
     lines.append(f"  dictionnaires zstd     {dicts}")
     if theme:
         lines.append(f"  thème                  {theme}")
