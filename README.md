@@ -2,67 +2,176 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=gold)](https://github.com/NuxsGit/HookyMod/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=blue)](https://github.com/NuxsGit/HookyMod/network/members)
-[![GitHub Issues](https://img.shields.io/github/issues/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=red)](https://github.com/NuxsGit/HookyMod/issues)
+[![GitHub Issues](https://img.shields.io/github/issues/NuxsGit/HookyMod?style=for-the-badge&color=red)](https://github.com/NuxsGit/HookyMod/issues)
 [![GitHub License](https://img.shields.io/github/license/NuxsGit/HookyMod?style=for-the-badge&color=green)](LICENSE)
 [![Release Status](https://img.shields.io/github/v/release/NuxsGit/HookyMod?style=for-the-badge&logo=github&color=purple)](https://github.com/NuxsGit/HookyMod/releases)
 [![Solana Donate](https://img.shields.io/badge/Donate-Solana-00FFA3?style=for-the-badge&logo=solana&logoColor=black)](#-support-the-project)
 
 ## 📌 Overview
 
-**OoT Remake Asset Explorer** is a standalone, open-source modding and reverse-engineering tool built for the *Ocarina of Time Remake*. Designed to work alongside PC decompilations and mod loaders like **Hookshot**, this tool allows developers and modders to easily inspect, extract, edit, and package assets.
+**OoT Remake Asset Explorer** (HookyMod) is a standalone, open-source modding and
+reverse-engineering tool for the *Ocarina of Time Remake* romfs. It is designed to work
+alongside PC decompilations and mod loaders like **Hookshot**, and lets modders inspect,
+extract, edit, convert and repackage assets.
+
+Everything is Python (Tkinter for the GUI): no proprietary library, no game asset bundled.
 
 ## ⚡ Features
 
-### 🗂️ Asset Inspection & Navigation
+### 🗂️ Asset inspection & navigation
 
-* **RomFS Support:** Seamlessly browse and read raw game archives (`romfs`) in real time.
-* **Built-in Hex Viewer:** Inspect file headers, magic bytes, and binary structures (`.zs`, `.bfres`, `.bntx`, `.pack`, etc.).
-* **Metadata & ASCII String Dump:** Extract internal naming schemes and format structures instantly.
-* **Instant Filtering & Search:** Real-time search engine to locate specific game assets (e.g., `Butterfly`, `Link`, `Tex/`, etc.).
+* **RomFS browser** with lazy folder tree, instant filtering and recursive search.
+* **zstd (`.zs`) support** with automatic dictionary handling: `Pack/ZsDic.pack.zs` is
+  found and loaded from your dump, and a file compressed with an unknown dictionary ID is
+  retried against every loaded dictionary. Clear error messages when a dictionary is missing.
+* **SARC archives**: browse, extract, replace, rebuild (hash table, name table, per-entry
+  alignment and endianness preserved). Nested `.zs` / SARC can be entered recursively
+  (double-click) and edited in place.
+* **Built-in hex viewer + metadata + ASCII string dump** for any file or archive entry
+  (compressed entries are shown decompressed).
+* **Type detection** for SARC, zstd, BFRES, BNTX, BNSH, BYML, AAMP, Yaz0, RIFF/Ogg…
 
-### 🎨 Rendering & 3D Pipeline
+### 🎨 Rendering & 3D pipeline
 
-* **Real-Time 3D Viewer:** Preview models (`.bfres`) and skeletal animations directly inside the app.
-* **One-Click Blender Export (`.blend`):** Convert graphics assets directly into ready-to-edit `.blend` files.
-* **BNTX & BFRES Editing:** Extract, view, and swap texture maps and 3D meshes without breaking file formatting.
+* **Real-time 3D viewer** for BFRES models (and `.obj`): orbit / pan / zoom, wireframe,
+  back-face culling, flat shading, automatic normals when the model has none.
+* **BNTX texture viewer**: list every texture of a file, preview mip levels, decode
+  BC1/BC2/BC3/BC4/BC5, RGBA8/BGRA8, RGB565, BGR565, RGBA4, ABGR4, RGB5A1, R10G10B10A2, R8, RG8…
+  (Tegra block-linear swizzle is implemented and validated against the reference algorithm).
+  BC7 / BC6H / ASTC are supported when `texture2ddecoder` is installed.
+* **Texture → PNG export** (single, filtered or all textures). PNG is written by the app
+  itself: no Pillow dependency.
+* **BFRES → OBJ export** with positions, UVs, normals and generated materials.
+* **One-click Blender export (`.blend`)**: BFRES is converted to OBJ then imported by
+  Blender in background mode — **no BFRES import add-on required anymore**.
 
-### 🛠️ Modding Suite
+### 🛠️ Modding suite
 
-* **Single & Batch Extraction/Replacement:** Extract assets for editing and import them back into the archive.
-* **Patch Management:** Create and apply binary patches to data structures.
-* **Mod Exporter:** Package all your modified assets into a clean, ready-to-distribute mod directory.
+* **Single & batch extraction**: raw bytes or automatically decompressed `.zs`.
+* **Single & batch replacement**: pick one file, or a whole folder whose layout mirrors the
+  archive; compressed entries are transparently recompressed with the original dictionary.
+* **Patch management**: search/replace text or hex bytes, on the current file, the whole
+  archive, the selection, and recursively inside `.zs` and nested SARC. Archive entry names
+  and headers can be patched too. Same-length patches keep file structures intact.
+* **Mod exporter**: writes `<mod>/romfs/<exact romfs path>` for LayeredFS / emulators,
+  handles several modified files at once, and lists pending modifications before exporting.
+* **Settings**: Blender path, zstd compression level, texture preview resolution, dictionary
+  status.
 
-## 🚀 Getting Started
+### 🖥️ Command line interface (headless, CI-friendly)
 
-### System Requirements
+The same engine is available without Tkinter:
 
-* **OS:** Windows 10/11 (64-bit) or Linux (via Wine / Proton)
-* **Game Dump:** A extracted `romfs` folder obtained legally from your copy of the game.
+```bash
+python -m hookymod.cli info romfs
+python -m hookymod.cli list romfs/Pack/Some.pack.zs --recursive
+python -m hookymod.cli extract romfs/Pack/Some.pack.zs -o out --decompress
+python -m hookymod.cli replace pack.zs -e Model/Link.bfres -i new.bfres -o new_pack.zs
+python -m hookymod.cli patch pack.zs --find Link --replace Hero -o patched.zs
+python -m hookymod.cli textures pack.zs -e Tex/Butterfly.bntx.zs -o png/
+python -m hookymod.cli obj pack.zs -e Model/Link.bfres -o Link.obj
+python -m hookymod.cli dicts romfs
+```
+
+## 🚀 Getting started
+
+### Requirements
+
+* Python **3.10+** with Tkinter (Windows/macOS installers include it; on Debian/Ubuntu:
+  `sudo apt install python3-tk`).
+* `zstandard` (required for `.zs` files).
+* *Optional:* `texture2ddecoder` for BC7 / BC6H / ASTC textures.
+* A legally obtained, extracted `romfs` folder of the game.
 
 ### Installation
 
-1. Go to the [**Releases**](../../releases) page on this GitHub repository.
-2. Download the latest release for your operating system.
-3. Extract the `.zip` file anywhere and run `AssetExplorer.exe`.
+```bash
+git clone https://github.com/NuxsGit/HookyMod.git
+cd HookyMod
+python -m pip install -r requirements.txt
+python AssetViewer.py
+```
 
-## 🛠️ Modding Workflow
+Every source file is plain Python; the tool also runs from a checkout without installation.
+
+## 🛠️ Modding workflow
 
 ```
-[ Original RomFS ] ➡️ [ Asset Explorer ] ➡️ [ Export .blend / BNTX ]
+[ Original RomFS ] ➡️ [ Asset Explorer ] ➡️ [ Export .blend / PNG / OBJ ]
                                                      │
                                            (Edit in Blender / GIMP)
                                                      │
 [ Playable Mod ]   ⬅️ [ Export as Mod ]  ⬅️ [ Import / Replace ]
 ```
 
-1. **Load RomFS:** Click **`Choisir romfs...`** and select your extracted game folder.
-2. **Locate Asset:** Filter assets (e.g., `Tex/Mt_Body_Animal_Butterfly_Alb.bntx.zs`).
-3. **Modify:**
-   * Click **`Convertir en .blend`** for 3D editing or **`Extraire`** to pull textures.
-   * After editing, import your changes using **`Remplacer...`**.
-4. **Export Mod:** Click **`Exporter en mod`** to compile a final mod structure.
+1. **Load RomFS:** click **`Choisir romfs…`** and pick your extracted game folder (the
+   parent folder of `romfs/` works too). Dictionaries are detected automatically.
+2. **Locate an asset:** browse the tree, use the search box, or filter the archive content.
+3. **Inspect:** the right panel shows type, size, hex dump, ASCII strings, then dedicated
+   tabs for BNTX textures (preview/PNG) and BFRES models (3D view / OBJ / `.blend`).
+4. **Modify:**
+   * **`Remplacer…`** for one file (`.zs` are recompressed automatically),
+   * **`Patch…`** for targeted byte/text changes, including inside compressed entries,
+   * batch replacement is available from the *Édition* menu.
+5. **Export:** **`Exporter en mod`** writes `romfs/<same path>` for your loader. Several
+   modified files can be exported in one go; **`Enregistrer…`** also writes a standalone file.
 
-## ⚖️ Legal Disclaimer
+### Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+O` / `Ctrl+S` | Open / Save as |
+| `Ctrl+R` | Choose romfs folder |
+| `Ctrl+E` | Export as mod |
+| `Ctrl+P` | Patch dialog |
+| `Ctrl+B` | Convert to `.blend` |
+| `Alt+←` | Go up one archive level |
+| `F5` | Refresh preview |
+
+In the 3D viewer: drag = rotate, right-drag = pan, wheel = zoom, `W` = wireframe,
+`B` = back-face culling, `F` = frame the model.
+
+## 🧱 Project layout
+
+```
+AssetViewer.py        GUI launcher (python AssetViewer.py)
+hookymod/
+  sarc.py             SARC read/rebuild (hash + name tables, alignment)
+  zs.py               zstd + dictionaries, ZsDic.pack discovery
+  container.py        opened file model (nested .zs / SARC navigation)
+  bntx.py             BNTX parser, Tegra swizzle, BCn/pixel decoding, PNG export
+  bfres.py            BFRES parser (models, shapes, meshes, vertex attributes)
+  mesh.py             mesh data, OBJ import/export
+  viewer.py           Tkinter 3D viewer (software painter)
+  app.py              Tkinter application
+  cli.py              command line interface
+tests/                unit tests + synthetic SARC/BFRES/BNTX generators
+```
+
+## ✅ Tests
+
+No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and BFRES files.
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The GUI modules are also covered by a headless smoke test (stubbed Tkinter).
+
+## ⚠️ Known limitations
+
+* Modern BFRES files (v10 / TotK-style) may use externally stored strings; those names
+  will be empty, but geometry still loads.
+* Skeletal animations and skinned deformation are **not** played back yet: models are shown
+  in their bind pose.
+* BNTX textures are decoded and exported, but **re-encoding a modified PNG back into a BNTX
+  is not implemented** — replace the whole `.bntx` (or the archive entry) instead.
+* BFRES internal textures (FTEX) are not decoded; use the separate `.bntx` files.
+* Wii U BFRES (big endian) is explicitly rejected.
+* BC6 (HDR) textures are decoded approximately / require `texture2ddecoder`.
+* Patches keep the original byte length (structure-preserving edits).
+
+## ⚖️ Legal disclaimer
 
 > [!IMPORTANT]
 > **This project is developed independently for interoperability and modding research purposes only.**
@@ -75,17 +184,21 @@
 
 Contributions are welcome! If you'd like to add support for new formats or fix bugs:
 
-1. **Fork** the repository.
+1. Fork the repository.
 2. Create your Feature Branch (`git checkout -b feature/CoolFeature`).
 3. Commit your changes (`git commit -m 'Add CoolFeature'`).
 4. Push to the branch (`git push origin feature/CoolFeature`).
 5. Open a **Pull Request**.
 
-## ☕ Support the Project
+When touching binary formats, please add a synthetic test in `tests/` so regressions are
+caught without shipping game data.
 
-If you find this tool useful and would like to support ongoing development and research, donations via Solana are greatly appreciated!
+## ☕ Support the project
 
-SOL Address: 
+If you find this tool useful and would like to support ongoing development and research,
+donations via Solana are greatly appreciated!
+
+SOL Address:
 ```text
 y8eeEqNTo7pANwRVvwsrNDu9gpPTFYW5FrP2oMUtfhZ
 ```
