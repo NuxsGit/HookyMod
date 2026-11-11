@@ -23,8 +23,22 @@ Pour modder sans reconstruire le jeu, il suffit donc d'un dossier `romfs` access
 python -m hookymod.cli nup "/chemin/game.nup" --extract "C:/Games/Hookshot_dump" --verify
 ```
 
-Dans l'interface : **Fichier → Ouvrir un paquet .nup (Switch 2)…**, choisir le `.nup`,
-puis le dossier d'extraction : le romfs extrait est ouvert directement dans l'explorateur.
+Dans l'interface : bouton **`.nup…`** de la barre d'outils (ou **Fichier → Ouvrir un
+paquet .nup (Switch 2)…**), choisir le `.nup`, puis le dossier d'extraction. Une petite
+**fenêtre de chargement** suit la progression fichier par fichier et se ferme d'elle-même
+(même en cas d'erreur) ; le romfs extrait est ensuite ouvert directement dans
+l'explorateur, dictionnaires zstd compris.
+
+Une fois un fichier sélectionné, les onglets se comportent ainsi :
+
+* **Aperçu** — métadonnées, hexadécimal, chaînes ASCII (toujours immédiat) ;
+* **Textures** — pour un `.bntx` : liste des textures, mips, aperçu décodé et ajusté à la
+  fenêtre, export PNG ;
+* **Modèle 3D** — pour un `.bfres` : informations, LOD, **Voir en 3D**, export OBJ et
+  conversion `.blend`.
+
+Rien n'est analysé tant que l'onglet correspondant n'est pas affiché : ouvrir un gros romfs
+reste donc réactif, et un BFRES n'est construit qu'au moment où on regarde le modèle.
 
 ## 2. Où vont les mods
 

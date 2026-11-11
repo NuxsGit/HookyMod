@@ -257,6 +257,18 @@ class Mesh:
             values = tuple(v + self.first_vertex for v in values)
         return list(values)
 
+    def face_count(self) -> int:
+        """Nombre de triangles, sans décoder ni convertir les indices (rapide)."""
+        count = self.index_count or (len(self.indices_raw) //
+                                     {0: 1, 1: 2, 2: 4}.get(self.index_format, 2))
+        if self.primitive == 0x03:
+            return max(0, count // 3)
+        if self.primitive == 0x04:
+            return max(0, count - 2)
+        if self.primitive == 0x07:
+            return max(0, count // 6)
+        return 0
+
     def triangles(self) -> list[tuple[int, int, int]]:
         indices = self.indices()
         faces: list[tuple[int, int, int]] = []
@@ -294,6 +306,12 @@ class Shape:
         if not self.meshes:
             return []
         return self.meshes[min(lod, len(self.meshes) - 1)].triangles()
+
+    def face_count(self, lod: int = 0) -> int:
+        """Nombre de triangles d'un LOD, sans construire le maillage."""
+        if not self.meshes:
+            return 0
+        return self.meshes[min(lod, len(self.meshes) - 1)].face_count()
 
     def build_mesh(self, lod: int = 0, warnings: list[str] | None = None) -> MeshData | None:
         warnings = warnings if warnings is not None else []
@@ -389,14 +407,14 @@ class Model:
 
     def mesh_info(self) -> str:
         lines = [f"Modèle : {self.name or f'#{self.index}'}"]
-        meshes = self.build_meshes(0, []) if self.shapes else []
-        total_v = sum(len(m.positions) for m in meshes)
-        total_f = sum(len(m.faces) for m in meshes)
-        lines.append(f"Formes  : {len(self.shapes)}   ·   Matériaux : {len(self.materials)}")
+        shapes = self.shapes
+        total_v = sum(s.vtx_buffer.vertex_count for s in shapes if s.vtx_buffer)
+        total_f = sum(s.face_count(0) for s in shapes)
+        lines.append(f"Formes  : {len(shapes)}   ·   Matériaux : {len(self.materials)}")
         lines.append(f"Géométrie (LOD0) : {total_v:,} sommets · {total_f:,} triangles")
         if self.materials:
             lines.append("Matériaux : " + ", ".join(m.name or "?" for m in self.materials[:12]))
-        for shape in self.shapes[:40]:
+        for shape in shapes[:40]:
             vtx = shape.vtx_buffer
             count = vtx.vertex_count if vtx else 0
             lods = len(shape.meshes)

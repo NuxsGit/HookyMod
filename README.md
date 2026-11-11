@@ -77,7 +77,13 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
 
 * **Real-time 3D viewer** for BFRES models (and `.obj`): orbit / pan / zoom, wireframe,
   back-face culling, flat shading, automatic normals when the model has none.
-* **BNTX texture viewer**: list every texture of a file, preview mip levels, decode
+* **Rien n'est chargé sans être regardé** : un BFRES n'est analysé qu'à l'ouverture de
+  l'onglet « Modèle 3D », les maillages ne sont construits qu'au clic sur « Voir en 3D »,
+  puis mis en cache. Le dessin écarte les faces invisibles, borne le nombre de polygones
+  à la surface de la fenêtre (moins pendant une rotation) et ne projette que les sommets
+  utiles : un modèle de 250 000 triangles reste manipulable.
+* **BNTX texture viewer**: list every texture of a file, preview mip levels (image ajustée
+  à la fenêtre, cache disque des aperçus, Pillow en secours si Tk ne lit pas le PNG), decode
   BC1/BC2/BC3/BC4/BC5, RGBA8/BGRA8, RGB565, BGR565, RGBA4, ABGR4, RGB5A1, R10G10B10A2, R8, RG8…
   (Tegra block-linear swizzle is implemented and validated against the reference algorithm).
   BC7 / BC6H / ASTC are supported when `texture2ddecoder` is installed.
@@ -86,6 +92,16 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
 * **BFRES → OBJ export** with positions, UVs, normals and generated materials.
 * **One-click Blender export (`.blend`)**: BFRES is converted to OBJ then imported by
   Blender in background mode — **no BFRES import add-on required anymore**.
+
+### 🧭 Interface : une action, un seul endroit
+
+* Barre d'outils réduite aux actions globales (romfs, ouvrir, `.nup`, retour, enregistrer,
+  exporter en mod) ; extraction/remplacement/patch dans le menu **Édition** ; textures et
+  modèle 3D dans leurs onglets. Plus aucun bouton en double.
+* Les onglets suivent le contenu : un `.bntx` ouvre l'onglet Textures, un `.bfres` l'onglet
+  Modèle 3D (`Ctrl+1/2/3` pour passer de l'un à l'autre).
+* **Fenêtre de chargement** avec barre de progression pour les opérations longues, en
+  particulier l'ouverture d'un `.nup` et l'extraction de son `romfs`, et les traductions.
 
 ### 🛠️ Modding suite
 
@@ -193,6 +209,7 @@ Every source file is plain Python; the tool also runs from a checkout without in
 | `Ctrl+E` | Export as mod |
 | `Ctrl+P` | Patch dialog |
 | `Ctrl+B` | Convert to `.blend` |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Onglets Aperçu / Textures / Modèle 3D |
 | `Alt+←` | Go up one archive level |
 | `F5` | Refresh preview |
 
@@ -231,7 +248,7 @@ No game asset is needed: the test suite generates synthetic SARC, zstd, BNTX and
 python -m unittest discover -s tests -v
 ```
 
-138 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
+169 tests couvrent les conteneurs, les parseurs, l'identification de formats, la CLI et la
 logique de l'interface.
 
 The GUI modules are also covered by a headless smoke test (stubbed Tkinter).

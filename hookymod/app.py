@@ -68,6 +68,42 @@ TEXT_EXT = {".txt", ".xml", ".json", ".yml", ".yaml", ".csv", ".md", ".ini",
             ".html", ".css", ".js", ".py", ".byml", ".aamp"}
 
 
+#: Boutons de la barre d'outils : (libellé, méthode, style, infobulle).
+#: Chaque action n'apparaît qu'ici : les actions de contenu (extraction, modèle 3D,
+#: textures) vivent dans les menus ou dans l'onglet correspondant.
+TOOLBAR_ACTIONS = (
+    ("romfs…", "set_romfs", "Accent.TButton",
+     "Choisir le dossier romfs du jeu (Ctrl+R)"),
+    ("Ouvrir…", "open_file", "TButton", "Ouvrir un asset (Ctrl+O)"),
+    (".nup…", "open_nup", "TButton",
+     "Ouvrir un paquet Switch 2 .nup et extraire son romfs"),
+    ("← Retour", "back", "TButton", "Remonter d'un niveau (Alt+←)"),
+    ("Enregistrer", "save", "TButton", "Enregistrer le fichier courant (Ctrl+S)"),
+    ("Exporter en mod", "export_mod", "Accent.TButton",
+     "Créer mods/<nom>/romfs/… pour LayeredFS (Ctrl+E)"),
+)
+
+#: Actions des menus : chaque libellé français n'est défini qu'une fois.
+MENU_ACTIONS = (
+    ("Choisir un dossier romfs…", "set_romfs"),
+    ("Ouvrir un fichier…", "open_file"),
+    ("Ouvrir un paquet .nup (Switch 2)…", "open_nup"),
+    ("Enregistrer sous…", "save"),
+    ("Voir les modifications…", "show_modifications"),
+    ("Extraire la sélection…", "extract_selection"),
+    ("Tout extraire…", "extract_all"),
+    ("Remplacer la sélection…", "replace_selection"),
+    ("Remplacement par lot…", "batch_replace"),
+    ("Patch chercher/remplacer…", "patch_dialog"),
+    ("Exporter toutes les textures (PNG)…", "export_textures"),
+    ("Recharger les dictionnaires", "reload_dicts"),
+    ("Scanner un dossier (formats)…", "scan_folder"),
+    ("Traduire un romfs pour l'édition PC…", "translate_unpack"),
+    ("Reconstruire un mod depuis un projet…", "translate_pack"),
+    ("Paramètres…", "settings_dialog"),
+)
+
+
 def find_blender(configured: str = "") -> str:
     """Trouve un exécutable Blender (config, PATH, chemins standards)."""
     if configured and Path(configured).exists():
@@ -86,6 +122,113 @@ def find_blender(configured: str = "") -> str:
         if candidate and Path(candidate).exists():
             return candidate
     return ""
+
+
+class LoadingPopup(tk.Toplevel):
+    """Petite fenêtre « Chargement… » non bloquante, avec barre de progression.
+
+    Utilisée pour les opérations longues et opaques (ouverture/extraction d'un
+    paquet ``.nup``, gros romfs). Elle ne prend pas la main (pas de ``grab``) :
+    l'utilisateur garde la main, et elle se ferme toujours, même en cas d'erreur.
+
+    Les mises à jour venant d'un fil de travail passent par un simple dictionnaire
+    lu par une boucle ``after`` du fil Tk : aucun appel Tk hors du fil principal.
+    """
+
+    def __init__(self, master, text: str = "Chargement…", title: str = "HookyMod") -> None:
+        super().__init__(master)
+        self._state: dict = {"done": 0, "total": None, "text": text, "closed": False}
+        self._after_id = None
+        self._destroyed = False
+        try:
+            self.title(title)
+            self.configure(bg=BG)
+            self.resizable(False, False)
+            try:
+                self.transient(master)
+                self.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            frame = ttk.Frame(self, padding=(18, 14))
+            frame.pack(fill="both", expand=True)
+            self.text_var = tk.StringVar(value=text)
+            ttk.Label(frame, textvariable=self.text_var, style="Panel.TLabel").pack(
+                anchor="w")
+            self.bar = ttk.Progressbar(frame, mode="indeterminate", length=340)
+            self.bar.pack(fill="x", pady=(10, 0))
+            self.bar.start(14)
+            self.update_idletasks()
+            self._center(master)
+            self._after_id = self.after(120, self._poll)
+        except Exception:  # noqa: BLE001 - un popup ne doit jamais bloquer l'app
+            pass
+
+    def _center(self, master) -> None:
+        try:
+            width = max(360, int(self.winfo_reqwidth()))
+            height = max(90, int(self.winfo_reqheight()))
+            x = int(master.winfo_rootx()) + max(0, (int(master.winfo_width()) - width) // 2)
+            y = int(master.winfo_rooty()) + max(0, (int(master.winfo_height()) - height) // 3)
+            self.geometry(f"+{x}+{y}")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---------------------------------------------------------------- fil de travail
+    def set_text(self, text: str) -> None:
+        """Appelable depuis n'importe quel fil (écriture d'état uniquement)."""
+        self._state["text"] = text
+
+    def set_progress(self, done: int, total: int | None = None) -> None:
+        self._state["done"] = int(done)
+        if total:
+            self._state["total"] = int(total)
+
+    def request_close(self) -> None:
+        """Demande la fermeture (le fil Tk détruit réellement la fenêtre)."""
+        self._state["closed"] = True
+
+    # ---------------------------------------------------------------- fil Tk
+    def _poll(self) -> None:
+        self._after_id = None
+        if self._destroyed:
+            return
+        if self._state.get("closed"):
+            self.close()
+            return
+        try:
+            text = str(self._state["text"])
+            done, total = self._state["done"], self._state["total"]
+            if total:
+                if str(self.bar.cget("mode")) != "determinate":
+                    self.bar.stop()
+                    self.bar.configure(mode="determinate", maximum=total)
+                self.bar["value"] = min(done, total)
+                self.text_var.set(f"{text}   {done}/{total}")
+            else:
+                self.text_var.set(text if done <= 0 else f"{text}   {done} fichier(s)")
+            self._after_id = self.after(120, self._poll)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def close(self) -> None:
+        if self._destroyed:
+            return
+        self._destroyed = True
+        self._state["closed"] = True
+        if self._after_id is not None:
+            try:
+                self.after_cancel(self._after_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._after_id = None
+        try:
+            self.bar.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.destroy()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class App(tk.Tk):
@@ -111,6 +254,14 @@ class App(tk.Tk):
         self._jobs: list[threading.Thread] = []
         self._busy = 0
         self.fs_paths: dict[str, Path] = {}
+
+        # --- caches (chargement paresseux : rien n'est analysé sans affichage)
+        self._bntx_cache: dict[str, bntx_mod.BntxFile] = {}
+        self._bfres_cache: dict[str, bfres_mod.BfresFile] = {}
+        self._texture_previews: dict[tuple, tuple[Path, int, int]] = {}
+        self._mesh_cache: dict[tuple, list[MeshData]] = {}
+        self._popups: list[LoadingPopup] = []
+        self._active_source: str = ""
 
         self.filter_var = tk.StringVar()
         self.search_var = tk.StringVar()
@@ -190,8 +341,6 @@ class App(tk.Tk):
         fichier.add_command(label="Ouvrir un paquet .nup (Switch 2)…", command=self.open_nup)
         fichier.add_separator()
         fichier.add_command(label="Enregistrer sous…", command=self.save, accelerator="Ctrl+S")
-        fichier.add_command(label="Exporter en mod…", command=self.export_mod,
-                            accelerator="Ctrl+E")
         fichier.add_command(label="Voir les modifications…", command=self.show_modifications)
         fichier.add_separator()
         fichier.add_command(label="Quitter", command=self._on_close)
@@ -208,12 +357,8 @@ class App(tk.Tk):
         menubar.add_cascade(label="Édition", menu=edition)
 
         outils = tk.Menu(menubar, tearoff=0)
-        outils.add_command(label="Voir le modèle en 3D", command=self.view_model)
-        outils.add_command(label="Exporter en OBJ…", command=self.export_model_obj)
-        outils.add_command(label="Convertir en .blend…", command=self.convert_blend,
-                           accelerator="Ctrl+B")
-        outils.add_separator()
-        outils.add_command(label="Exporter les textures en PNG…", command=self.export_textures)
+        outils.add_command(label="Exporter toutes les textures (PNG)…",
+                           command=self.export_textures)
         outils.add_command(label="Recharger les dictionnaires", command=self.reload_dicts)
         outils.add_command(label="Scanner un dossier (formats)…", command=self.scan_folder)
         outils.add_separator()
@@ -231,35 +376,23 @@ class App(tk.Tk):
         self.config(menu=menubar)
 
     def _build_toolbar(self) -> None:
+        """Barre d'outils : uniquement les actions globales, jamais de doublon.
+
+        Les actions liées à un contenu précis vivent à un seul endroit :
+        extraction/remplacement dans le menu « Édition », textures et modèle 3D
+        dans leurs onglets respectifs.
+        """
         bar = ttk.Frame(self, padding=(10, 10, 10, 4))
         bar.pack(fill="x")
-        buttons = [
-            ("Choisir romfs…", self.set_romfs, "Accent.TButton", "Ouvrir un dump romfs"),
-            ("Ouvrir…", self.open_file, "TButton", "Ouvrir un asset (Ctrl+O)"),
-            ("← Retour", self.back, "TButton", "Remonter d'un niveau"),
-            ("Extraire", self.extract_selection, "TButton", "Extraire les fichiers sélectionnés"),
-            ("Remplacer…", self.replace_selection, "TButton", "Remplacer un fichier de l'archive"),
-            ("Patch…", self.patch_dialog, "TButton", "Chercher/remplacer des octets ou du texte"),
-            ("Viewer 3D", self.view_model, "TButton", "Prévisualiser le modèle"),
-            (".blend", self.convert_blend, "Accent.TButton", "Convertir en fichier Blender"),
-            ("Enregistrer…", self.save, "TButton", "Enregistrer le fichier courant (Ctrl+S)"),
-            ("Exporter en mod", self.export_mod, "Accent.TButton",
-             "Créer romfs/… pour LayeredFS (Ctrl+E)"),
-        ]
-        for text, command, style, tooltip in buttons:
-            button = ttk.Button(bar, text=text, command=command, style=style)
+        for text, method, style, tooltip in TOOLBAR_ACTIONS:
+            button = ttk.Button(bar, text=text, command=getattr(self, method), style=style)
             button.pack(side="left", padx=(0, 6))
             self._tooltip(button, tooltip)
+        ttk.Button(bar, text="⚙", width=3, command=self.settings_dialog).pack(side="right")
 
         sub = ttk.Frame(self, padding=(10, 0, 10, 6))
         sub.pack(fill="x")
         ttk.Label(sub, textvariable=self.romfs_var, style="Muted.TLabel").pack(side="left")
-        ttk.Button(sub, text="⚙", width=3, command=self.settings_dialog).pack(side="right",
-                                                                              padx=(6, 0))
-        ttk.Entry(sub, textvariable=self.filter_var, width=26).pack(side="right")
-        ttk.Label(sub, text="Filtrer les fichiers :", style="Muted.TLabel").pack(side="right",
-                                                                                padx=6)
-        self.filter_var.trace_add("write", lambda *a: self._refresh_entries())
 
     def _build_body(self) -> None:
         paned = ttk.PanedWindow(self, orient="horizontal")
@@ -269,6 +402,7 @@ class App(tk.Tk):
         left = ttk.Frame(paned)
         search_bar = ttk.Frame(left)
         search_bar.pack(fill="x", pady=(0, 4))
+        ttk.Label(search_bar, text="romfs", style="Muted.TLabel").pack(side="left", padx=(0, 6))
         self.search_entry = ttk.Entry(search_bar, textvariable=self.search_var)
         self.search_entry.pack(side="left", fill="x", expand=True)
         self.search_entry.bind("<Return>", lambda e: self.fs_search())
@@ -285,9 +419,13 @@ class App(tk.Tk):
 
         # --- 2. contenu du fichier courant
         middle = ttk.Frame(paned)
+        head = ttk.Frame(middle)
+        head.pack(fill="x", pady=(0, 4))
         self.header_var = tk.StringVar(value="Aucun fichier ouvert")
-        ttk.Label(middle, textvariable=self.header_var, style="Muted.TLabel").pack(
-            fill="x", pady=(0, 4))
+        ttk.Label(head, textvariable=self.header_var, style="Muted.TLabel").pack(side="left")
+        ttk.Entry(head, textvariable=self.filter_var, width=18).pack(side="right")
+        ttk.Label(head, text="Filtrer :", style="Muted.TLabel").pack(side="right", padx=(0, 6))
+        self.filter_var.trace_add("write", lambda *a: self._refresh_entries())
         self.entry_tree = ttk.Treeview(middle, columns=("name", "size", "type"),
                                        show="headings", selectmode="extended")
         for column, title, width in (("name", "Nom", 300), ("size", "Taille", 90),
@@ -315,13 +453,15 @@ class App(tk.Tk):
         self.notebook.add(self.preview, text="Aperçu")
         self._build_texture_tab()
         self._build_model_tab()
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         paned.add(self.notebook, weight=4)
 
     def _build_texture_tab(self) -> None:
         self.texture_tab = ttk.Frame(self.notebook, padding=6)
         top = ttk.Frame(self.texture_tab)
         top.pack(fill="x")
-        self.texture_info_var = tk.StringVar(value="Ouvre un fichier BNTX pour voir ses textures.")
+        self.texture_info_var = tk.StringVar(
+            value="Sélectionne un fichier .bntx pour afficher ses textures.")
         ttk.Label(top, textvariable=self.texture_info_var, style="Panel.TLabel").pack(
             side="left", fill="x", expand=True)
         ttk.Label(top, text="Mip", style="Panel.TLabel").pack(side="left", padx=(6, 2))
@@ -330,7 +470,10 @@ class App(tk.Tk):
                                     state="readonly")
         self.mip_box.pack(side="left")
         self.mip_box.bind("<<ComboboxSelected>>", lambda e: self._redraw_texture())
-        ttk.Button(top, text="PNG", width=6, command=self.export_selected_texture).pack(
+        ttk.Button(top, text="Ajuster", width=8,
+                   command=lambda: self._redraw_texture(keep_view=False)).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(top, text="PNG…", width=6, command=self.export_selected_texture).pack(
             side="left", padx=(6, 0))
 
         body = ttk.Frame(self.texture_tab)
@@ -377,10 +520,102 @@ class App(tk.Tk):
         self.lod_box = ttk.Combobox(controls, textvariable=self.lod_var, width=4,
                                     values=["0"], state="readonly")
         self.lod_box.pack(side="left")
+        self.lod_box.bind("<<ComboboxSelected>>", lambda e: self._mesh_cache.clear())
+        ttk.Label(controls, text="le BFRES n'est analysé qu'à l'ouverture de cet onglet",
+                  style="Panel.TLabel").pack(side="right")
         self.model_text = tk.Text(self.model_tab, bg=PANEL, fg=FG, relief="flat",
                                   font=("Consolas", 10), wrap="word", padx=8, pady=6)
         self.model_text.pack(fill="both", expand=True, pady=(8, 0))
         self.notebook.add(self.model_tab, text="Modèle 3D")
+
+    # ------------------------------------------------------------------ onglets
+    def _tab_index(self, widget) -> int:
+        try:
+            return self.notebook.index(widget)
+        except Exception:  # noqa: BLE001 - stub Tk des tests
+            return -1
+
+    def select_tab(self, index: int) -> None:
+        """Affiche un onglet (0 = Aperçu, 1 = Textures, 2 = Modèle 3D) et le charge."""
+        try:
+            self.notebook.select(index)
+        except Exception:  # noqa: BLE001
+            return
+        self._on_tab_changed()
+
+    def _on_tab_changed(self, _event=None) -> None:
+        """Charge l'onglet visible seulement : pas de travail inutile en arrière-plan."""
+        try:
+            index = self.notebook.index(self.notebook.select())
+        except Exception:  # noqa: BLE001 - stub Tk des tests
+            return
+        if not isinstance(index, int):
+            return
+        if index == self._tab_index(self.texture_tab):
+            self._ensure_textures()
+        elif index == self._tab_index(self.model_tab):
+            self._ensure_model()
+
+    def _tab_source(self, magic: bytes) -> tuple[bytes, str] | None:
+        """Octets de la source affichée si elle commence par ``magic``.
+
+        Priorité à l'entrée sélectionnée dans l'archive, sinon au fichier
+        ouvert. Les .zs sont décompressés avec les dictionnaires du jeu.
+        """
+        doc = self.current
+        if doc is None:
+            return None
+        indices = self._selected_indices()
+        if doc.top.archive is not None:
+            if len(indices) != 1:
+                return None
+            entry = doc.top.archive.entries[indices[0]]
+            data = self._entry_payload(entry)
+            if data[:4] != magic:
+                return None
+            return data, f"{self.current_key}!{entry.name}"
+        try:
+            data = doc.top.data
+        except HookyError:
+            return None
+        if data[:4] != magic:
+            return None
+        return data, f"{self.current_key}"
+
+    def _entry_payload(self, entry) -> bytes:
+        """Données d'une entrée, décompressées si possible (jamais d'exception)."""
+        data = entry.data
+        if is_zstd(data):
+            try:
+                return self.dicts.decompress(data)
+            except HookyError:
+                return b""
+        return data
+
+    def _ensure_textures(self) -> None:
+        if self.texture_file is not None:
+            self._redraw_texture_if_needed()
+            return
+        source = self._tab_source(b"BNTX")
+        if source is None:
+            self.texture_info_var.set(
+                "Aucune texture ici : ouvre un fichier .bntx ou sélectionne une entrée .bntx.")
+            return
+        data, key = source
+        self._load_textures_from_data(data, key=key)
+
+    def _ensure_model(self) -> None:
+        if self.bfres_file is not None:
+            return
+        source = self._tab_source(b"FRES")
+        if source is None:
+            self._set_model_text(
+                "Aucun modèle BFRES à afficher.\n\n"
+                "Ouvre un fichier .bfres ou sélectionne une entrée .bfres :\n"
+                "l'analyse se fait uniquement ici, quand cet onglet est ouvert.")
+            return
+        data, key = source
+        self._load_bfres_from_data(data, key=key)
 
     def _build_status(self) -> None:
         bar = ttk.Frame(self)
@@ -398,6 +633,9 @@ class App(tk.Tk):
         self.bind("<Control-p>", lambda e: self.patch_dialog())
         self.bind("<Control-b>", lambda e: self.convert_blend())
         self.bind("<Alt-Left>", lambda e: self.back())
+        self.bind("<Control-Key-1>", lambda e: self.select_tab(0))
+        self.bind("<Control-Key-2>", lambda e: self.select_tab(1))
+        self.bind("<Control-Key-3>", lambda e: self.select_tab(2))
         self.bind("<F5>", lambda e: self._refresh_all())
         self.bind("<Control-f>", lambda e: self._focus_search())
 
@@ -477,11 +715,14 @@ class App(tk.Tk):
         self._set_preview(
             "HookyMod · Asset Explorer\n"
             "========================\n\n"
-            "1. Clique sur « Choisir romfs… » et sélectionne le dossier romfs de ton dump\n"
-            "   (les dictionnaires zstd de Pack/ZsDic.pack.zs sont chargés automatiquement).\n"
+            "1. « romfs… » : choisis le dossier romfs de ton dump (les dictionnaires zstd\n"
+            "   de Pack/ZsDic.pack.zs sont chargés automatiquement).\n"
+            "   « .nup… » : ouvre directement un paquet Switch 2 et extrais son romfs.\n"
             "2. Sélectionne un fichier à gauche : il s'ouvre dans la colonne du milieu.\n"
             "3. Double-clique sur un fichier .zs ou une archive SARC pour entrer dedans.\n"
-            "4. Modifie (« Remplacer… », « Patch… ») puis « Exporter en mod » ou « .blend ».\n\n"
+            "4. Les onglets s'ouvrent tout seuls selon le contenu : « Textures » pour un\n"
+            "   .bntx, « Modèle 3D » pour un .bfres (analysés à l'affichage seulement).\n"
+            "5. Modifie (menu Édition) puis « Exporter en mod ».\n\n"
             "Fichiers reconnus en détail : archives SARC, .zs (zstd), .bfres (modèles 3D),\n"
             ".bntx (textures), .obj (maillages).\n"
         )
@@ -532,6 +773,7 @@ class App(tk.Tk):
 
     def _bg_done(self, result, done) -> None:
         self._set_busy(False)
+        self._close_popups()
         try:
             done(result)
         except Exception as exc:  # noqa: BLE001
@@ -539,10 +781,20 @@ class App(tk.Tk):
 
     def _bg_failed(self, exc, failed) -> None:
         self._set_busy(False)
+        self._close_popups()
         if failed:
             failed(exc)
         else:
             self.error(exc)
+
+    def _close_popups(self) -> None:
+        """Ferme les fenêtres de chargement encore ouvertes (fin de tâche)."""
+        for popup in getattr(self, "_popups", []):
+            try:
+                popup.close()
+            except Exception:  # noqa: BLE001 - jamais bloquant
+                pass
+        self._popups.clear()
 
     def error(self, exc: Exception, context: str = "") -> None:
         if isinstance(exc, HookyError):
@@ -550,6 +802,12 @@ class App(tk.Tk):
         else:
             message = f"{exc}\n\n{traceback.format_exc(limit=3)}"
         self.status_var.set(f"Erreur : {exc}")
+        try:  # journal disque : indispensable quand la boîte de dialogue passe inaperçue
+            log = Path(tempfile.gettempdir()) / "hookymod_errors.log"
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(f"--- {context or 'erreur'} ---\n{message}\n")
+        except OSError:
+            pass
         messagebox.showerror("Erreur" + (f" — {context}" if context else ""), message, parent=self)
 
     def _action(func):
@@ -753,6 +1011,21 @@ class App(tk.Tk):
         self._refresh_preview()
         self._refresh_mod_label()
 
+    def _invalidate_caches(self) -> None:
+        """Les données ont changé (fichier ouvert, remplacé, patché) : caches vidés."""
+        self._bntx_cache.clear()
+        self._bfres_cache.clear()
+        self._mesh_cache.clear()
+        for path, _width, _height in self._texture_previews.values():
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._texture_previews.clear()
+        self.texture_file = None
+        self.bfres_file = None
+        self._texture_view_key = None
+
     def _refresh_mod_label(self) -> None:
         dirty = sum(1 for doc in self.documents.values() if doc.modified())
         self.mod_label.config(text=f"{dirty} fichier(s) modifié(s)" if dirty else "")
@@ -781,31 +1054,44 @@ class App(tk.Tk):
                                            detect_kind(entry.data)))
 
     def _refresh_preview(self) -> None:
+        """Rafraîchit l'aperçu **sans** analyser BNTX/BFRES (chargement à la demande)."""
         doc = self.current
         self._reset_textures()
         self._set_model_text("")
         self.lod_box.configure(values=["0"])
         self.lod_var.set("0")
+        self._invalidate_caches()
         if not doc:
             self._show_welcome()
             return
         level = doc.top
         if level.archive is not None:
+            self._active_source = ""
             self._set_preview(
                 f"{level.name}\n"
                 f"Archive SARC · {len(level.archive)} entrées · "
                 f"{human_size(len(level.data))}\n\n"
                 "Sélectionne un fichier pour l'aperçu, double-clique pour entrer dans un\n"
                 ".zs / une archive imbriquée.\n\n"
-                "Astuces : « Extraire » garde les octets d'origine, « Remplacer… »\n"
-                "recompresse automatiquement les .zs si besoin.")
+                "Menu Édition : « Extraire la sélection… » garde les octets d'origine,\n"
+                "« Remplacer la sélection… » recompresse les .zs si besoin.")
             return
 
-        data = level.data
-        if data[:4] == b"BNTX":
-            self._load_textures(level)
-        if data[:4] == b"FRES":
-            self._load_bfres(level)
+        try:
+            data = level.data
+        except HookyError as exc:
+            self._set_preview(f"{level.name}\n\n⚠ {exc}")
+            return
+        kind = data[:4]
+        self._active_source = str(self.current_key or "")
+        if kind == b"BNTX":
+            self.texture_info_var.set(
+                "Onglet « Textures » : clique pour décoder les textures de ce fichier.")
+            self.select_tab(1)
+        elif kind == b"FRES":
+            self._set_model_text(
+                "Onglet « Modèle 3D » : le BFRES sera analysé au premier affichage.")
+            self.select_tab(2)
         self._set_preview(self._describe_level(level))
 
     def _describe_level(self, level: Level) -> str:
@@ -846,17 +1132,21 @@ class App(tk.Tk):
         doc = self.current
         entry = doc.top.archive.entries[indices[0]]
         self._set_preview(self._describe_entry(entry.name, entry.data))
-        # Si l'entrée est elle-même un BNTX/BFRES, on enrichit les onglets.
-        data = entry.data
-        if is_zstd(data):
-            try:
-                data = self.dicts.decompress(data)
-            except HookyError:
-                data = b""
+        # Nouvelle source : les onglets sont invalidés, puis rechargés seulement
+        # si l'un d'eux est réellement affiché (aucune analyse en arrière-plan).
+        self._reset_textures()
+        self.bfres_file = None
+        self._set_model_text("")
+        self.lod_box.configure(values=["0"])
+        self.lod_var.set("0")
+        data = self._entry_payload(entry)
         if data[:4] == b"BNTX":
-            self._load_textures_from_data(data)
+            self.texture_info_var.set(
+                "Onglet « Textures » : clique pour décoder les textures de cette entrée.")
         elif data[:4] == b"FRES":
-            self._load_bfres_from_data(data)
+            self._set_model_text(
+                "Onglet « Modèle 3D » : le BFRES sera analysé quand tu ouvriras cet onglet.")
+        self._on_tab_changed()
 
     def _describe_entry(self, name: str, data: bytes) -> str:
         lines = [f"{name}"]
@@ -876,17 +1166,18 @@ class App(tk.Tk):
         lines.append(f"Taille : {human_size(len(data))} ({len(data):,} octets)")
         lines.append("")
         if data[:4] == b"BNTX":
+            # En-tête BNTX seulement (rapide) : le décodage se fait dans l'onglet Textures.
             try:
                 info = bntx_mod.BntxFile.parse(data).info()
-                lines += ["--- BNTX ---", info, ""]
+                lines += ["--- BNTX ---", info,
+                          "(les images se décodent dans l'onglet « Textures »)", ""]
             except HookyError as exc:
                 lines += [f"⚠ BNTX illisible : {exc}", ""]
         elif data[:4] == b"FRES":
-            try:
-                info = bfres_mod.BfresFile.parse(data).info()
-                lines += ["--- BFRES ---", info, ""]
-            except HookyError as exc:
-                lines += [f"⚠ BFRES illisible : {exc}", ""]
+            # Pas d'analyse complète ici : elle coûte cher et se fait à la demande.
+            lines += ["--- BFRES ---",
+                      "Modèle 3D : ouvre l'onglet « Modèle 3D » pour l'analyser et le voir.",
+                      ""]
         lines.append("--- Aperçu hexadécimal ---")
         lines += hexdump(data, 1024)
         strings = ascii_strings(data, limit=40)
@@ -1221,8 +1512,19 @@ class App(tk.Tk):
             return
         project = Path(folder)
 
+        popup = LoadingPopup(
+            self, f"Traduction de {Path(source).name}…\n"
+                  "Les textures partent en PNG et les modèles en OBJ dans pc/.",
+            title="Traduction romfs → PC")
+        self._popups.append(popup)
+
         def work():
-            return translate_mod.unpack(source, project)
+            try:
+                return translate_mod.unpack(source, project,
+                                           progress=lambda done, total:
+                                           popup.set_progress(done, total))
+            finally:
+                popup.request_close()
 
         def done(manifest):
             kinds: dict[str, int] = {}
@@ -1254,8 +1556,17 @@ class App(tk.Tk):
         if not destination:
             return
 
+        popup = LoadingPopup(self, "Reconstruction du mod depuis le projet…",
+                             title="Reconstruire le mod")
+        self._popups.append(popup)
+
         def work():
-            return translate_mod.pack(project, destination)
+            try:
+                return translate_mod.pack(project, destination,
+                                          progress=lambda done, total:
+                                          popup.set_progress(done, total))
+            finally:
+                popup.request_close()
 
         def done(result):
             message = "\n".join(result.summary())
@@ -1284,12 +1595,23 @@ class App(tk.Tk):
             return
         target = Path(destination)
 
+        package_size = package_path.stat().st_size if package_path.exists() else 0
+        popup = LoadingPopup(
+            self, f"Extraction de {package_path.name} ({human_size(package_size)})…\n"
+                  "Les fichiers du paquet sont décompressés vers le dossier choisi.",
+            title="Chargement du paquet .nup")
+        self._popups.append(popup)
+
         def work():
-            package = nup_mod.NupPackage.open(package_path)
-            with package:
-                summary = package.summary()
-                result = package.extract(target)
-            return summary, result, target
+            try:
+                package = nup_mod.NupPackage.open(package_path)
+                with package:
+                    summary = package.summary()
+                    result = package.extract(target, progress=popup.set_progress)
+                return summary, result, target
+            finally:
+                # fermeture garantie, même en cas d'exception
+                popup.request_close()
 
         self._run_bg("Extraction du .nup…", work, self._nup_extracted)
 
@@ -1646,21 +1968,30 @@ class App(tk.Tk):
         self.texture_tree.delete(*self.texture_tree.get_children())
         self.texture_canvas.delete("all")
         self._photo = None
-        self.texture_info_var.set("Ouvre un fichier BNTX pour voir ses textures.")
+        self._texture_view_key = None
+        self.texture_info_var.set(
+            "Sélectionne un fichier .bntx pour afficher ses textures.")
         self.mip_box.configure(values=["0"])
         self.mip_var.set("0")
 
     def _load_textures(self, level: Level) -> None:
-        self._load_textures_from_data(level.data)
+        self._load_textures_from_data(level.data, key=str(self.current_key or ""))
 
-    def _load_textures_from_data(self, data: bytes) -> None:
+    def _load_textures_from_data(self, data: bytes, key: str = "") -> None:
+        """Analyse un BNTX et affiche la première texture (idempotent grâce au cache)."""
         if not data or data[:4] != b"BNTX":
+            self.texture_info_var.set("Ce fichier n'est pas un BNTX (.bntx attendu).")
             return
+        key = key or self._active_source or str(len(data))
         try:
-            file = bntx_mod.BntxFile.parse(data)
+            file = self._bntx_cache.get(key)
+            if file is None:
+                file = bntx_mod.BntxFile.parse(data)
+                self._bntx_cache[key] = file
         except HookyError as exc:
             self.texture_info_var.set(f"BNTX illisible : {exc}")
             return
+        self._active_source = key
         self.texture_file = file
         self.texture_tree.delete(*self.texture_tree.get_children())
         for index, texture in enumerate(file.textures):
@@ -1668,12 +1999,22 @@ class App(tk.Tk):
                                      values=(texture.name or f"#{texture.index}",
                                              f"{texture.width}×{texture.height}",
                                              texture.format_name))
-        self.texture_info_var.set(f"{len(file.textures)} texture(s) — "
-                                  f"{file.name or 'BNTX'}")
+        self.texture_info_var.set(
+            f"{len(file.textures)} texture(s) — {file.name or 'BNTX'}"
+            + ("" if file.textures else "   (aucune texture dans ce fichier)"))
         children = self.texture_tree.get_children()
         if children:
             self.texture_tree.selection_set(children[0])
             self.texture_tree.focus(children[0])
+            self._redraw_texture()
+
+    def _redraw_texture_if_needed(self) -> None:
+        """Redessine seulement si la sélection a changé (évite les décodages répétés)."""
+        texture = self._selected_texture()
+        if texture is None:
+            return
+        key = (self._active_source, texture.index, self.mip_var.get())
+        if key != getattr(self, "_texture_view_key", None):
             self._redraw_texture()
 
     def _selected_texture(self):
@@ -1685,64 +2026,130 @@ class App(tk.Tk):
         except (ValueError, IndexError):
             return None
 
-    def _redraw_texture(self) -> None:
+    def _preview_target(self) -> int:
+        """Taille de décodage : jamais plus grand que l'écran (aperçu rapide)."""
+        try:
+            width = max(64, int(self.texture_canvas.winfo_width()))
+            height = max(64, int(self.texture_canvas.winfo_height()))
+        except (tk.TclError, TypeError, ValueError):
+            width, height = 900, 600
+        configured = int(self.config_data.get("preview_max", 1024) or 1024)
+        return max(128, min(configured, max(width, height, 256)))
+
+    def _redraw_texture(self, keep_view: bool = True) -> None:
+        """Décode et affiche la texture sélectionnée (cache disque + ajustement)."""
         texture = self._selected_texture()
         if texture is None:
+            if self.texture_file is None:
+                self.texture_info_var.set(
+                    "Aucune texture chargée : ouvre un .bntx ou sélectionne une entrée .bntx.")
             return
         levels = [str(i) for i in range(max(1, texture.mip_count))]
         self.mip_box.configure(values=levels)
         try:
             mip = int(self.mip_var.get())
-        except ValueError:
+        except (TypeError, ValueError):
             mip = 0
         if mip >= len(levels):
             mip = 0
             self.mip_var.set("0")
-        max_size = int(self.config_data.get("preview_max", 1024) or 1024)
-        self.texture_info_var.set(f"{texture.name or '#%d' % texture.index} — décodage…")
+        target = self._preview_target()
+        key = (self._active_source, texture.index, mip, target)
+        self._texture_view_key = (self._active_source, texture.index, str(mip))
+
+        cached = self._texture_previews.get(key)
+        if cached is not None and cached[0].exists():
+            self._show_texture(cached[0], texture, mip, cached[1], cached[2],
+                               keep_view=keep_view)
+            return
+
+        self.texture_info_var.set(
+            f"{texture.name or '#%d' % texture.index} — décodage ({texture.format_name})…")
 
         def work():
-            width, height, rgba = texture.decode(mip, max_size=max_size)
+            width, height, rgba = texture.decode(mip, max_size=target)
             from .util import png_bytes
-            return texture, width, height, png_bytes(width, height, rgba)
+            return width, height, png_bytes(width, height, rgba)
 
         def done(result):
-            tex, width, height, blob = result
+            width, height, blob = result
             folder = Path(tempfile.gettempdir()) / "hookymod_preview"
             folder.mkdir(parents=True, exist_ok=True)
-            path = folder / f"tex_{tex.index}_{mip}.png"
-            path.write_bytes(blob)
-            self._preview_png = path
+            safe = re.sub(r"[^\w\-.]+", "_", texture.name or f"tex{texture.index}")
+            path = folder / f"{safe}_{texture.index}_m{mip}_{target}.png"
             try:
-                photo = tk.PhotoImage(file=str(path))
-            except tk.TclError:
-                try:
-                    from PIL import Image, ImageTk  # type: ignore
-                    image = Image.open(path)
-                    photo = ImageTk.PhotoImage(image)
-                except Exception:
-                    self.texture_info_var.set(
-                        f"{tex.name} — aperçu PNG non supporté par ce Tk "
-                        f"(export PNG possible)")
-                    return
-            self._photo = photo
-            canvas = self.texture_canvas
-            canvas.delete("all")
-            canvas.configure(scrollregion=(0, 0, width, height))
-            canvas.create_image(0, 0, anchor="nw", image=photo)
-            if tex.warnings:
-                self.texture_info_var.set(
-                    f"{tex.name or '#%d' % tex.index} — {width}×{height} — "
-                    f"{tex.format_name} — mip {mip}   ⚠ " + " · ".join(tex.warnings))
-            else:
-                self.texture_info_var.set(
-                    f"{tex.name or '#%d' % tex.index} — {width}×{height} — "
-                    f"{tex.format_name} — mip {mip}")
+                path.write_bytes(blob)
+            except OSError:
+                path = folder / f"tex_{texture.index}_m{mip}.png"
+                path.write_bytes(blob)
+            self._texture_previews[key] = (path, width, height)
+            self._preview_png = path
+            self._show_texture(path, texture, mip, width, height, keep_view=keep_view)
 
         def failed(exc):
-            self.texture_info_var.set(f"{texture.name or texture.index} : {exc}")
+            message = str(exc)
+            if "texture2ddecoder" in message:
+                message += ("\n\nAstuce : pip install texture2ddecoder "
+                            "(ou exporte la texture une fois décodée).")
+            self.texture_info_var.set(
+                f"{texture.name or '#%d' % texture.index} : {message}")
+            self.texture_canvas.delete("all")
+            self.texture_canvas.create_text(
+                12, 12, anchor="nw", fill=MUTED, width=420,
+                text=f"Aperçu impossible pour {texture.format_name} :\n{message}")
 
         self._run_bg(f"Décodage de la texture {texture.name}…", work, done, failed)
+
+    def _show_texture(self, path: Path, texture, mip: int, width: int, height: int,
+                      keep_view: bool = True) -> None:
+        """Charge le PNG en mémoire Tk (PIL en secours) et l'ajuste au canevas."""
+        photo = None
+        try:
+            photo = tk.PhotoImage(file=str(path))
+        except Exception:  # noqa: BLE001 - Tk sans PNG intégré
+            photo = None
+        if photo is None:
+            try:
+                from PIL import Image, ImageTk  # type: ignore
+                photo = ImageTk.PhotoImage(Image.open(path))
+            except Exception:  # noqa: BLE001
+                self._photo = None
+                self.texture_canvas.delete("all")
+                self.texture_canvas.create_text(
+                    12, 12, anchor="nw", fill=FG, width=460,
+                    text=("Ce Tk ne sait pas afficher de PNG et Pillow est absent.\n\n"
+                          "Installe Pillow (pip install pillow) pour l'aperçu intégré ;\n"
+                          f"l'image est déjà exportée ici :\n{path}"))
+                self.texture_info_var.set(
+                    f"{texture.name or '#%d' % texture.index} — {width}×{height} — "
+                    f"{texture.format_name} — aperçu non affichable (PNG écrit)")
+                return
+        canvas = self.texture_canvas
+        try:
+            image_w, image_h = int(photo.width()), int(photo.height())
+        except (TypeError, ValueError, tk.TclError):
+            image_w, image_h = width, height
+        try:
+            canvas_w = max(96, int(canvas.winfo_width()))
+            canvas_h = max(96, int(canvas.winfo_height()))
+        except (TypeError, ValueError, tk.TclError):
+            canvas_w, canvas_h = 640, 480
+        # ajustement : réduit l'image (sous-échantillonnage) pour tenir dans le canevas
+        factor = max(1, -(-max(image_w, image_h) // max(64, min(canvas_w, canvas_h) - 8)))
+        if factor > 1:
+            try:
+                photo = photo.subsample(factor, factor)
+            except Exception:  # noqa: BLE001 - stub Tk des tests
+                pass
+        self._photo = photo
+        canvas.delete("all")
+        canvas.configure(scrollregion=(0, 0, max(image_w, canvas_w), max(image_h, canvas_h)))
+        canvas.create_image(canvas_w // 2, canvas_h // 2, image=photo, anchor="center")
+        note = f" — ×{factor} pour l'affichage" if factor > 1 else ""
+        suffix = f"   ⚠ {' · '.join(texture.warnings)}" if getattr(texture, "warnings", None) else ""
+        self.texture_info_var.set(
+            f"{texture.name or '#%d' % texture.index} — {width}×{height} — "
+            f"{texture.format_name} — mip {mip}{note}{suffix}")
 
     @_action
     def export_selected_texture(self) -> None:
@@ -1795,19 +2202,36 @@ class App(tk.Tk):
             messagebox.showwarning("Textures", "\n".join(errors[:20]), parent=self)
 
     # ------------------------------------------------------------------ modèle 3D
-    def _load_bfres(self, level: Level) -> None:
-        self._load_bfres_from_data(level.data)
+    #: Nombre de triangles construits au maximum pour une session de visualisation.
+    MESH_BUDGET = 250_000
 
-    def _load_bfres_from_data(self, data: bytes) -> None:
+    def _load_bfres(self, level: Level) -> None:
+        self._load_bfres_from_data(level.data, key=str(self.current_key or ""))
+
+    def _load_bfres_from_data(self, data: bytes, key: str = "") -> None:
+        """Analyse un BFRES (une seule fois par source) et remplit l'onglet Modèle."""
         if not data or data[:4] != b"FRES":
+            self._set_model_text("Ce fichier n'est pas un BFRES (.bfres attendu).")
             return
+        key = key or self._active_source or str(len(data))
         try:
-            file = bfres_mod.BfresFile.parse(data)
+            file = self._bfres_cache.get(key)
+            if file is None:
+                file = bfres_mod.BfresFile.parse(data)
+                self._bfres_cache[key] = file
         except HookyError as exc:
             self._set_model_text(f"BFRES illisible : {exc}")
             return
+        self._active_source = key
         self.bfres_file = file
-        self._set_model_text(file.info())
+        lines = [file.info()]
+        vertices = sum(s.vtx_buffer.vertex_count for m in file.models
+                       for s in m.shapes if s.vtx_buffer)
+        faces = sum(s.face_count(0) for m in file.models for s in m.shapes)
+        lines += ["", f"Total : {vertices:,} sommets · {faces:,} triangles (LOD 0)",
+                  "« Voir en 3D » dessine uniquement la partie visible du modèle "
+                  "(budget adapté à la taille de la fenêtre)."]
+        self._set_model_text("\n".join(lines))
         lods = 1
         for model in file.models:
             for shape in model.shapes:
@@ -1818,69 +2242,102 @@ class App(tk.Tk):
     def _current_lod(self) -> int:
         try:
             return max(0, int(self.lod_var.get()))
-        except ValueError:
+        except (TypeError, ValueError):
             return 0
 
     def _model_source(self) -> bfres_mod.BfresFile | None:
-        """BFRES courant ou sélectionné."""
+        """BFRES courant, sinon celui de la sélection (analysé à la demande)."""
         if self.bfres_file is not None:
             return self.bfres_file
-        doc = self.current
-        if not doc:
+        source = self._tab_source(b"FRES")
+        if source is None:
             return None
-        data = doc.top.data
-        if data[:4] == b"FRES":
-            try:
-                self.bfres_file = bfres_mod.BfresFile.parse(data)
-                return self.bfres_file
-            except HookyError:
-                return None
-        return None
+        data, key = source
+        self._load_bfres_from_data(data, key=key)
+        return self.bfres_file
 
-    def _meshes_for_view(self) -> list[MeshData]:
-        file = self._model_source()
+    def _meshes_for_view(self, file=None, lod: int | None = None,
+                         budget: int | None = None) -> list[MeshData]:
+        """Construit les maillages d'un BFRES, à la demande et sous budget.
+
+        Seules les formes nécessaires au budget sont converties : un modèle de
+        plusieurs centaines de milliers de triangles reste utilisable.
+        """
+        file = file if file is not None else self._model_source()
         if file is None:
             raise HookyError(
                 "Aucun modèle BFRES chargé.\n\n"
                 "Ouvre un .bfres (ou une entrée .bfres) puis réessaie.")
-        lod = self._current_lod()
+        lod = self._current_lod() if lod is None else lod
+        budget = self.MESH_BUDGET if budget is None else budget
+        cache_key = (id(file), lod, budget)
+        cached = self._mesh_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         meshes: list[MeshData] = []
+        total = 0
         for model in file.models:
-            meshes += model.build_meshes(lod, file.warnings)
+            for shape in model.shapes:
+                if shape.face_count(lod) and total >= budget:
+                    break
+                try:
+                    mesh = shape.build_mesh(lod, file.warnings)
+                except HookyError:
+                    continue
+                if mesh is None or not mesh.faces:
+                    continue
+                if 0 <= shape.material_index < len(model.materials):
+                    mesh.material = model.materials[shape.material_index].name
+                meshes.append(mesh)
+                total += len(mesh.faces)
+            if total >= budget:
+                break
         if not meshes:
             raise HookyError("Aucun maillage exploitable dans ce BFRES.\n\n"
                              + "\n".join(file.warnings[:8]))
+        self._mesh_cache[cache_key] = meshes
+        if total >= budget and budget < self.MESH_BUDGET * 4:
+            self.status(f"{len(meshes)} maillage(s) chargé(s) ({total:,} faces) — "
+                        "au-delà du budget, la vue 3D affiche la partie visible.")
         return meshes
 
     @_action
     def view_model(self) -> None:
+        """Ouvre le viewer 3D de l'élément courant (BFRES ou OBJ)."""
         doc = self.current
-        if not doc:
+        if doc is None:
             raise HookyError("Ouvre d'abord un fichier (BFRES ou OBJ).")
         indices = self._selected_indices()
-        if doc and doc.top.archive is not None and len(indices) == 1:
+        if doc.top.archive is not None and len(indices) == 1:
             entry = doc.top.archive.entries[indices[0]]
-            raw = entry.data
-            if is_zstd(raw):
-                raw = self.dicts.decompress(raw)
-            if raw[:4] == b"FRES":
-                bfres = bfres_mod.BfresFile.parse(raw)
-                meshes = []
-                for model in bfres.models:
-                    meshes += model.build_meshes(self._current_lod(), bfres.warnings)
-                if meshes:
-                    open_viewer(self, meshes, f"Viewer 3D — {entry.name}")
-                    return
+            payload = self._entry_payload(entry)
+            if payload[:4] == b"FRES":
+                file = self._bfres_cache.get(f"{self.current_key}!{entry.name}")
+                if file is None:
+                    try:
+                        file = bfres_mod.BfresFile.parse(payload)
+                    except HookyError as exc:
+                        raise HookyError(f"BFRES illisible : {exc}") from exc
+                    self._bfres_cache[f"{self.current_key}!{entry.name}"] = file
+                meshes = self._meshes_for_view(file=file)
+                open_viewer(self, meshes, f"Viewer 3D — {entry.name}")
+                return
             if entry.name.lower().endswith(".obj"):
-                open_viewer(self, [load_obj(raw)], f"Viewer 3D — {entry.name}")
+                open_viewer(self, [load_obj(payload)], f"Viewer 3D — {entry.name}")
                 return
-        if doc and doc.top.archive is None:
+            raise HookyError(
+                f"« {entry.name} » n'est pas un modèle : sélectionne un .bfres ou un .obj.")
+
+        if doc.top.archive is None:
+            name = doc.top.name
             if doc.top.data[:4] == b"FRES":
+                self._ensure_model()
                 meshes = self._meshes_for_view()
-                open_viewer(self, meshes, f"Viewer 3D — {doc.top.name}")
+                open_viewer(self, meshes, f"Viewer 3D — {name}")
                 return
-            if doc.top.name.lower().endswith(".obj"):
-                open_viewer(self, [load_obj(doc.top.data)], f"Viewer 3D — {doc.top.name}")
+            if name.lower().endswith(".obj"):
+                open_viewer(self, [load_obj(doc.top.data)], f"Viewer 3D — {name}")
                 return
         meshes = self._meshes_for_view()
         open_viewer(self, meshes, "Viewer 3D")
@@ -1905,44 +2362,43 @@ class App(tk.Tk):
 
         temp_dir = Path(tempfile.mkdtemp(prefix="hookymod_blend_"))
         source: Path | None = None
-        self.bfres_file = None
-        if doc.top.archive is None and doc.top.data[:4] == b"FRES":
-            try:
-                meshes = self._meshes_for_view()
-            except HookyError as exc:
-                raise HookyError(
-                    f"{exc}\n\nAstuce : « Exporter OBJ » permet d'importer le maillage "
-                    "manuellement dans Blender.") from exc
-            source = temp_dir / "modele.obj"
-            export_obj(meshes, source)
-        elif doc.top.archive is None:
+        if doc.top.archive is None:
             name = doc.top.name
             suffix = Path(name).suffix.lower()
-            if suffix not in (".obj", ".fbx", ".glb", ".gltf", ".bfres", ".sbfres"):
+            if doc.top.data[:4] == b"FRES":
+                try:
+                    meshes = self._meshes_for_view()
+                except HookyError as exc:
+                    raise HookyError(
+                        f"{exc}\n\nAstuce : « Exporter OBJ » permet d'importer le maillage "
+                        "manuellement dans Blender.") from exc
+                source = temp_dir / "modele.obj"
+                export_obj(meshes, source)
+            elif suffix in (".obj", ".fbx", ".glb", ".gltf", ".bfres", ".sbfres"):
+                target = temp_dir / name
+                write_atomic(target, doc.top.data)
+                source = target
+            else:
                 raise HookyError(
                     f"Format « {suffix or name} » non convertible en .blend.\n"
                     "Formats gérés : .bfres (via OBJ), .obj, .fbx, .glb/.gltf.")
-            target = temp_dir / name
-            write_atomic(target, doc.top.data)
-            source = target
         else:
             indices = self._selected_indices()
             if len(indices) == 1:
                 entry = doc.top.archive.entries[indices[0]]
-                raw = entry.data
-                if is_zstd(raw):
-                    raw = self.dicts.decompress(raw)
-                if raw[:4] == b"FRES":
-                    bfres = bfres_mod.BfresFile.parse(raw)
-                    meshes = []
-                    for model in bfres.models:
-                        meshes += model.build_meshes(self._current_lod(), bfres.warnings)
-                    if meshes:
-                        source = temp_dir / (Path(entry.name).stem + ".obj")
-                        export_obj(meshes, source)
+                payload = self._entry_payload(entry)
+                if payload[:4] == b"FRES":
+                    key = f"{self.current_key}!{entry.name}"
+                    bfres = self._bfres_cache.get(key)
+                    if bfres is None:
+                        bfres = bfres_mod.BfresFile.parse(payload)
+                        self._bfres_cache[key] = bfres
+                    meshes = self._meshes_for_view(file=bfres)
+                    source = temp_dir / (Path(entry.name).stem + ".obj")
+                    export_obj(meshes, source)
                 else:
                     target = temp_dir / entry.name
-                    write_atomic(target, raw)
+                    write_atomic(target, payload)
                     source = target
         if source is None:
             raise HookyError(
@@ -2070,6 +2526,9 @@ class App(tk.Tk):
             "Ctrl+R  choisir le dossier romfs\n"
             "Ctrl+P  patch chercher/remplacer\n"
             "Ctrl+B  convertir en .blend\n"
+            "Ctrl+1  onglet Aperçu\n"
+            "Ctrl+2  onglet Textures\n"
+            "Ctrl+3  onglet Modèle 3D\n"
             "Alt+←   remonter d'un niveau\n"
             "F5      rafraîchir l'aperçu\n\n"
             "Viewer 3D : glisser = tourner, clic droit = déplacer, molette = zoom,\n"
