@@ -66,6 +66,43 @@ python -m hookymod.cli doctor romfs/Tex/<Nom>.bntx.zs
    analysés par HookyMod ; le diagnostic le dit explicitement au lieu d'échouer
    en silence.
 
+## 3 bis. Ce que disent les fichiers réels du papillon (build 1.1.1)
+
+Mesuré sur les quatre `Mt_Body_Animal_Butterfly_*.bntx.zs` et le
+`Animal_Butterfly.Animal_Butterfly.bfres.zs` du dépôt :
+
+**Textures** — BNTX **0.4.1.1** (`0x00040101`), conteneur **`Ounc`** (et non
+`NX  `), disposition **Orin**, 9 mips, **aucun dictionnaire** (`dict_id = 0`) :
+
+| Fichier | Format | Taille |
+|---|---|---|
+| `..._Alb` | `ASTC_8x5_SRGB` | 384 × 384 |
+| `..._Nrm` | `ASTC_5x5_UNORM` | 384 × 384 |
+| `..._AO`, `..._Rgh` | `BC4_UNORM` | 256 × 256 |
+
+En 0.4.x, la structure BTI porte des adresses **32 bits** : nom à `+80`, table
+des pointeurs de mips à `+96` (en 0.3.x/Switch 1, ce sont des 64 bits à
+`+76`/`+92`). Les mips sont des pointeurs **absolus** chaînés
+(`0x1000`, `0x9000`, `0xB000`…), et un en-tête `BRTD` précède les pixels.
+
+**Modèles** — `FRES` version **10** (`0x000A0400`), compressé avec
+`dict_id = 1` (`zs.zsdic`) : sans `Pack/ZsDic.pack.zs`, rien ne se décompresse.
+Structure observée (toutes les adresses sont des `u64` qui suivent la signature
+et un `u32` compteur) :
+
+| Bloc | Offset | Champs |
+|---|---|---|
+| `_STR` | `0x3590` | `u32` nombre de chaînes à `+0x10`, entrées (`u16` longueur + texte + NUL) à partir de `+0x18` ; **pas de `_DIC`** |
+| `FMDL` | `0xF0` | `+0x08` nom (offset de chaîne), `+0x18` `FSKL`, `+0x20` `FVTX`, `+0x28` `FSHP`, `+0x30` dictionnaire des formes, `+0x38` `FMAT`, `+0x40` dictionnaire des matériaux, `+0x48` user data |
+| `FVTX` | `0x1B0` | `+0x08` liste des attributs, `+0x10` `0xE40` (?), `+0x18` tampons |
+| `FMAT` | `0x208` | compteur 1, `+0x08` nom, puis `0x1920` (textures), `0x1090`, `0x1900`… |
+| `FSHP` | `0x310` | compteur 2 (`Wing_L`, `Wing_R`), `+0x08` nom, puis `0x640`, `0x838`, `0x840`, `0x9F0`… |
+| `FSKL` | `0x3F0` | squelette (`Root`, `Skl_Root`, `Wing_L`, `Wing_R`) |
+
+Les noms de textures référencés par le matériau apparaissent dans `_STR`
+(`Mt_Body_Animal_Butterfly_Alb`, `…_Rgh`, `_ao0`, `_rgh0`, `_p0`, `_t0`) : c'est
+la clé pour retrouver le fichier `Tex/*.bntx.zs` correspondant.
+
 ## 4. Voir quelque chose **sans** fenêtre
 
 ```bash

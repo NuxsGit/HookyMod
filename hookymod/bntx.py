@@ -784,6 +784,10 @@ class BntxFile:
         except (struct.error, IndexError):
             warnings.append("table des chaînes illisible : noms de textures perdus")
         file_name = strings.get(name_offset)
+        if not file_name and name_offset >= 2:
+            # 0.4.x pointe les caractères ; l'entrée commence 2 octets avant
+            # (longueur u16, comme en 0.3.x).
+            file_name = strings.get(name_offset - 2)
         if not file_name:
             # Le nom du fichier est indexé comme les autres chaînes.
             for pos, value in strings.by_pos.items():
@@ -882,8 +886,14 @@ class BntxFile:
             texture_layout = u32(data, off + 36, e)
             image_size = u32(data, off + 64, e)
             comp_sel = (data[off + 72], data[off + 73], data[off + 74], data[off + 75])
+            # 0.3.x (Switch 1) : adresses 64 bits.  0.4.x « Ounc » (Switch 2) :
+            # adresses 32 bits, décalées de 4 octets (nom @+80, mips @+96).
+            # Les deux sont lues puis validées : on garde celle qui pointe
+            # réellement sur quelque chose, quel que soit le build.
             name_addr = u64(data, off + 76, e)
             ptrs_addr = u64(data, off + 92, e)
+            name_addr32 = u32(data, off + 80, e)
+            ptrs_addr32 = u32(data, off + 96, e)
         except (struct.error, IndexError) as exc:
             raise FormatError(f"BTI {index} : structure illisible.") from exc
 
@@ -896,20 +906,36 @@ class BntxFile:
 
         block_height_log2 = texture_layout & 7 if flags & 1 else 0
 
-        # offsets des mips (pointeurs absolus vers les données)
-        mip_offsets: list[int] = [0]
         mip_count = max(1, mip_count)
+
+        def usable_name(addr: int) -> bool:
+            return bool(addr) and addr < len(data) and bool(strings.get(addr))
+
+        def mip_table(addr: int) -> list[int] | None:
+            """Pointeurs absolus des mips, si la table est cohérente."""
+            if not addr or addr + 8 * mip_count > len(data):
+                return None
+            table: list[int] = []
+            for mip in range(mip_count):
+                ptr = u64(data, addr + 8 * mip, e)
+                if not 0x40 <= ptr < len(data):
+                    return None
+                if table and ptr < table[-1]:
+                    return None
+                table.append(ptr)
+            return table
+
+        if not usable_name(name_addr) and usable_name(name_addr32):
+            name_addr = name_addr32
+
+        # offsets des mips (pointeurs absolus vers les données)
+        table = mip_table(ptrs_addr) or mip_table(ptrs_addr32)
+        mip_offsets: list[int] = [0]
         base = 0
-        if ptrs_addr and ptrs_addr + 8 <= len(data):
-            base = u64(data, ptrs_addr, e)
-            if base >= len(data):
-                base = 0
+        if table:
+            base = table[0]
             for mip in range(1, mip_count):
-                ptr_pos = ptrs_addr + 8 * mip
-                if ptr_pos + 8 > len(data):
-                    break
-                ptr = u64(data, ptr_pos, e)
-                mip_offsets.append(max(0, ptr - base) if ptr >= base else 0)
+                mip_offsets.append(max(0, table[mip] - base))
 
         payload = data[base:] if base else b""
 
@@ -966,6 +992,11 @@ class BntxFile:
         if self.warnings:
             lines += [""] + [f"⚠ {w}" for w in self.warnings]
         return "\n".join(lines)
+
+
+def mod_supports_astc() -> bool:
+    """Vrai si ``texture2ddecoder`` est présent (ASTC/BC7/BC6H décodables)."""
+    return _t2d is not None
 
 
 def is_bntx(data: bytes) -> bool:

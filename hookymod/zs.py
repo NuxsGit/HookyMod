@@ -64,20 +64,36 @@ def frame_info(data: bytes) -> tuple[int, int | None]:
     return params.dict_id, (None if size in (0, 0xFFFFFFFFFFFFFFFF) else size)
 
 
+#: Identifiants que le jeu code dans ses frames zstd.  Les dictionnaires sont
+#: des dictionnaires « bruts » (``zs.zsdic``…) : zstandard leur attribue l'ID 0,
+#: donc l'identifiant se déduit du **nom** du fichier, pas de son contenu.
+DICT_IDS = {"zs": 1, "bkprb": 2, "bcett.byml": 3, "pack": 4}
+
+
+def dict_name_id(name: str) -> int:
+    """Identifiant de dictionnaire d'après son nom (0 si inconnu)."""
+    base = Path(name).name.strip().lower()
+    for suffix in (".zsdic", ".zs", ".dict", ".bin"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    return DICT_IDS.get(base, 0)
+
+
 class ZstdDicts:
     """Collection de dictionnaires zstd, indexés par identifiant de contenu."""
 
     def __init__(self) -> None:
         self.by_id: dict[int, tuple[str, "zstd.ZstdCompressionDict"]] = {}
+        self.by_name: dict[str, "zstd.ZstdCompressionDict"] = {}
         self.sources: list[Path] = []
         self.loaded_files: list[str] = []
 
     # ------------------------------------------------------------------ état
     def __len__(self) -> int:
-        return len(self.by_id)
+        return len(self.by_name)
 
     def __bool__(self) -> bool:
-        return bool(self.by_id)
+        return bool(self.by_name)
 
     def describe(self) -> list[str]:
         return [f"{name} (id {did})" for did, (name, _) in sorted(self.by_id.items())]
@@ -90,13 +106,19 @@ class ZstdDicts:
             return False
         try:
             dictionary = zstd.ZstdCompressionDict(raw)
-            did = dictionary.dict_id()
         except Exception:
             return False
-        if did in self.by_id:
-            return False
-        self.by_id[did] = (name, dictionary)
-        return True
+        base = Path(name).name
+        stem = base
+        for suffix in (".zsdic", ".zs", ".dict", ".bin"):
+            if stem.lower().endswith(suffix):
+                stem = stem[: -len(suffix)]
+        is_new = stem not in self.by_name
+        self.by_name[stem] = dictionary
+        did = dictionary.dict_id() or DICT_IDS.get(stem.lower(), 0)
+        if did and did not in self.by_id:
+            self.by_id[did] = (name, dictionary)
+        return is_new
 
     def load_file(self, path) -> int:
         """Charge un ``.zsdic``, un ``ZsDic.pack`` ou ``ZsDic.pack.zs``."""
@@ -147,10 +169,16 @@ class ZstdDicts:
 
     # ------------------------------------------------------------------ (dé)compression
     def _dict_for(self, dict_id: int):
+        """Dictionnaire d'un identifiant de frame (par contenu, sinon par nom)."""
         if not dict_id:
             return None
         found = self.by_id.get(dict_id)
-        return found[1] if found else None
+        if found:
+            return found[1]
+        for base, known in DICT_IDS.items():
+            if known == dict_id and base in self.by_name:
+                return self.by_name[base]
+        return None
 
     def decompress(self, raw: bytes, dict_id: int | None = None,
                    allow_try_all: bool = True) -> bytes:

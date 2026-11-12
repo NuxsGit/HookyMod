@@ -14,3 +14,5 @@ dist/
 /out/
 /mod/
 *.whl
+# Aperçus générés à partir d'assets du jeu (jamais versionnés)
+previews/
