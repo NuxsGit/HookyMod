@@ -388,9 +388,13 @@ class Model:
     materials: list[Material] = field(default_factory=list)
     vertex_buffers: list[VertexBuffer] = field(default_factory=list)
     skeleton_name: str = ""
+    #: maillages déjà construits (BFRES 10.x : voir :mod:`bfres_v10`)
+    prebuilt: list[MeshData] = field(default_factory=list)
 
     def build_meshes(self, lod: int = 0, warnings: list[str] | None = None) -> list[MeshData]:
         warnings = warnings if warnings is not None else []
+        if self.prebuilt:
+            return list(self.prebuilt)
         meshes: list[MeshData] = []
         for shape in self.shapes:
             try:
@@ -540,7 +544,15 @@ def meshes_from_file(file: "BfresFile", lod: int = 0,
 
     meshes: list[MeshData] = []
     total = 0
+    # (le bloc ci-dessous traite les modèles « classiques », v7 à v9)
     for model in file.models:
+        if model.prebuilt:
+            for mesh in model.prebuilt:
+                if budget is not None and total + len(mesh.faces) > budget:
+                    break
+                meshes.append(mesh)
+                total += len(mesh.faces)
+            continue
         for shape in model.shapes:
             if budget is not None and total >= budget:
                 break
@@ -575,6 +587,7 @@ class BfresFile:
         self.warnings: list[str] = []
         self.has_external_strings = False
         self.data = b""
+        self.v10_report = None
 
     # ------------------------------------------------------------------ lecture
     @classmethod
@@ -647,7 +660,46 @@ class BfresFile:
                 continue
             if model is not None:
                 self.models.append(model)
+        if not self.models and self.version_major >= 10:
+            self._parse_v10(data)
         return self
+
+    def _parse_v10(self, data: bytes) -> None:
+        """BFRES 10.x : géométrie décodée par :mod:`bfres_v10` (validée).
+
+        La lecture v10 n'est pas documentée : si une seule vérification échoue,
+        on n'ajoute aucun modèle et on explique pourquoi dans ``warnings``.
+        """
+        try:
+            from .bfres_v10 import parse as parse_v10
+        except ImportError:      # pragma: no cover - dépendance interne
+            return
+        try:
+            result = parse_v10(data)
+        except (struct.error, IndexError, ValueError, ZeroDivisionError) as exc:
+            self.warnings.append(f"Lecture v10 impossible : {exc}")
+            return
+        if result is None:
+            self.warnings.append(
+                "BFRES 10.x : structure non reconnue, géométrie non extraite "
+                "(rien n'est inventé)."
+            )
+            return
+        meshes, report = result
+        if not meshes:
+            self.warnings.append("BFRES 10.x : aucun maillage validé.")
+            return
+        material = report.material_names[0] if report.material_names else ""
+        for mesh in meshes:
+            mesh.material = material
+        model = Model(name=report.model_name or self.name or "modele", index=0,
+                      prebuilt=list(meshes))
+        if material:
+            model.materials.append(Material(name=material, index=0))
+        model.skeleton_name = getattr(report, "skeleton_name", "") or model.skeleton_name
+        self.models.append(model)
+        self.v10_report = report
+        self.warnings.extend(report.warnings)
 
     # -- objets
     def _read_model(self, cur: Cursor, name: str, index: int, offset: int) -> Model:

@@ -103,33 +103,37 @@ Les noms de textures référencés par le matériau apparaissent dans `_STR`
 (`Mt_Body_Animal_Butterfly_Alb`, `…_Rgh`, `_ao0`, `_rgh0`, `_p0`, `_t0`) : c'est
 la clé pour retrouver le fichier `Tex/*.bntx.zs` correspondant.
 
-### Où en est la géométrie v10 (état exact, sans bluff)
+### Géométrie v10 : décodée (mesurée, puis vérifiée)
 
-Le conteneur est lu (sections, tables de pointeurs, chaînes), mais les **sommets
-ne sont pas encore décodés**. Ce qui est mesuré :
+Le format n'a pas de spécification publique ; ce qui suit vient de mesures sur le
+papillon, et chaque hypothèse est vérifiée à l'exécution (`hookymod/bfres_v10.py`).
 
-* la zone de données (index et vertex buffers) commence à **`0x4000`**
-  (champ `0x170` de l'en-tête, juste après un compteur `0x24`), et court
-  jusqu'à ~`0x1F800` ;
-* à `0x4000` on lit des **indices u16** propres (suites croissantes, valeurs
-  bornées à quelques milliers) — c'est bien de la topologie ;
-* les descripteurs de maillage (`0x640`, `0x840`, `0x9F0`…) contiennent des
-  compteurs plausibles (`2046`, `1830`, `653`) et des décalages internes
-  (`0x1000`, `0x1F00`), donc relatifs à la base `0x4000` ;
-* en revanche **aucune suite de positions en `f32` ni en `f16`** n'existe dans
-  cette zone (balayage exhaustif par strides 8 à 32) : les positions ne sont pas
-  stockées en virgule flottante simple, et il n'y a pas de « stride 24 avec
-  position en tête » naïf ;
-* on trouve des enregistrements de **24 octets** (`0x9700`…) dont le deuxième
-  mot est un `f32` de l'ordre de `0,008` — taille plausible d'une aile en
-  mètres, mais la suite ne correspond à aucun schéma simple : l'hypothèse la
-  plus probable est un **codage quantifié / entrelacé** (attributs séparés,
-  ou blocs compressés) plutôt qu'un tableau de sommets classique.
+| Élément | Valeur mesurée |
+|---|---|
+| base des tampons GPU | `u64` à `0x170` de l'en-tête (`0x4000` ici) |
+| tampon d'indices | `u16`, de la base jusqu'à l'offset des sommets, découpé en sous-maillages **alignés sur `0x1000` octets**, chacun terminé par du remplissage |
+| tampon de sommets | juste après les indices ; offset `u32` dans `FVTX` (ici `0x5700` → `0x9700`) |
+| pas d'enregistrement | **24 octets** (autocorrélation des octets : pics à 24 et 48) |
+| position | `3 × f16` à `+0` |
+| UV | `2 × u16 ÷ 65535` à `+16` |
+| non décodé | `+8`, `+12`, `+20` (normales/tangentes/quelque chose) → **rien n'est inventé** |
 
-Conséquence pratique : `cli blender` **refuse** d'exporter ce modèle et dit
-pourquoi, au lieu d'écrire un OBJ vide ou décalé. La prochaine étape est
-d'identifier le codage des sommets (comparer deux modèles de tailles
-différentes, ou isoler le buffer d'une aile) — et de là, la géométrie tombe.
+Les garde-fous, tous obligatoires avant de livrer une géométrie :
+
+1. la dispersion des positions doit être réelle (un tampon d'indices relu comme
+   des `f16` donne des valeurs dénormalisées → rejeté) ;
+2. le score de cohérence (arêtes de triangle / distance aléatoire) doit être
+   franchement bas, sinon refus ;
+3. les UV ne sont acceptées que si l'aire UV de chaque triangle **corrèle** avec
+   son aire 3D (mesuré : 0,66 — une projection réelle) ; sinon pas d'UV du tout ;
+4. les sous-maillages de moins de 8 triangles sont écartés comme bruit.
+
+Résultat sur le papillon : 3 sous-maillages, **1 302 triangles**, corps et ailes
+cohérents, UV valides → export glTF/OBJ avec l'albédo branché.
+
+Reste à faire pour les modèles : normales/tangentes du tampon v10 (pour un
+ombrage exact plutôt que recalculé), squelette `FSKL` (pour l'animation) et
+l'écriture (BFRES v10 écrivable) pour les mods.
 
 ## 4. Voir quelque chose **sans** fenêtre
 
