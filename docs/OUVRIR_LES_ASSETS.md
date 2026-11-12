@@ -103,6 +103,34 @@ Les noms de textures référencés par le matériau apparaissent dans `_STR`
 (`Mt_Body_Animal_Butterfly_Alb`, `…_Rgh`, `_ao0`, `_rgh0`, `_p0`, `_t0`) : c'est
 la clé pour retrouver le fichier `Tex/*.bntx.zs` correspondant.
 
+### Où en est la géométrie v10 (état exact, sans bluff)
+
+Le conteneur est lu (sections, tables de pointeurs, chaînes), mais les **sommets
+ne sont pas encore décodés**. Ce qui est mesuré :
+
+* la zone de données (index et vertex buffers) commence à **`0x4000`**
+  (champ `0x170` de l'en-tête, juste après un compteur `0x24`), et court
+  jusqu'à ~`0x1F800` ;
+* à `0x4000` on lit des **indices u16** propres (suites croissantes, valeurs
+  bornées à quelques milliers) — c'est bien de la topologie ;
+* les descripteurs de maillage (`0x640`, `0x840`, `0x9F0`…) contiennent des
+  compteurs plausibles (`2046`, `1830`, `653`) et des décalages internes
+  (`0x1000`, `0x1F00`), donc relatifs à la base `0x4000` ;
+* en revanche **aucune suite de positions en `f32` ni en `f16`** n'existe dans
+  cette zone (balayage exhaustif par strides 8 à 32) : les positions ne sont pas
+  stockées en virgule flottante simple, et il n'y a pas de « stride 24 avec
+  position en tête » naïf ;
+* on trouve des enregistrements de **24 octets** (`0x9700`…) dont le deuxième
+  mot est un `f32` de l'ordre de `0,008` — taille plausible d'une aile en
+  mètres, mais la suite ne correspond à aucun schéma simple : l'hypothèse la
+  plus probable est un **codage quantifié / entrelacé** (attributs séparés,
+  ou blocs compressés) plutôt qu'un tableau de sommets classique.
+
+Conséquence pratique : `cli blender` **refuse** d'exporter ce modèle et dit
+pourquoi, au lieu d'écrire un OBJ vide ou décalé. La prochaine étape est
+d'identifier le codage des sommets (comparer deux modèles de tailles
+différentes, ou isoler le buffer d'une aile) — et de là, la géométrie tombe.
+
 ## 4. Voir quelque chose **sans** fenêtre
 
 ```bash

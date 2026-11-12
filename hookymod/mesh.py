@@ -93,6 +93,24 @@ class MeshData:
                         faces=faces, uvs=uvs, normals=normals, colors=colors)
 
 
+def triangulated(mesh: "MeshData") -> list[tuple[int, int, int]]:
+    """Triangles d'un maillage, polygones éventuels découpés en éventail.
+
+    Les triangles qui référencent un sommet inexistant sont **écartés** : mieux
+    vaut un trou dans ce qu'on voit qu'un sommet faux dans un export.
+    """
+    count = len(mesh.positions)
+    out: list[tuple[int, int, int]] = []
+    for face in mesh.faces:
+        if len(face) < 3 or any(not (0 <= i < count) for i in face):
+            continue
+        for i in range(1, len(face) - 1):
+            triangle = (face[0], face[i], face[i + 1])
+            if len(set(triangle)) == 3:      # pas de triangle dégénéré
+                out.append(triangle)
+    return out
+
+
 def merge_meshes(meshes: list[MeshData], name: str = "model") -> MeshData:
     if not meshes:
         raise HookyError("Aucun maillage à fusionner.")

@@ -262,6 +262,35 @@ class ZstdDicts:
 _DICT_NAMES = ("zsdic.pack", "zsdic")
 
 
+#: noms sous lesquels le jeu range ses dictionnaires zstd
+DICTIONARY_NAMES = ("ZsDic.pack.zs", "ZsDic.pack", "Zsdic.pack.zs", "ZSDic.pack.zs")
+
+
+def find_dictionaries_near(path) -> list[Path]:
+    """Dictionnaires posés à côté d'un asset (ou un dossier au-dessus).
+
+    Un moddeur travaille sur deux ou trois fichiers extraits, pas sur un romfs
+    complet : on regarde donc le dossier du fichier puis ses parents, sans
+    descendre dans l'arborescence (pas de scan de 26 Go pour ouvrir un modèle).
+    """
+    path = Path(path)
+    start = path if path.is_dir() else path.parent
+    found: list[Path] = []
+    # deux niveaux au-dessus suffisent : romfs/Pack/ZsDic.pack.zs, ou le
+    # dossier de travail du moddeur. Au-delà, on ramasserait n'importe quoi.
+    for folder in [start, *start.parents[:2]]:
+        for name in DICTIONARY_NAMES:
+            candidate = folder / name
+            if candidate.is_file() and candidate not in found:
+                found.append(candidate)
+        packed = folder / "Pack" / "ZsDic.pack.zs"
+        if packed.is_file() and packed not in found:
+            found.append(packed)
+        if found:
+            break
+    return found
+
+
 def find_dict_files(root) -> tuple[list[Path], Path | None]:
     """Trouve les dictionnaires zstd d'un dump.
 

@@ -10,6 +10,7 @@ Exemples ::
     python -m hookymod.cli textures model.bntx --list
     python -m hookymod.cli textures model.bntx -o textures_png
     python -m hookymod.cli obj model.bfres -o model.obj
+    python -m hookymod.cli blender model.bfres -o model_blender
     python -m hookymod.cli patch asset.zs --find Link --replace Hero -o asset.patched.zs
 """
 
@@ -21,15 +22,17 @@ from pathlib import Path
 
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
+from . import blender as blender_mod
 from . import identify
 from . import nup as nup_mod
 from . import restbl as restbl_mod
 from . import translate as translate_mod
 from .container import Level, detect_kind
-from .mesh import export_obj
+from .mesh import export_obj, load_obj
 from .sarc import SarcArchive, is_sarc
 from .util import FormatError, HookyError, human_size, safe_child, write_atomic
-from .zs import DictMissing, ZstdDicts, find_dict_files, frame_info, is_zstd, zstd_available
+from .zs import (DictMissing, ZstdDicts, find_dict_files, find_dictionaries_near,
+                 frame_info, is_zstd, zstd_available)
 
 
 # --------------------------------------------------------------------------- utilitaires
@@ -58,6 +61,15 @@ def load_dicts(romfs_arg: str | None, path: Path | None, verbose: bool = False) 
                 print(f"# dictionnaires chargés depuis {root} : {count}", file=sys.stderr)
         except HookyError as exc:
             print(f"⚠ {exc}", file=sys.stderr)
+    if not dicts and path is not None:
+        for candidate in find_dictionaries_near(path):
+            try:
+                count = dicts.load_file(candidate)
+                if verbose:
+                    print(f"# dictionnaires chargés depuis {candidate} : {count}",
+                          file=sys.stderr)
+            except (HookyError, OSError) as exc:
+                print(f"⚠ {candidate.name} : {exc}", file=sys.stderr)
     if not dicts and verbose:
         print("# aucun dictionnaire trouvé (assets non compressés ?)", file=sys.stderr)
     return dicts
@@ -408,6 +420,109 @@ def cmd_obj(args) -> int:
     out = Path(args.output) if args.output else path.with_suffix(".obj")
     export_obj(meshes, out, scale=args.scale)
     print(f"Écrit : {out} ({sum(len(m.faces) for m in meshes):,} triangles)")
+    return 0
+
+
+def _bundle_stem(path: Path) -> str:
+    """Nom lisible d'un asset : ``A.B.bfres.zs`` → ``A``, ``Tex.bntx.zs`` → ``Tex``."""
+    name = path.name
+    for suffix in (".zs", ".bfres", ".bntx", ".obj", ".gltf", ".glb"):
+        if name.lower().endswith(suffix):
+            name = name[: -len(suffix)]
+    first = name.split(".")[0]
+    return first or name or "modele"
+
+
+def _neighbour_textures(model_path: Path, stem: str, dicts: ZstdDicts,
+                        out: Path, verbose: bool = False) -> dict[str, str]:
+    """Décode les PNG posés à côté du modèle (``<préfixe>_Alb.bntx.zs`` & co).
+
+    On ne branche que ce qui existe réellement : aucune texture inventée, aucun
+    nom deviné. Le préfixe est le nom du modèle sans son extension
+    (``Animal_Butterfly…`` → ``Mt_Body_Animal_Butterfly_Alb``).
+    """
+    folder = model_path.parent
+    found: dict[str, str] = {}
+    # Le nom du modèle est découpé en mots : « Animal_Butterfly » → {butterfly}.
+    # Un asset voisin est une texture possible s'il contient TOUS ces mots
+    # (Mt_Body_Animal_Butterfly_Alb.bntx.zs en contient bien « butterfly »).
+    key = stem.split(".")[0]
+    generic = {"animal", "mt", "body", "model", "obj", "tex"}
+    tokens = {t.lower() for t in key.replace("-", "_").split("_") if t and t.lower() not in generic}
+    if not tokens:
+        return found
+    candidates = []
+    for pattern in ("*.bntx.zs", "*.bntx", "*.png"):
+        candidates += sorted(folder.glob(pattern))
+    for candidate in candidates:
+        words = {t.lower() for t in candidate.name.split(".")[0].split("_")}
+        if not tokens <= words:
+            continue
+        material_hint = candidate.name.split(".")[0]
+        if candidate.suffix.lower() == ".png":
+            found[material_hint] = str(candidate)
+            continue
+        try:
+            raw = candidate.read_bytes()
+            data = dicts.decompress(raw) if is_zstd(raw) else raw
+            file = bntx_mod.BntxFile.parse(data, candidate.name)
+            texture = file.textures[0]
+            target = out / f"{material_hint}.png"
+            texture.save_png(target, 0)
+            found[material_hint] = str(target)
+            if verbose:
+                print(f"  texture {material_hint} : {texture.format_name} "
+                      f"{texture.width}×{texture.height}")
+        except (HookyError, IndexError, ValueError) as exc:
+            print(f"  ⚠ texture {candidate.name} ignorée : {exc}", file=sys.stderr)
+    return found
+
+
+def cmd_blender(args) -> int:
+    path = Path(args.path)
+    stem = _bundle_stem(path)
+    out = Path(args.output) if args.output else path.parent / f"{stem}_blender"
+    dicts = load_dicts(args.romfs, path, args.verbose)
+
+    if path.suffix.lower() == ".obj":
+        meshes = [load_obj(path)]
+    else:
+        level = open_level(path, dicts, _auto_romfs(path))
+        data = _decompress_maybe(_pick_entry(level, args.entry), dicts)
+        if data[:4] != b"FRES":
+            raise HookyError(f"Ce n'est pas un BFRES ({detect_kind(data)}).")
+        file = bfres_mod.BfresFile.parse(data)
+        meshes = []
+        for model in file.models[args.model:args.model + 1]:
+            meshes += model.build_meshes(args.lod, file.warnings)
+        if not meshes:
+            detail = "\n".join(f"  ⚠ {w}" for w in file.warnings[:8])
+            raise HookyError(
+                "Aucun maillage exploitable dans ce BFRES.\n"
+                + (detail or "  (aucun avertissement : structure non reconnue)")
+                + "\nRien n'est exporté plutôt que d'envoyer une géométrie fausse "
+                  "vers Blender."
+            )
+
+    out.mkdir(parents=True, exist_ok=True)
+    textures = {}
+    if args.textures:
+        textures = _neighbour_textures(path, stem, dicts, out, args.verbose)
+        if not textures:
+            print("Aucune texture reconnue à côté du modèle "
+                  "(l'export reste valable, matériaux sans image).")
+    written = blender_mod.export_bundle(
+        meshes, out, stem, textures=textures, scale=args.scale,
+        formats=tuple(args.formats.split(",")) if args.formats else ("gltf", "obj"),
+    )
+    triangles = sum(len(m.faces) for m in meshes)
+    print(f"Modèle : {stem} — {len(meshes)} maillage(s), {triangles:,} face(s)")
+    for key in ("gltf", "obj", "note"):
+        if key in written:
+            print(f"  • {written[key]}")
+    if textures:
+        print(f"  textures : {len(textures)} PNG branché(s)")
+    print(f"\nBlender : Fichier ▸ Importer ▸ glTF 2.0 → {written.get('gltf', written['obj'])}")
     return 0
 
 
@@ -786,6 +901,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lod", type=int, default=0)
     p.add_argument("--scale", type=float, default=1.0)
     p.set_defaults(func=cmd_obj)
+
+    p = sub.add_parser("blender", parents=[common],
+                       help="prépare le modèle pour Blender (glTF + OBJ + textures)")
+    p.add_argument("path")
+    p.add_argument("--entry", "-e")
+    p.add_argument("--output", "-o", help="dossier de sortie (défaut : <nom>_blender)")
+    p.add_argument("--model", type=int, default=0)
+    p.add_argument("--lod", type=int, default=0)
+    p.add_argument("--scale", type=float, default=1.0)
+    p.add_argument("--formats", default="gltf,obj",
+                   help="formats à écrire (gltf,obj — défaut les deux)")
+    p.add_argument("--textures", action="store_true", default=True,
+                   help="décode et branche les textures voisines (défaut)")
+    p.add_argument("--no-textures", dest="textures", action="store_false")
+    p.set_defaults(func=cmd_blender)
 
     p = sub.add_parser("nup", parents=[common],
                        help="lit un paquet .nup (dump Nintendo Switch 2) : liste / extraction")

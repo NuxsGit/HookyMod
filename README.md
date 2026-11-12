@@ -9,6 +9,13 @@
 
 ## 📌 Overview
 
+> **Code original uniquement.** HookyMod ne contient aucun code, SDK ou outil de
+> Nintendo, et aucun code décompilé : chaque lecteur (BNTX, BFRES, SARC, NUP,
+> BYML, RESTBL, zstd) a été écrit ici à partir de l'observation des fichiers.
+> Les dumps du jeu ne sont là que pour les tests, et sont ignorés par Git
+> (voir `docs/PROVENANCE.md`).
+
+
 **OoT Remake Asset Explorer** (HookyMod) is a standalone, open-source modding and
 reverse-engineering tool for the *Ocarina of Time Remake* romfs. It is designed to work
 alongside PC decompilations and mod loaders like **Hookshot**, and lets modders inspect,
@@ -72,6 +79,20 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
 * `pack` n'écrit que les fichiers modifiés, recompresse les `.zs` avec le bon
   dictionnaire et **met à jour la table des tailles** : le résultat est directement
   un mod `mods/<nom>/romfs/...` pour Hookshot.
+
+### 🧩 Modèle → Blender (aller simple, sans add-on)
+
+```bash
+python -m hookymod.cli blender romfs/Model/Papillon.bfres.zs -o Papillon_blender
+blender --background --python tools/blender_import.py -- Papillon_blender --save Papillon.blend
+```
+
+* écrit un **glTF 2.0** (`.gltf` + `.bin`) et un **OBJ + MTL**, plus une note
+  d'import ; un objet Blender par maillage, matériaux nommés comme dans le jeu ;
+* les **textures voisines** (`<préfixe>_Alb.bntx.zs`, PNG déjà décodés) sont
+  trouvées, décodées et branchées en couleur de base — rien n'est inventé ;
+* si la géométrie n'est pas décodable, **rien n'est écrit** : mieux vaut un refus
+  explicite qu'un modèle faux dans Blender.
 
 ### 🎨 Rendering & 3D pipeline
 
@@ -166,6 +187,7 @@ python -m hookymod.cli view modele.bfres --views 4 --size 480x480  # planche de 
 python -m hookymod.cli textures tex.bntx --orin            # force la disposition Switch 2
 python -m hookymod.cli doctor romfs/Pack/Tex.pack.zs       # modules + anatomie d'un fichier
 python -m hookymod.cli obj pack.zs -e Model/Link.bfres -o Link.obj
+python -m hookymod.cli blender modele.bfres -o modele_blender   # glTF + OBJ + PNG
 python -m hookymod.cli dicts romfs
 python -m hookymod.cli scan romfs --json -o rapport.json
 python -m hookymod.cli carve conteneur_inconnu.bin     # structures à l'intérieur
