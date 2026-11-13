@@ -144,6 +144,13 @@ import synth_nup  # noqa: E402
 
 import hookymod.app as app_module  # noqa: E402
 import hookymod.viewer as viewer_module  # noqa: E402
+
+# ``hookymod.render`` importe ``viewer`` (maths du projecteur) : si un autre
+# module de test a chargé render avant nous, viewer a été importé sans Tkinter.
+# On le recharge pour qu'il voie les faux widgets installés ci-dessus.
+import importlib  # noqa: E402
+viewer_module = importlib.reload(viewer_module)
+app_module = importlib.reload(app_module)
 from hookymod import zs  # noqa: E402
 from hookymod.container import Document, Level  # noqa: E402
 from hookymod.mesh import load_obj  # noqa: E402

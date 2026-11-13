@@ -293,6 +293,7 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         self._popups: list[LoadingPopup] = []
         self._striped_rows: list = []
         self._active_source: str = ""
+        self._payload_error: str = ""
 
         self.filter_var = tk.StringVar()
         self.search_var = tk.StringVar()
@@ -689,12 +690,18 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         return None
 
     def _entry_payload(self, entry) -> bytes:
-        """Données d'une entrée, décompressées si possible (jamais d'exception)."""
+        """Données d'une entrée, décompressées si possible (jamais d'exception).
+
+        En cas d'échec, la raison exacte est conservée dans ``_payload_error`` :
+        « ce n'est pas un BNTX » et « il manque le dictionnaire zstd » ne veulent
+        pas dire la même chose pour l'utilisateur.
+        """
         data = entry.data
         if is_zstd(data):
             try:
                 return self.dicts.decompress(data)
-            except HookyError:
+            except HookyError as exc:
+                self._payload_error = str(exc)
                 return b""
         return data
 
@@ -704,8 +711,13 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             return
         source = self._tab_source(b"BNTX")
         if source is None:
-            self.texture_info_var.set(
-                "Aucune texture ici : ouvre un fichier .bntx ou sélectionne une entrée .bntx.")
+            reason = getattr(self, "_payload_error", "")
+            if reason:
+                self.texture_info_var.set(f"Texture illisible : {reason}")
+                self._payload_error = ""
+            else:
+                self.texture_info_var.set(
+                    "Aucune texture ici : ouvre un fichier .bntx ou sélectionne une entrée .bntx.")
             return
         data, key = source
         self._load_textures_from_data(data, key=key)
@@ -803,6 +815,38 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             CONFIG_PATH.write_text(json.dumps(self.config_data, indent=2, ensure_ascii=False))
         except OSError:
             pass
+
+    def load_dicts_near(self, path: Path) -> int:
+        """Charge les dictionnaires zstd trouvés à côté du fichier ouvert.
+
+        Cas typique : un dossier de travail qui contient ``ZsDic.pack.zs`` et les
+        assets extraits. Sans dictionnaire, un ``.bfres.zs`` ne s'ouvre pas et
+        l'utilisateur croit que le format n'est pas géré.
+        """
+        path = Path(path)
+        folder = path if path.is_dir() else path.parent
+        loaded = 0
+        for base in (folder, folder.parent):
+            if base is None:
+                continue
+            for candidate in ("ZsDic.pack.zs", "Pack/ZsDic.pack.zs", "ZsDic.pack",
+                              "Zsdic.pack.zs"):
+                file = base / candidate
+                if not file.is_file():
+                    continue
+                try:
+                    loaded += self.dicts.load_file(file)
+                except HookyError:
+                    continue
+                if loaded:
+                    self.config_data["dicts"] = sorted(
+                        {*self.config_data.get("dicts", []), str(file)})
+                    self._save_config()
+                    self._refresh_romfs_label()
+                    self.status(f"{loaded} dictionnaire(s) zstd chargé(s) "
+                                f"depuis {file.name}.")
+                    return loaded
+        return loaded
 
     def _load_dicts_from_config(self) -> None:
         loaded = 0
@@ -1108,6 +1152,8 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
 
     def open_path(self, path: Path, quiet: bool = False) -> None:
         path = Path(path)
+        if not self.dicts:
+            self.load_dicts_near(path)
         try:
             stat = path.stat()
         except OSError as exc:

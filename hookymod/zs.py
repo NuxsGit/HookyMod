@@ -64,20 +64,36 @@ def frame_info(data: bytes) -> tuple[int, int | None]:
     return params.dict_id, (None if size in (0, 0xFFFFFFFFFFFFFFFF) else size)
 
 
+#: Identifiants que le jeu code dans ses frames zstd.  Les dictionnaires sont
+#: des dictionnaires « bruts » (``zs.zsdic``…) : zstandard leur attribue l'ID 0,
+#: donc l'identifiant se déduit du **nom** du fichier, pas de son contenu.
+DICT_IDS = {"zs": 1, "bkprb": 2, "bcett.byml": 3, "pack": 4}
+
+
+def dict_name_id(name: str) -> int:
+    """Identifiant de dictionnaire d'après son nom (0 si inconnu)."""
+    base = Path(name).name.strip().lower()
+    for suffix in (".zsdic", ".zs", ".dict", ".bin"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    return DICT_IDS.get(base, 0)
+
+
 class ZstdDicts:
     """Collection de dictionnaires zstd, indexés par identifiant de contenu."""
 
     def __init__(self) -> None:
         self.by_id: dict[int, tuple[str, "zstd.ZstdCompressionDict"]] = {}
+        self.by_name: dict[str, "zstd.ZstdCompressionDict"] = {}
         self.sources: list[Path] = []
         self.loaded_files: list[str] = []
 
     # ------------------------------------------------------------------ état
     def __len__(self) -> int:
-        return len(self.by_id)
+        return len(self.by_name)
 
     def __bool__(self) -> bool:
-        return bool(self.by_id)
+        return bool(self.by_name)
 
     def describe(self) -> list[str]:
         return [f"{name} (id {did})" for did, (name, _) in sorted(self.by_id.items())]
@@ -90,13 +106,19 @@ class ZstdDicts:
             return False
         try:
             dictionary = zstd.ZstdCompressionDict(raw)
-            did = dictionary.dict_id()
         except Exception:
             return False
-        if did in self.by_id:
-            return False
-        self.by_id[did] = (name, dictionary)
-        return True
+        base = Path(name).name
+        stem = base
+        for suffix in (".zsdic", ".zs", ".dict", ".bin"):
+            if stem.lower().endswith(suffix):
+                stem = stem[: -len(suffix)]
+        is_new = stem not in self.by_name
+        self.by_name[stem] = dictionary
+        did = dictionary.dict_id() or DICT_IDS.get(stem.lower(), 0)
+        if did and did not in self.by_id:
+            self.by_id[did] = (name, dictionary)
+        return is_new
 
     def load_file(self, path) -> int:
         """Charge un ``.zsdic``, un ``ZsDic.pack`` ou ``ZsDic.pack.zs``."""
@@ -147,10 +169,16 @@ class ZstdDicts:
 
     # ------------------------------------------------------------------ (dé)compression
     def _dict_for(self, dict_id: int):
+        """Dictionnaire d'un identifiant de frame (par contenu, sinon par nom)."""
         if not dict_id:
             return None
         found = self.by_id.get(dict_id)
-        return found[1] if found else None
+        if found:
+            return found[1]
+        for base, known in DICT_IDS.items():
+            if known == dict_id and base in self.by_name:
+                return self.by_name[base]
+        return None
 
     def decompress(self, raw: bytes, dict_id: int | None = None,
                    allow_try_all: bool = True) -> bytes:
@@ -232,6 +260,35 @@ class ZstdDicts:
 
 # --------------------------------------------------------------------------- recherche
 _DICT_NAMES = ("zsdic.pack", "zsdic")
+
+
+#: noms sous lesquels le jeu range ses dictionnaires zstd
+DICTIONARY_NAMES = ("ZsDic.pack.zs", "ZsDic.pack", "Zsdic.pack.zs", "ZSDic.pack.zs")
+
+
+def find_dictionaries_near(path) -> list[Path]:
+    """Dictionnaires posés à côté d'un asset (ou un dossier au-dessus).
+
+    Un moddeur travaille sur deux ou trois fichiers extraits, pas sur un romfs
+    complet : on regarde donc le dossier du fichier puis ses parents, sans
+    descendre dans l'arborescence (pas de scan de 26 Go pour ouvrir un modèle).
+    """
+    path = Path(path)
+    start = path if path.is_dir() else path.parent
+    found: list[Path] = []
+    # deux niveaux au-dessus suffisent : romfs/Pack/ZsDic.pack.zs, ou le
+    # dossier de travail du moddeur. Au-delà, on ramasserait n'importe quoi.
+    for folder in [start, *start.parents[:2]]:
+        for name in DICTIONARY_NAMES:
+            candidate = folder / name
+            if candidate.is_file() and candidate not in found:
+                found.append(candidate)
+        packed = folder / "Pack" / "ZsDic.pack.zs"
+        if packed.is_file() and packed not in found:
+            found.append(packed)
+        if found:
+            break
+    return found
 
 
 def find_dict_files(root) -> tuple[list[Path], Path | None]:
