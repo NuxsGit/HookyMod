@@ -86,6 +86,10 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
 python -m hookycreator dump/romfs --open     # http://127.0.0.1:8765/
 ```
 
+```bash
+python -m hookycreator export-all dump/romfs -o export_all   # tout : textures PNG + modèles glTF/OBJ
+```
+
 Application web locale (aucune installation, pas de Tkinter) pour **créer** :
 textures remplacées, modèles envoyés vers Blender, fiches de mobs, et
 assemblage d'un dossier `mods/<nom>/romfs/` prêt à charger. Détails et feuille

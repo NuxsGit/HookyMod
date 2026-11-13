@@ -251,6 +251,57 @@ function openMob(slug) {
     <ul class="todo">${mob.todo.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`);
 }
 
+/* ------------------------------------------------------------------ export global */
+async function startBulk() {
+  const kinds = ["texture", "model"];
+  if ($("#bulk-anim").checked) kinds.push("animation");
+  try {
+    await api("/api/bulk/start", { method: "POST", body: JSON.stringify({ kinds }) });
+  } catch (error) { toast(error.message, "error"); return; }
+  $("#bulk-bar").hidden = false;
+  $("#bulk-report").innerHTML = "";
+  $("#bulk-start").disabled = true;
+  pollBulk();
+}
+
+async function pollBulk() {
+  let job;
+  try {
+    job = await api("/api/bulk/status");
+  } catch (error) { toast(error.message, "error"); $("#bulk-start").disabled = false; return; }
+  const total = job.total || 0;
+  const done = job.done || 0;
+  $("#bulk-fill").style.width = total ? `${Math.min(100, (done / total) * 100)}%` : "6%";
+  $("#bulk-label").textContent = job.running
+    ? `${done}/${total || "?"} — ${job.label || "en cours…"}`
+    : (job.report ? "terminé" : "");
+
+  if (job.running) { setTimeout(pollBulk, 400); return; }
+
+  $("#bulk-start").disabled = false;
+  if (job.error) { $("#bulk-label").textContent = `échec : ${job.error}`; return; }
+  const report = job.report;
+  if (!report) return;
+  $("#bulk-fill").style.width = "100%";
+  $("#bulk-label").textContent =
+    `${report.ok} réussi(s) · ${report.skip} ignoré(s) · ${report.error} erreur(s) — ` +
+    `${report.textures} PNG, ${report.models} modèle(s)`;
+  $("#bulk-report").innerHTML = report.items.map((item) => {
+    const flavor = item.status === "ok"
+      ? `<span class="badge">ok</span>`
+      : item.status === "skip"
+        ? `<span class="badge warn">ignoré</span>`
+        : `<span class="badge warn">erreur</span>`;
+    const detail = item.status === "ok"
+      ? (item.kind === "model" ? `${item.faces} faces · v${item.version}` : item.format)
+      : (item.reason || "");
+    return `<li>${flavor}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">
+      <code>${esc(item.label)}</code><br><small class="muted">${esc(detail)}</small></span></li>`;
+  }).join("");
+  toast(`Export complet : ${report.ok} élément(s) exploité(s)`);
+  await refresh();
+}
+
 /* ------------------------------------------------------------------ mod */
 async function buildMod(event) {
   event.preventDefault();
@@ -328,6 +379,7 @@ function wire() {
     } catch (error) { toast(error.message, "error"); }
   };
   $("#mod-form").onsubmit = buildMod;
+  $("#bulk-start").onclick = startBulk;
 }
 
 async function boot() {

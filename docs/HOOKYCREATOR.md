@@ -23,6 +23,26 @@ zstd sont cherchés dans le projet et ses parents.
 | **Modèles** | aperçu 3D rendu côté serveur, planche de rotations, export glTF + OBJ (+ textures voisines) pour Blender | ✅ BFRES v9 et **v10** |
 | **Mobs** | fiche de mob : modèle + textures copiés sous un nouveau nom, liste de ce qui reste à faire côté jeu | ✅ préparation des fichiers |
 | **Mod** | assemble `mods/<nom>/romfs/…` (chemins d'origine) + `hookycreator.json` | ✅ |
+| **Tout exploiter** | parcourt aussi l'intérieur des packs (`.pack.zs`, SARC) et exporte **toutes** les textures (PNG) et tous les modèles (glTF + OBJ) avec un `rapport.json` | ✅ |
+
+## Tout exploiter (lots)
+
+Deux façons, mêmes résultats :
+
+```bash
+python -m hookycreator export-all dump/romfs -o export_all     # en ligne de commande
+# ou, dans l'interface : Accueil ▸ « Tout exploiter » ▸ Lancer l'export complet
+```
+
+* les **packs** (`.pack.zs`, `.sarc`, imbriqués jusqu'à 3 niveaux) sont ouverts :
+  une texture qui vit dans une archive est trouvée et exportée comme les autres ;
+* classement par **contenu** (magic `BNTX`/`FRES`) et, à défaut, par nom — les
+  fichiers d'animation (`.anim.bfres`) sont reconnus comme tels ;
+* chaque élément obtient un statut : `ok`, `skip` (avec la raison : format non
+  décodable, animation pas encore lue…) ou `error`. Le tout est écrit dans
+  `rapport.json` à côté des fichiers ;
+* progression affichée (barre + libellé) sans bloquer l'interface ; l'export
+  tourne en tâche de fond côté serveur.
 
 ## Règles tenues
 

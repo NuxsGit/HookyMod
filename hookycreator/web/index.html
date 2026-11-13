@@ -51,6 +51,23 @@
         <button class="card-action" data-goto="mod"><b>Assembler le mod</b><span>romfs/ + manifeste, prêt pour le jeu</span></button>
       </div>
     </div>
+    <div class="panel" id="home-bulk">
+      <h2>Tout exploiter</h2>
+      <p class="muted" style="margin:0 0 12px">
+        Décode <b>toutes</b> les textures en PNG et exporte <b>tous</b> les modèles
+        (glTF + OBJ), y compris ceux qui sont dans les packs <code>.pack.zs</code>.
+        Un rapport liste ce qui a réussi et ce qui ne l'a pas été.
+      </p>
+      <div class="actions" style="margin-top:0">
+        <button class="primary" id="bulk-start">Lancer l'export complet</button>
+        <label class="muted" style="display:flex;gap:6px;align-items:center;font-size:12.5px">
+          <input type="checkbox" id="bulk-anim"> inclure les animations (seront ignorées pour l'instant)
+        </label>
+      </div>
+      <div class="bar" id="bulk-bar" hidden><div id="bulk-fill"></div></div>
+      <p class="muted" id="bulk-label" style="font-size:12.5px;margin:8px 0 0"></p>
+      <ul class="list" id="bulk-report" style="margin-top:10px"></ul>
+    </div>
     <div class="panel" id="home-activity">
       <h2>État du projet</h2>
       <ul class="list" id="activity"><li class="muted">chargement…</li></ul>

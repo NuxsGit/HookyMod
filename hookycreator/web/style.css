@@ -220,3 +220,14 @@ button.ghost:hover { border-color: rgba(110, 231, 255, .45); }
   .stats { display: none; }
   main { padding: 14px; }
 }
+
+/* ---------------------------------------------------------------- barre de progression */
+.bar {
+  margin-top: 12px; height: 8px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); overflow: hidden;
+}
+.bar > div {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width .2s ease;
+}

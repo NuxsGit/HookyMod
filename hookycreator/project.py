@@ -91,8 +91,41 @@ class Project:
                         pass
         return self._dicts
 
+    # -- archives -----------------------------------------------------------
+    def open_level(self, rel: str):
+        """Ouvre un pack (``.pack.zs``, ``.sarc``) comme une archive navigable."""
+        from hookymod.container import Level
+
+        raw = (self.root / rel).read_bytes()
+        return Level(name=Path(rel).name, raw=raw, dicts=self._load_dicts(), rel=rel)
+
+    def read_entry(self, rel: str) -> bytes:
+        """Contenu d'une entrée d'archive, écrite ``pack.zs!/dossier/fichier``."""
+        from hookymod.util import HookyError
+
+        archive, _, inner = rel.partition("!/")
+        level = self.open_level(archive)
+        parts = [part for part in inner.split("/") if part]
+        for depth, part in enumerate(parts):
+            if not level.archive:
+                raise ProjectError(f"{archive} n'est pas une archive.")
+            index = next((i for i in range(len(level))
+                          if level.entry_name(i) == part), None)
+            if index is None:
+                raise ProjectError(f"Entrée introuvable : {part} dans {archive}")
+            if depth == len(parts) - 1:
+                try:
+                    return level.entry_blob(index)
+                except HookyError as exc:
+                    raise ProjectError(str(exc)) from exc
+            level = level.open_entry(index)
+        raise ProjectError("Chemin d'entrée vide.")
+
     def read_asset(self, rel: str) -> bytes:
         """Contenu décompressé d'un asset (``.zs`` géré s'il y a un dictionnaire)."""
+        if "!/" in rel:
+            raw = self.read_entry(rel)
+            return raw
         path = self.asset(rel)
         raw = path.read_bytes()
         if not zs.is_zstd(raw):
@@ -134,6 +167,8 @@ class Project:
                 kind = "texture"
             elif low.endswith((".byml", ".bgyml", ".bcett.byml")):
                 kind = "bytecode"
+            elif low.endswith((".pack.zs", ".pack", ".sarc", ".szs", ".sarc.zs")):
+                kind = "archive"
             else:
                 continue
             assets.append(Asset(rel=rel, kind=kind, size=path.stat().st_size,
@@ -147,6 +182,7 @@ class Project:
             "models": sum(1 for a in assets if a.kind == "model"),
             "textures": sum(1 for a in assets if a.kind == "texture"),
             "bytecode": sum(1 for a in assets if a.kind == "bytecode"),
+            "archives": sum(1 for a in assets if a.kind == "archive"),
         }
 
     def by_kind(self, kind: str) -> list[Asset]:

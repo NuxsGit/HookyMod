@@ -36,6 +36,8 @@ class HookyCreatorServer:
         self.port = port
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
+        self.job: dict = {"running": False, "done": 0, "total": 0, "label": "",
+                          "report": None, "error": None}
 
     # ------------------------------------------------------------------ cycle
     def start(self, open_browser: bool = False) -> "HookyCreatorServer":
@@ -117,10 +119,46 @@ class HookyCreatorServer:
                                                 body.get("parent", "")))
             return _json({"mobs": project.list_mobs()})
 
+        if route == "/api/bulk/start":
+            return _json(self.start_bulk(body.get("kinds", ["texture", "model"]),
+                                         body.get("limit")))
+
+        if route == "/api/bulk/status":
+            return _json(self.job)
+
         if route == "/api/mod/build":
             return _json(project.build_mod(body.get("name", "HookyMod")))
 
         raise ProjectError(f"Route inconnue : {route}")
+
+    # ------------------------------------------------------------------ export global
+    def start_bulk(self, kinds, limit=None) -> dict:
+        """Lance l'export de tout le projet en tâche de fond (non bloquant)."""
+        from .bulk import export_all
+
+        if self.job["running"]:
+            raise ProjectError("Un export est déjà en cours.")
+
+        def progress(done: int, total: int, label: str) -> None:
+            self.job.update(done=done, total=total, label=label)
+
+        def run() -> None:
+            self.job.update(running=True, done=0, total=0, label="analyse…",
+                            report=None, error=None)
+            try:
+                out = self.project.work / "export_all"
+                report = export_all(self.project, out,
+                                    kinds=tuple(kinds) or ("texture", "model"),
+                                    limit=limit, progress=progress)
+                self.job["report"] = report
+            except Exception as exc:          # l'UI doit voir la raison
+                self.job["error"] = str(exc)
+            finally:
+                self.job["running"] = False
+                self.job["label"] = ""
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"started": True}
 
     # ------------------------------------------------------------------ statique
     def static(self, path: str) -> tuple[bytes, str] | None:
