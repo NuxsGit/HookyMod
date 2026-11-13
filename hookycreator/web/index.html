@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HookyCreator — atelier de contenu</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦋</text></svg>">
+</head>
+<body>
+<aside class="rail">
+  <div class="brand">
+    <span class="mark">HC</span>
+    <div>
+      <strong>HookyCreator</strong>
+      <small>atelier de contenu</small>
+    </div>
+  </div>
+  <nav>
+    <button class="nav" data-view="home" aria-current="page"><span>◈</span>Accueil</button>
+    <button class="nav" data-view="textures"><span>▩</span>Textures</button>
+    <button class="nav" data-view="models"><span>◭</span>Modèles</button>
+    <button class="nav" data-view="mobs"><span>✦</span>Mobs</button>
+    <button class="nav" data-view="mod"><span>⤓</span>Mod</button>
+  </nav>
+  <footer>
+    <div id="dict-state" class="pill">dictionnaires…</div>
+    <p class="hint">Aucun code Nintendo : tout est lu et écrit par HookyMod.</p>
+  </footer>
+</aside>
+
+<main>
+  <header class="topbar">
+    <div class="path">
+      <span class="dot"></span>
+      <code id="root-path">—</code>
+    </div>
+    <div class="stats" id="stats"></div>
+    <input id="search" type="search" placeholder="filtrer…" autocomplete="off">
+  </header>
+
+  <section class="view" id="view-home">
+    <div class="hero">
+      <h1>Que veux-tu créer&nbsp;?</h1>
+      <p>Un mob, une nouvelle peau, un modèle retouché dans Blender&nbsp;: tout finit dans un
+         dossier <code>mods/</code> prêt à charger.</p>
+      <div class="quick">
+        <button class="card-action" data-goto="textures"><b>Modifier une texture</b><span>remplacer les pixels en gardant format et mips</span></button>
+        <button class="card-action" data-goto="mobs"><b>Créer un mob</b><span>copier un modèle + ses textures sous un nouveau nom</span></button>
+        <button class="card-action" data-goto="models"><b>Ouvrir un modèle</b><span>aperçu 3D, export glTF pour Blender</span></button>
+        <button class="card-action" data-goto="mod"><b>Assembler le mod</b><span>romfs/ + manifeste, prêt pour le jeu</span></button>
+      </div>
+    </div>
+    <div class="panel" id="home-activity">
+      <h2>État du projet</h2>
+      <ul class="list" id="activity"><li class="muted">chargement…</li></ul>
+    </div>
+  </section>
+
+  <section class="view" id="view-textures" hidden>
+    <div class="section-head">
+      <h2>Textures</h2>
+      <p>Clique une texture pour la prévisualiser et remplacer son contenu.</p>
+    </div>
+    <div class="grid" id="texture-grid"></div>
+  </section>
+
+  <section class="view" id="view-models" hidden>
+    <div class="section-head">
+      <h2>Modèles</h2>
+      <p>Aperçu rendu côté serveur, puis export glTF/OBJ pour Blender.</p>
+    </div>
+    <div class="grid" id="model-grid"></div>
+  </section>
+
+  <section class="view" id="view-mobs" hidden>
+    <div class="section-head">
+      <h2>Mobs</h2>
+      <p>Une fiche par mob&nbsp;: modèle, textures, et ce qu'il reste à faire côté jeu.</p>
+    </div>
+    <form class="creator" id="mob-form">
+      <label>Nom du mob<input name="name" placeholder="PapillonDoré" required></label>
+      <label>Modèle de base<select name="model" id="mob-model"></select></label>
+      <label>Textures<select name="textures" id="mob-textures" multiple size="4"></select></label>
+      <button type="submit" class="primary">Créer la fiche</button>
+    </form>
+    <div class="grid" id="mob-grid"></div>
+  </section>
+
+  <section class="view" id="view-mod" hidden>
+    <div class="section-head">
+      <h2>Assembler le mod</h2>
+      <p>Copie tout ce qui a été modifié dans <code>mods/&lt;nom&gt;/romfs/</code> avec son
+         chemin d'origine, plus un manifeste lisible.</p>
+    </div>
+    <form class="creator" id="mod-form">
+      <label>Nom du mod<input name="name" value="HookyMod" required></label>
+      <button type="submit" class="primary">Assembler</button>
+    </form>
+    <div class="panel"><ul class="list" id="mod-log"><li class="muted">rien pour l'instant.</li></ul></div>
+  </section>
+</main>
+
+<aside class="detail" id="detail" hidden>
+  <button class="close" id="detail-close" aria-label="fermer">✕</button>
+  <div id="detail-body"></div>
+</aside>
+
+<div class="toasts" id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

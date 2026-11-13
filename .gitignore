@@ -26,3 +26,6 @@ previews/
 *.bntx.zs
 *.zsdic
 *.nup
+# HookyCreator (démo locale, dossier de travail)
+demo/
+hookycreator_work/

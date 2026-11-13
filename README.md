@@ -80,6 +80,17 @@ python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
   dictionnaire et **met à jour la table des tailles** : le résultat est directement
   un mod `mods/<nom>/romfs/...` pour Hookshot.
 
+### 🧪 HookyCreator — l'atelier de contenu
+
+```bash
+python -m hookycreator dump/romfs --open     # http://127.0.0.1:8765/
+```
+
+Application web locale (aucune installation, pas de Tkinter) pour **créer** :
+textures remplacées, modèles envoyés vers Blender, fiches de mobs, et
+assemblage d'un dossier `mods/<nom>/romfs/` prêt à charger. Détails et feuille
+de route : `docs/HOOKYCREATOR.md`.
+
 ### 🧩 Modèle → Blender (aller simple, sans add-on)
 
 ```bash
