@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import io
+import struct
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -65,6 +67,17 @@ class ParseTests(unittest.TestCase):
     def test_verify(self):
         self.assertEqual(self.package.verify(), [])
         self.assertEqual(self.package.verify(deep=True), [])
+
+    def test_toc_hash_is_checked_even_without_deep_content_verification(self):
+        corrupted = bytearray(self.data)
+        toc = struct.unpack_from("<Q", corrupted, 8)[0]
+        corrupted[toc + 0x30 + 20] ^= 1  # version du titre, tables toujours lisibles
+        package = nup.NupPackage.from_bytes(bytes(corrupted))
+        self.assertIn("TOC : SHA-256 différent", package.verify())
+        self.assertIn("TOC : SHA-256 différent", package.verify(deep=True))
+        no_hash = bytearray(self.data)
+        no_hash[0x18:0x38] = bytes(32)
+        self.assertEqual(nup.NupPackage.from_bytes(bytes(no_hash)).verify(), [])
 
     def test_frame_content_size(self):
         frame = synth_nup.synth.compress(b"A" * 4096)
@@ -125,6 +138,60 @@ class ExtractTests(unittest.TestCase):
         self.assertFalse(package.verify_sha256(entry))
         self.assertIn("SHA-256 différent", " ".join(package.verify(deep=True)))
 
+    def test_unsafe_path_is_reported_and_never_written_outside(self):
+        raw = synth_nup.make_nup({"romfs": {"..": {"evasion.bin": b"mauvais"},
+                                               "bon.bin": b"bon"}})
+        package = nup.NupPackage.from_bytes(raw)
+        destination = self.root / "sortie"
+        result = package.extract(destination)
+        self.assertEqual(result.count, 1)
+        self.assertEqual((destination / "romfs" / "bon.bin").read_bytes(), b"bon")
+        self.assertEqual(len(result.problems), 1)
+        self.assertIn("Chemin de sortie refusé", result.problems[0])
+        self.assertFalse((self.root / "evasion.bin").exists())
+        self.assertFalse((destination / "evasion.bin").exists())
+        with self.assertRaisesRegex(FormatError, "Chemin de sortie refusé"):
+            package.extract(self.root / "autre", skip_bad=False)
+
+    def test_cannot_extract_over_the_source_package(self):
+        raw = synth_nup.make_nup({"romfs": {"paquet.nup": b"pas le paquet"}})
+        path = self.root / "romfs" / "paquet.nup"
+        path.parent.mkdir()
+        path.write_bytes(raw)
+        with nup.NupPackage.open(path) as package:
+            result = package.extract(self.root)
+            self.assertEqual(result.count, 0)
+            self.assertIn("paquet NUP d'origine", result.problems[0])
+            self.assertEqual(path.read_bytes(), raw)
+            with self.assertRaisesRegex(FormatError, "paquet NUP d'origine"):
+                package.extract(self.root, skip_bad=False)
+        self.assertEqual(path.read_bytes(), raw)
+
+    def test_write_errors_are_reported_or_raised_as_hooky_errors(self):
+        with patch.object(nup, "write_atomic", side_effect=PermissionError("verrouillé")):
+            result = self.package.extract(self.root, only="romfs")
+            self.assertEqual(result.count, 0)
+            self.assertEqual(len(result.problems), 4)
+            self.assertTrue(all("verrouillé" in problem for problem in result.problems))
+            with self.assertRaisesRegex(HookyError, "verrouillé"):
+                self.package.extract(self.root, only="romfs", skip_bad=False)
+
+    def test_existing_symlink_to_outside_is_refused(self):
+        package = nup.NupPackage.from_bytes(synth_nup.make_nup(
+            {"romfs": {"link": {"evasion.bin": b"mauvais"}}}))
+        destination = self.root / "sortie"
+        (destination / "romfs").mkdir(parents=True)
+        outside = self.root / "ailleurs"
+        outside.mkdir()
+        try:
+            (destination / "romfs" / "link").symlink_to(outside, target_is_directory=True)
+        except (NotImplementedError, OSError):
+            self.skipTest("liens symboliques non disponibles ou non autorisés")
+        result = package.extract(destination)
+        self.assertEqual(result.count, 0)
+        self.assertIn("Chemin de sortie refusé", result.problems[0])
+        self.assertFalse((outside / "evasion.bin").exists())
+
 
 class IdentifyTests(unittest.TestCase):
     def test_nup_magic(self):
@@ -169,6 +236,29 @@ class CliTests(unittest.TestCase):
         code, out, err = self.run_cli(["nup", str(self.package_path), "--verify", "--deep"])
         self.assertEqual(code, 0, err)
         self.assertIn("aucune anomalie", out.lower())
+        self.assertIn("empreintes absentes", out.lower())
+
+    def test_bad_toc_hash_blocks_verified_extraction(self):
+        raw = bytearray(self.package_path.read_bytes())
+        toc = struct.unpack_from("<Q", raw, 8)[0]
+        raw[toc + 0x30 + 20] ^= 1
+        self.package_path.write_bytes(raw)
+        target = self.root / "out"
+        code, out, err = self.run_cli(["nup", str(self.package_path), "--verify",
+                                       "--extract", str(target)])
+        self.assertEqual(code, 1, err)
+        self.assertIn("TOC : SHA-256 différent", out)
+        self.assertFalse(target.exists())
+
+    def test_unsafe_paths_are_reported_as_cli_errors(self):
+        self.package_path.write_bytes(synth_nup.make_nup(
+            {"romfs": {"..": {"evasion.bin": b"mauvais"}, "bon.bin": b"bon"}}))
+        target = self.root / "out"
+        code, out, err = self.run_cli(["nup", str(self.package_path), "--extract", str(target)])
+        self.assertEqual(code, 1)
+        self.assertIn("Chemin de sortie refusé", err)
+        self.assertEqual((target / "romfs" / "bon.bin").read_bytes(), b"bon")
+        self.assertFalse((target / "evasion.bin").exists())
 
 
 if __name__ == "__main__":

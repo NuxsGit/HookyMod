@@ -124,7 +124,7 @@ class PythonFallbackTests(unittest.TestCase):
             with patch.object(native, "_LIB_DIR", Path(folder)), \
                  patch.object(native, "_reason", ""), \
                  patch.dict("os.environ", {"HOOKYMOD_DISABLE_RUST": ""}):
-                for version in (1, 3, native._ABI):
+                for version in (1, 3, 4, native._ABI):
                     with self.subTest(version=version), \
                          patch.object(native.ctypes, "CDLL", return_value=Library(version)):
                         self.assertIsNone(native._load())

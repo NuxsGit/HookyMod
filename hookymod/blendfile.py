@@ -24,6 +24,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -275,13 +276,21 @@ def write_shader_script(folder, name: str = "") -> Path:
     return path
 
 
+def _blender_command(blender, script, gltf, blend) -> list[str]:
+    return [str(blender), "--background", "--factory-startup",
+            "--python", str(script), "--", str(gltf), str(blend)]
+
+
+def _display_command(command: list[str]) -> str:
+    return " ".join(f'"{part}"' if " " in part else part for part in command)
+
+
 def run_script(blender, script, gltf, blend, timeout: int = TIMEOUT) -> dict:
     """Lance Blender en tâche de fond ; rend ``{ok, output, error}``."""
-    command = [str(blender), "--background", "--factory-startup",
-               "--python", str(script), "--", str(gltf), str(blend)]
+    command = _blender_command(blender, script, gltf, blend)
     try:
         completed = subprocess.run(command, capture_output=True, text=True,
-                                   timeout=timeout)
+                                   encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"ok": False, "output": "", "command": command,
                 "error": f"Blender n'a pas terminé en {timeout} s."}
@@ -292,9 +301,13 @@ def run_script(blender, script, gltf, blend, timeout: int = TIMEOUT) -> dict:
     if completed.returncode != 0:
         return {"ok": False, "output": output, "command": command,
                 "error": f"Blender a quitté avec le code {completed.returncode}."}
-    if not Path(blend).is_file() or Path(blend).stat().st_size == 0:
+    try:
+        written = Path(blend).is_file() and Path(blend).stat().st_size > 0
+    except OSError:
+        written = False
+    if not written:
         return {"ok": False, "output": output, "command": command,
-                "error": "Blender a répondu sans écrire le .blend."}
+                "error": "Blender a répondu sans écrire un .blend lisible et non vide."}
     return {"ok": True, "output": output, "command": command, "error": ""}
 
 
@@ -315,31 +328,61 @@ def make_blend(folder, name: str, blender=None, timeout: int = TIMEOUT) -> dict:
         return {"method": "aucun", "blend": None, "script": str(script),
                 "command": None, "output": "",
                 "message": f"{gltf.name} absent : exporte d'abord le modèle."}
-    if blend.is_file():
-        try:
-            blend.unlink()          # on ne veut pas valider un ancien fichier
-        except OSError:
-            pass
+    # La commande affichée est une recette réutilisable vers le fichier final,
+    # pas le chemin temporaire utilisé lors de cet essai.
+    command = _display_command(_blender_command(executable or "blender", script, gltf, blend))
     if executable is None:
-        command = (f'blender --background --factory-startup --python "{script}" '
-                   f'-- "{gltf}" "{blend}"')
         return {"method": "script", "blend": None, "script": str(script),
                 "command": command, "output": "",
                 "message": ("Blender introuvable : lance la commande affichée, ou "
-                            "indique le chemin de blender.exe dans Réglages.")}
+                            "indique le chemin de blender.exe dans Réglages. "
+                            "Aucun nouveau .blend n'a été créé.")}
 
-    result = run_script(executable, script, gltf, blend, timeout)
-    if not result["ok"]:
-        command = " ".join(f'"{part}"' if " " in str(part) else str(part)
-                           for part in result["command"])
-        return {"method": "script", "blend": None, "script": str(script),
-                "command": command, "output": result["output"],
-                "message": f"{result['error']} Le script reste utilisable : {command}"}
-    return {"method": "blender", "blend": str(blend), "script": str(script),
-            "command": " ".join(str(part) for part in result["command"]),
-            "output": result["output"],
-            "message": f"{blend.name} écrit par Blender "
-                       f"({blend.stat().st_size // 1024} Ko)."}
+    # Le fichier temporaire vide est dans le même dossier que le résultat :
+    # les éventuelles références relatives Blender gardent ainsi leur base.
+    # Il est fermé avant le lancement (indispensable sous Windows). Un ancien
+    # fichier final ne sert jamais de preuve de réussite et n'est remplacé
+    # qu'après validation du nouveau fichier.
+    output, error, cleanup_warning = "", "", ""
+    staged = None
+    installed, size = False, 0
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".hookymod-blend-", suffix=".blend",
+                                         dir=folder, delete=False) as temporary:
+            staged = Path(temporary.name)
+        result = run_script(executable, script, gltf, staged, timeout)
+        output = result["output"]
+        if not result["ok"]:
+            error = result["error"]
+        else:
+            try:
+                size = staged.stat().st_size
+                if size == 0:
+                    raise OSError("le fichier temporaire est devenu vide")
+                staged.replace(blend)
+                installed = True
+            except OSError as exc:
+                error = f"Impossible d'installer le nouveau .blend : {exc}."
+    except OSError as exc:
+        error = f"Impossible de préparer l'export temporaire : {exc}."
+    finally:
+        if staged is not None:
+            # Blender peut créer une sauvegarde .blend1 du fichier temporaire.
+            for path in (staged, Path(str(staged) + "1")):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    cleanup_warning = f"Nettoyage temporaire incomplet : {exc}."
+    if installed:
+        message = f"{blend.name} écrit par Blender ({size // 1024} Ko)."
+        return {"method": "blender", "blend": str(blend), "script": str(script),
+                "command": command, "output": output,
+                "message": f"{message} {cleanup_warning}".strip()}
+    return {"method": "script", "blend": None, "script": str(script),
+            "command": command, "output": output,
+            "message": (f"{error} Aucun nouveau .blend confirmé ; un ancien fichier "
+                        f"éventuel est conservé. {cleanup_warning} Le script reste "
+                        f"utilisable : {command}")}
 
 
 def platform_note() -> str:

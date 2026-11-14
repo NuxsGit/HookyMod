@@ -20,8 +20,12 @@ import sys
 from array import array
 from pathlib import Path
 
-_ABI = 4
+_ABI = 5
 _U32_MAX = (1 << 32) - 1
+_U64_MAX = (1 << 64) - 1
+_BFRES_SHAPE_INPUT_LIMIT = 1024 * 1024 * 1024
+_BFRES_SHAPE_METADATA_LIMIT = 64 * 1024 * 1024
+_BFRES_SHAPE_COUNT_LIMIT = 250_000
 _SARC_INPUT_LIMIT = 1024 * 1024 * 1024
 _SARC_METADATA_LIMIT = 128 * 1024 * 1024
 _SARC_BUILD_INPUT_LIMIT = 512 * 1024 * 1024
@@ -105,6 +109,11 @@ def _load():
             ctypes.POINTER(u8p), ctypes.POINTER(size), ctypes.POINTER(u8p),
         ]
         library.hookymod_core_restbl_build.restype = ctypes.c_int32
+        library.hookymod_core_bfres_find_shapes.argtypes = [
+            u8p, size, ctypes.c_uint64,
+            ctypes.POINTER(u8p), ctypes.POINTER(size), ctypes.POINTER(u8p),
+        ]
+        library.hookymod_core_bfres_find_shapes.restype = ctypes.c_int32
         library.hookymod_core_deswizzle.argtypes = [
             u8p, size, u8p, size, u32, u32, u32, u32, u32, u32,
             ctypes.c_int32, ctypes.c_uint8, ctypes.c_uint8,
@@ -243,6 +252,71 @@ def _owned_result(library, function, arguments: tuple, limit: int) -> bytes | No
     finally:
         if handle.value:
             library.hookymod_core_buffer_free(handle)
+
+
+def bfres_find_shapes(data: bytes, base: int):
+    """Métadonnées des formes BFRES 10.x, ou ``None`` pour le repli Python.
+
+    Les noms sont des offsets dans l'entrée immuable : leurs bornes et celles
+    des autres champs sont revérifiées avant de construire des objets Python.
+    """
+    library = _lib
+    if (library is None or type(data) is not bytes or len(data) > _BFRES_SHAPE_INPUT_LIMIT
+            or type(base) is not int or not 0 <= base <= _U64_MAX):
+        return None
+    source, owner = _source(data)
+    metadata = _owned_result(library, library.hookymod_core_bfres_find_shapes,
+                             (source, len(data), base), _BFRES_SHAPE_METADATA_LIMIT)
+    del owner
+    if metadata is None:
+        return None
+    try:
+        header = struct.Struct("<4sI")
+        shape_record = struct.Struct("<QQIQQQII")
+        attribute_record = struct.Struct("<IIIII")
+        magic, count = header.unpack_from(metadata)
+        if (magic != b"FSP1" or count > _BFRES_SHAPE_COUNT_LIMIT
+                or count > (len(metadata) - header.size) // (shape_record.size + 2 * attribute_record.size)):
+            return None
+        shapes = []
+        pos = header.size
+        for _ in range(count):
+            offset, stride, relative, vertex, vertices, data_end, flags, attr_count = \
+                shape_record.unpack_from(metadata, pos)
+            pos += shape_record.size
+            declared = flags & 0xff
+            if (offset % 4 or offset + 0x50 > len(data) or data[offset:offset + 4] != b"FVTX"
+                    or not relative or vertex != base + relative or vertex >= len(data)
+                    or stride < 4 or stride % 4 or not 2 <= attr_count <= 32
+                    or (declared and attr_count != declared)
+                    or (shapes and vertex <= shapes[-1][3])):
+                return None
+            attributes = []
+            for _ in range(attr_count):
+                start, length, fmt, attr_offset, size = attribute_record.unpack_from(metadata, pos)
+                pos += attribute_record.size
+                end = start + length
+                if (start < 2 or not 1 <= length < 64 or end > len(data)
+                        or any(byte < 0x20 or byte > 0x7e for byte in data[start:end])
+                        or not size):
+                    return None
+                if attributes and (attr_offset <= attributes[-1][2]
+                                   or attributes[-1][3] != attr_offset - attributes[-1][2]):
+                    return None
+                attributes.append((data[start:end].decode("ascii"), fmt, attr_offset, size))
+            calculated = max(attr_offset + size for _, _, attr_offset, size in attributes)
+            if stride != (calculated + 3) // 4 * 4:
+                return None
+            shapes.append((offset, stride, relative, vertex, vertices, data_end, flags, attributes))
+        if pos != len(metadata):
+            return None
+        for index, shape in enumerate(shapes):
+            next_vertex = shapes[index + 1][3] if index + 1 < len(shapes) else len(data)
+            if shape[4] != (next_vertex - shape[3]) // shape[1]:
+                return None
+        return shapes
+    except (struct.error, UnicodeDecodeError, OverflowError, ValueError):
+        return None
 
 
 def sarc_parse(data: bytes):

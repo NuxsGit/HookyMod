@@ -403,8 +403,16 @@ class NupPackage:
 
     # ------------------------------------------------------------------ contrôle
     def verify(self, title: int | str | None = None, deep: bool = False) -> list[str]:
-        """Liste des anomalies ; liste vide = paquet sain."""
+        """Liste les anomalies détectées ; une empreinte absente ne peut être vérifiée."""
         problems: list[str] = []
+        if any(self.toc_sha256):
+            try:
+                toc = self._read_at(self.toc_offset, self.toc_size)
+            except (HookyError, OSError) as exc:
+                problems.append(f"TOC illisible : {exc}")
+            else:
+                if hashlib.sha256(toc).digest() != self.toc_sha256:
+                    problems.append("TOC : SHA-256 différent")
         titles = [self.title(title)] if title is not None else self.titles
         total = 0
         for chosen in titles:
@@ -438,22 +446,39 @@ class NupPackage:
                 only: str | None = None,
                 progress: Callable[[int, int], None] | None = None,
                 skip_bad: bool = True) -> ExtractResult:
-        """Écrit les fichiers du titre sous ``destination/<part>/<chemin>``."""
+        """Écrit les fichiers du titre sous ``destination/<part>/<chemin>``.
+
+        Les chemins refusés et les erreurs d'écriture sont ajoutés aux
+        problèmes quand ``skip_bad`` est vrai ; sinon une erreur est levée.
+        Les fichiers ordinaires déjà présents peuvent être remplacés, mais
+        l'écrasement du paquet source est refusé. L'extraction n'est pas globale-
+        ment transactionnelle : les fichiers précédents restent en cas d'erreur.
+        """
         root = Path(destination)
         entries = list(self.members(title, only))
+        try:
+            source = self.path.resolve() if self.path is not None else None
+        except (OSError, RuntimeError) as exc:
+            raise HookyError(f"Chemin du paquet inaccessible : {exc}") from exc
         result = ExtractResult()
         total = len(entries)
         for index, (rel, entry) in enumerate(entries, 1):
             try:
+                target = safe_child(root, rel)
+                if target is None:
+                    raise FormatError("Chemin de sortie refusé (hors du dossier d'extraction).")
+                if source is not None and target == source:
+                    raise FormatError("Le fichier extrait écraserait le paquet NUP d'origine.")
                 data = self.read(entry)
-            except HookyError as exc:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                write_atomic(target, data)
+            except (HookyError, OSError, ValueError, RuntimeError) as exc:
                 result.problems.append(f"{rel} : {exc}")
                 if not skip_bad:
-                    raise
+                    if isinstance(exc, HookyError):
+                        raise
+                    raise HookyError(f"Extraction impossible pour « {rel} » : {exc}") from exc
                 continue
-            target = safe_child(root, rel)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            write_atomic(target, data)
             result.count += 1
             result.total_bytes += len(data)
             if rel.endswith(".zs") and not data.startswith(ZSTD_MAGIC):

@@ -1576,6 +1576,7 @@ function renderEngine() {
   list.innerHTML = `
     <li><span class="k">Moteur Rust</span><b>${rust.available ? "actif" : "inactif"}</b></li>
     <li><span class="k">Rendu des aperçus</span><b>${renderer}</b></li>
+    <li><span class="k">Tables de formes BFRES 10</span><b>${geometry}</b></li>
     <li><span class="k">Indices et positions BFRES 10</span><b>${geometry}</b></li>
     <li><span class="k">Filtre des triangles BFRES 10</span><b>${geometry}</b></li>
     <li><span class="k">Disposition des textures</span><b>${esc(texture.deswizzle || "Python")}</b></li>

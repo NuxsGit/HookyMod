@@ -18,8 +18,9 @@ Elles ne contiennent aucun fichier du jeu.
   copyright Frank Denis, voir `hmac-sha256/LICENSE`. SHA-256 sert à vérifier
   l'intégrité des en-têtes et entrées NUP quand leurs empreintes sont fournies.
 
-Les fichiers README et les sources proviennent des tags amont, avec des
-corrections locales dans `ruzstd` :
+Les fichiers README et les sources proviennent des tags amont. Dans le README
+`ruzstd`, deux espaces de fin de ligne ont été retirés ; les autres corrections
+locales de `ruzstd` concernent le code :
 
 * les deux bits réservés des modes de séquence sont vérifiés (RFC 8878
   §3.1.1.3.2.1). Sans ce contrôle, certaines trames corrompues étaient

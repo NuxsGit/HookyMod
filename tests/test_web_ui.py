@@ -92,6 +92,7 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('payload.engine', self.js)
         self.assertIn('renderEngine()', self.js)
         self.assertIn('texture.deswizzle', self.js)
+        self.assertIn('Tables de formes BFRES 10', self.js)
         self.assertIn('zstd.label', self.js)
         self.assertIn('Décompression Zstandard', self.js)
         self.assertIn('sarc.label', self.js)

@@ -23,7 +23,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::slice;
 
-const ABI_VERSION: u32 = 4;
+const ABI_VERSION: u32 = 5;
 const MAX_INPUT: usize = 1024 * 1024 * 1024;
 
 type CoreResult = Result<(), ()>;
@@ -175,6 +175,57 @@ pub unsafe extern "C" fn hookymod_core_buffer_free(handle: *mut c_void) {
 pub unsafe extern "C" fn hookymod_core_zstd_free(handle: *mut c_void) {
     // SAFETY: les deux fonctions utilisent le même type de handle.
     unsafe { hookymod_core_buffer_free(handle) };
+}
+
+/// Lit les formes BFRES 10.x par les heuristiques existantes. Zéro = succès ;
+/// toute autre valeur demande le repli Python. Les métadonnées sont bornées.
+///
+/// # Safety
+/// L'entrée et les champs de sortie doivent respecter le contrat de
+/// `hookymod_core_zstd_decompress` ; libérer le handle avec `buffer_free`.
+#[no_mangle]
+pub unsafe extern "C" fn hookymod_core_bfres_find_shapes(
+    source: *const u8,
+    source_len: usize,
+    buffer_base: u64,
+    result_data: *mut *const u8,
+    result_len: *mut usize,
+    result_handle: *mut *mut c_void,
+) -> i32 {
+    if result_data.is_null() || result_len.is_null() || result_handle.is_null() {
+        return 1;
+    }
+    // SAFETY: les champs de sortie sont valides et distincts selon le contrat.
+    unsafe {
+        *result_data = ptr::null();
+        *result_len = 0;
+        *result_handle = ptr::null_mut();
+    }
+    guarded(|| {
+        if source_len > MAX_INPUT
+            || source_len > isize::MAX as usize
+            || (source_len != 0 && source.is_null())
+        {
+            return Err(());
+        }
+        // SAFETY: le tampon est valide et immuable pendant l'appel.
+        let source = if source_len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(source, source_len) }
+        };
+        let owned = Box::new(bfres::find_shapes(source, buffer_base)?);
+        let data = owned.as_ptr();
+        let len = owned.len();
+        let handle = Box::into_raw(owned).cast::<c_void>();
+        // SAFETY: champs de sortie distincts garantis par l'appelant.
+        unsafe {
+            *result_data = data;
+            *result_len = len;
+            *result_handle = handle;
+        }
+        Ok(())
+    })
 }
 
 /// Lit les métadonnées SARC. Zéro = succès ; sinon repli Python requis.
@@ -724,6 +775,37 @@ pub unsafe extern "C" fn hookymod_core_rasterize(
 #[cfg(test)]
 mod ffi_tests {
     use super::*;
+
+    #[test]
+    fn bfres_shape_ffi_owns_metadata_and_clears_failures() {
+        let mut data = ptr::null();
+        let mut length = 0usize;
+        let mut handle: *mut c_void = ptr::null_mut();
+        // SAFETY: une entrée vide peut être nulle ; les champs sont distincts.
+        let result = unsafe {
+            hookymod_core_bfres_find_shapes(ptr::null(), 0, 0, &mut data, &mut length, &mut handle)
+        };
+        assert_eq!(result, 0);
+        assert!(!handle.is_null());
+        // SAFETY: le handle maintient les octets vivants jusqu'à libération.
+        assert_eq!(
+            unsafe { slice::from_raw_parts(data, length) },
+            b"FSP1\0\0\0\0"
+        );
+        // SAFETY: le handle retourné n'est libéré qu'une fois.
+        unsafe { hookymod_core_buffer_free(handle) };
+        data = ptr::dangling();
+        length = 42;
+        handle = ptr::dangling_mut::<c_void>();
+        // SAFETY: les sorties sont valides ; l'entrée nulle non vide est refusée.
+        let result = unsafe {
+            hookymod_core_bfres_find_shapes(ptr::null(), 1, 0, &mut data, &mut length, &mut handle)
+        };
+        assert_ne!(result, 0);
+        assert!(data.is_null());
+        assert_eq!(length, 0);
+        assert!(handle.is_null());
+    }
 
     #[test]
     fn zstd_result_has_explicit_lifetime_and_failures_clear_outputs() {

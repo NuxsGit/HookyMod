@@ -756,9 +756,11 @@ def cmd_nup(args) -> int:
                 for problem in problems:
                     print(f"  • {problem}")
                 return 1
-            print("Paquet sain : aucune anomalie (TOC, bornes"
-                  + ", SHA-256 et en-têtes .zs)" if args.deep else
-                  "Paquet sain : aucune anomalie (TOC et bornes)")
+            if args.deep:
+                print("Aucune anomalie détectée (TOC, bornes, SHA-256 présents et "
+                      "en-têtes .zs). Les empreintes absentes ne sont pas vérifiées.")
+            else:
+                print("Aucune anomalie détectée (TOC et bornes ; contenus non vérifiés).")
             if not args.extract and not args.list:
                 return 0
         if args.list or not args.extract:

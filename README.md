@@ -37,9 +37,15 @@ python -m hookymod.cli nup game.nup --verify --deep --extract dump --only romfs
 ```
 
 * liste des titres, `exefs/` et `romfs/`, codec par fichier (brut ou zstd) ;
-* extraction fidèle (décompression des membres compressés par le paquet, sans toucher aux
-  `.zs` du jeu qui sont déjà des frames zstd), contrôle SHA-256 et en-têtes `.zs` ;
-* le romfs extrait s'ouvre ensuite dans l'explorateur, comme n'importe quel dump.
+* extraction des membres compressés par le paquet, sans toucher aux `.zs` du jeu ;
+  `--verify --deep` contrôle les empreintes SHA-256 présentes et les en-têtes `.zs` ;
+* le romfs extrait peut ensuite s'ouvrir dans l'explorateur, comme un dump.
+
+Utilise de préférence un **dossier de destination vide** : l'extraction peut remplacer
+les fichiers existants et laisser une sortie partielle en cas d'erreur. Les chemins hors
+cible et le remplacement du paquet source sont refusés. Une empreinte absente ne peut pas
+être vérifiée. Le lecteur NUP a été testé ici sur des paquets synthétiques, pas encore sur
+un paquet réel.
 
 Pour le modding, l'export écrit `romfs/<chemin>` (donc `mods/<nom>/romfs/...` pour
 Hookshot) et **agrandit automatiquement la table des tailles de ressources** quand un
