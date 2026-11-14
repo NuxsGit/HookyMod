@@ -96,6 +96,31 @@ def main():
     show("Lecture RESTBL (50 000 entrées)", py_read_ms, rust_read_ms)
     show("Reconstruction RESTBL (50 000 entrées)", py_write_ms, rust_write_ms)
 
+    # Recherche et tables FVTX synthétiques, sans décodage géométrique. Les
+    # tampons sont espacés pour exercer aussi le calcul des nombres de sommets.
+    bfres = bytearray(4 * 1024 * 1024)
+    for at, name in ((0x140, b"_p0"), (0x150, b"_u0")):
+        struct.pack_into("<H", bfres, at, len(name))
+        bfres[at + 2:at + 2 + len(name)] = name
+    for at, name, fmt, offset in ((0x100, 0x140, 0x1805, 0),
+                                  (0x110, 0x150, 0x1201, 12)):
+        struct.pack_into("<IIII", bfres, at, name, 0, fmt, offset)
+    base = 0x4000
+    for index in range(64):
+        at = 0x200 + index * 0x50
+        bfres[at:at + 4] = b"FVTX"
+        struct.pack_into("<Q", bfres, at + 0x08, 0x100)
+        struct.pack_into("<Q", bfres, at + 0x18, len(bfres))
+        struct.pack_into("<II", bfres, at + 0x48, 0x1000 + index * 0x4000, 2)
+    bfres = bytes(bfres)
+    shapes = lambda: bfres_v10.find_shapes(bfres, base)
+    with patch.object(native, "available", return_value=False):
+        py_ms, py = timed(shapes, 5)
+    assert native.bfres_find_shapes(bfres, base) is not None, "tables BFRES Rust refusées"
+    rust_ms, fast = timed(shapes, 5)
+    assert py == fast and len(py) == 64, "tables BFRES différentes"
+    show("Tables BFRES (64 formes, 4 Mio)", py_ms, rust_ms)
+
     size = 1024
     packed_size = bntx.surface_size(size, size, 4, 4, 16, 0, 4)
     packed = rng.randbytes(packed_size)

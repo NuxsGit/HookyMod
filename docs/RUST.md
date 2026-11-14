@@ -31,6 +31,8 @@ La bibliothèque doit être compilée pour la **même architecture** que Python.
 Le script vérifie son chargement avant de l'installer dans
 `hookymod/_native_lib/`. Ce dossier est local et ignoré par Git : il faut donc
 recompiler après une nouvelle copie du dépôt ou un changement du code Rust.
+La version actuelle utilise l'**ABI 5** : si une ancienne DLL est encore
+présente, l'application la refuse et fonctionne en Python jusqu'à recompilation.
 Les dépendances Rust (`ruzstd` et `twox-hash` sous licence MIT,
 `hmac-sha256` sous licence ISC) sont incluses dans
 [`rust/vendor/`](../rust/vendor/README.md) :
@@ -50,6 +52,7 @@ La compilation exige Rust **1.87 ou plus récent**.
 | Encodage BC1/BC3/BC4/BC5, pixels non compressés et mips | Rust pour les formats déjà encodables, repli Python ; les octets produits restent identiques |
 | BC6 / BC7 / ASTC en lecture | `texture2ddecoder` reste nécessaire |
 | Rastérisation 3D, profondeur et réduction anticrénelée | Rust ; projection, éclairage et sélection des faces restent en Python |
+| Tables de formes et d'attributs BFRES 10.x | Recherche et validation heuristique Rust pour les octets compatibles, repli Python ; objets et reste de la lecture toujours en Python |
 | Indices et positions BFRES 10.x | Rust pour les gros tampons compatibles, avec les mêmes arrêts et sous-maillages ; repli Python |
 | Filtre des triangles BFRES 10.x | Rust pour les gros lots compatibles ; mêmes seuils et mêmes indices que le filtre Python |
 | Décompression Zstandard | Rust via `ZstdDicts` lorsque compatible, sinon repli `zstandard` ; certaines lectures directes restent en `zstandard` |
@@ -61,9 +64,14 @@ La compilation exige Rust **1.87 ou plus récent**.
 
 Le moteur ne modifie pas la géométrie exportée autrement que par les contrôles
 BFRES existants. Ses entrées sont vérifiées et les cas non pris en charge
-reviennent au chemin Python. Les tampons de conversion géométrique sont bornés ;
-les réglages mémoire des aperçus restent appliqués. La reconstruction
-BFRES 10.x depuis un `.blend` n'est **pas** rendue possible par ce portage :
+reviennent au chemin Python. La recherche des formes BFRES 10.x conserve les
+heuristiques existantes : elle ne constitue ni un parseur BFRES complet ni une
+garantie que tous les modèles seront correctement interprétés. Elle accepte
+1 Gio d'entrée et 64 Mio de métadonnées au maximum (250 000 formes) ; au-delà,
+ou si les règles Python de formats sont modifiées, le chemin Python prend le
+relais. Les tampons de conversion géométrique sont bornés ; les réglages mémoire
+des aperçus restent appliqués. La reconstruction BFRES 10.x depuis un `.blend`
+n'est **pas** rendue possible par ce portage :
 elle est toujours refusée lorsqu'elle ne peut pas être vérifiée.
 
 ## Commandes Rust autonomes (expérimental)
@@ -159,15 +167,17 @@ py -3 tools\benchmark_rust.py
 
 La suite compare Rust au repli Python sur des textures synthétiques X1/Orin,
 des fichiers tronqués, le décodage et l'encodage BCn, les mips, des aperçus 3D
-et des BFRES synthétiques. Elle compare aussi la lecture/reconstruction SARC
-native au Python historique, y compris les archives imbriquées, les mutations,
-les avertissements, les types inhabituels et les appels concurrents. Ils
-comparent aussi la lecture/reconstruction RESTBL, les doublons et les queues
-opaques. Les tests vérifient les BNTX, SARC et RESTBL construits, les NUP synthétiques
-(arborescences, extractions, empreintes et erreurs), et
-compare la décompression/compression Zstandard indépendante avec `zstandard`
-(dictionnaires, checksums, trames multiples et erreurs). Les tests CLI exigent
-que l'exécutable release ait été compilé auparavant. La CI
+et des BFRES synthétiques. Les tables de formes BFRES sont également comparées
+au Python sur des entrées tronquées ou mutées, les doublons de tampons, les
+formats connus et les règles modifiées. Elle compare aussi la lecture et la
+reconstruction SARC natives au Python historique, y compris les archives
+imbriquées, les mutations, les avertissements, les types inhabituels et les
+appels concurrents. Elle compare aussi la lecture/reconstruction RESTBL, les
+doublons et les queues opaques. Les tests vérifient les BNTX, SARC et RESTBL
+construits, les NUP synthétiques (arborescences, extractions, empreintes et
+erreurs), et comparent la décompression/compression Zstandard indépendante
+avec `zstandard` (dictionnaires, checksums, trames multiples et erreurs). Les
+tests CLI exigent que l'exécutable release ait été compilé auparavant. La CI
 `.github/workflows/rust-core.yml` est prévue pour compiler et exécuter les suites
 avec et sans Rust sous Linux et Windows. Pour forcer le repli localement :
 

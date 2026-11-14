@@ -92,6 +92,10 @@ _KIND_PREFIXES: tuple[tuple[str, str], ...] = (
     ("_i", "index"),
     ("_w", "weight"),
 )
+# Le lecteur natif reproduit ces règles au moment de la compilation. Si un
+# outil externe les modifie à l'exécution, conserver le comportement Python.
+_NATIVE_SHAPE_FORMATS = FORMAT_SIZES.copy()
+_NATIVE_SHAPE_PREFIXES = _KIND_PREFIXES
 
 
 @dataclass
@@ -297,9 +301,19 @@ def find_shapes(data: bytes, base: int) -> list[VertexShape]:
     """Toutes les formes du fichier, dans l'ordre des tampons.
 
     On balaye les signatures ``FVTX`` puis on ne garde que celles qui passent
-    la validation ci-dessus : une fausse signature au milieu des tampons ne
-    peut pas produire une table d'attributs cohérente.
+    la validation ci-dessus. Cela écarte beaucoup de fausses signatures, sans
+    garantir qu'une table apparemment cohérente décrive la géométrie réelle.
     """
+    if (type(data) is bytes and FORMAT_SIZES == _NATIVE_SHAPE_FORMATS
+            and _KIND_PREFIXES == _NATIVE_SHAPE_PREFIXES and native.available()):
+        parsed = native.bfres_find_shapes(data, base)
+        if parsed is not None:
+            return [VertexShape(
+                offset=offset, stride=stride, buffer_offset=relative,
+                vertex_offset=vertex, vertex_count=count, data_end=data_end, flags=flags,
+                attributes=[VertexAttribute(name, fmt, attr_offset, size, _kind_of(name, fmt))
+                            for name, fmt, attr_offset, size in attributes])
+                    for offset, stride, relative, vertex, count, data_end, flags, attributes in parsed]
     shapes: dict[int, VertexShape] = {}
     start = 0
     while True:
