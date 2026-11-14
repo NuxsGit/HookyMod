@@ -92,3 +92,28 @@ format, offset, pas) au lieu de supposer une disposition. Conséquence :
   d'indices ignorés, LOD inférieurs inclus, attributs non décodés.
 
 Détail des mesures et méthode : `docs/trainIA/README.md`.
+
+## Budget mémoire et culling
+
+Un aperçu 3D coûte de la mémoire même sans carte graphique : chaque sommet et
+chaque face est copié dans une structure de rendu, et l'image garde un tampon
+de couleurs plus un tampon de profondeur. Sur un modèle de plusieurs centaines
+de milliers de faces, cela suffit à faire tomber la machine.
+
+L'onglet **Réglages** fixe donc un **budget**, en gigaoctets :
+
+* **6 Go par défaut**, réglable de 1 à **25 Go** ;
+* anticrénelage ×1 à ×4, plafond de faces facultatif ;
+* culling des faces arrière et culling hors écran, activables séparément ;
+* dégradation automatique activable — sinon l'aperçu est refusé net.
+
+La dégradation suit un ordre fixe et **le dit** : d'abord l'anticrénelage
+redescend, ensuite le nombre de faces dessinées est limité au prorata, et si
+même cela ne rentre pas, l'aperçu est refusé avec les chiffres exacts (« il
+faudrait 8,2 Go pour un budget de 6 Go »). Le panneau du modèle affiche
+l'estimation en direct, la part du budget utilisée et les décisions prises.
+
+Côté code : `hookycreator/settings.py` (bornes et persistance dans
+`work/settings.json`), `hookycreator/vram.py` (estimation, plan, découpe des
+maillages), `hookymod/render.py` (`frustum=` pour l'élagage hors écran).
+L'API expose `/api/settings` (GET/POST) et `/api/model/plan`.

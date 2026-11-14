@@ -22,6 +22,7 @@
     <button class="nav" data-view="models"><span>◭</span>Modèles</button>
     <button class="nav" data-view="mobs"><span>✦</span>Mobs</button>
     <button class="nav" data-view="mod"><span>⤓</span>Mod</button>
+    <button class="nav" data-view="settings"><span>⚙</span>Réglages</button>
   </nav>
   <footer>
     <div id="dict-state" class="pill">dictionnaires…</div>
@@ -49,6 +50,7 @@
         <button class="card-action" data-goto="mobs"><b>Créer un mob</b><span>copier un modèle + ses textures sous un nouveau nom</span></button>
         <button class="card-action" data-goto="models"><b>Ouvrir un modèle</b><span>aperçu 3D, export glTF pour Blender</span></button>
         <button class="card-action" data-goto="mod"><b>Assembler le mod</b><span>romfs/ + manifeste, prêt pour le jeu</span></button>
+        <button class="card-action" data-goto="settings"><b>Régler la mémoire</b><span>budget 6 Go par défaut, jusqu'à 25 Go, culling inclus</span></button>
       </div>
     </div>
     <div class="panel" id="home-bulk">
@@ -85,9 +87,84 @@
   <section class="view" id="view-models" hidden>
     <div class="section-head">
       <h2>Modèles</h2>
-      <p>Aperçu rendu côté serveur, puis export glTF/OBJ pour Blender.</p>
+      <p>Aperçu rendu côté serveur dans le budget mémoire choisi, puis export glTF/OBJ pour Blender.</p>
     </div>
     <div class="grid" id="model-grid"></div>
+  </section>
+
+  <section class="view" id="view-settings" hidden>
+    <div class="section-head">
+      <h2>Réglages</h2>
+      <p>Le budget mémoire évite de faire tomber la machine sur un gros modèle&nbsp;:
+         6 Go par défaut, réglable jusqu'à 25 Go. Le rendu se dégrade avant de refuser.</p>
+    </div>
+    <div class="settings-grid">
+      <div class="panel">
+        <h2>Budget mémoire</h2>
+        <div class="field" style="margin-top:12px">
+          <div class="row">
+            <label for="set-vram">Budget des aperçus</label>
+            <output id="set-vram-out">6 Go</output>
+          </div>
+          <input type="range" id="set-vram" min="1" max="25" step="0.5" value="6">
+          <div class="gauge">
+            <div class="bar"><div id="set-vram-fill"></div></div>
+            <div class="legend"><span>1 Go</span><span>25 Go</span></div>
+          </div>
+          <p class="hint">Au-delà de ce budget, l'anticrénelage baisse, puis le nombre de
+             faces dessinées est limité, et si rien ne rentre l'aperçu est refusé avec
+             les chiffres exacts.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Qualité et culling</h2>
+        <div class="field" style="margin-top:12px;gap:12px">
+          <div class="row">
+            <label for="set-ss">Anticrénelage</label>
+            <output id="set-ss-out">×2</output>
+          </div>
+          <input type="range" id="set-ss" min="1" max="4" step="1" value="2">
+          <label class="switch">
+            <input type="checkbox" id="set-cull" checked>
+            <span class="track"></span>
+            <span class="text"><b>Culling des faces arrière</b>
+              <small>écarte ce qui est vu de dos</small></span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="set-frustum" checked>
+            <span class="track"></span>
+            <span class="text"><b>Culling hors écran</b>
+              <small>ne projette pas ce qui sort du cadre</small></span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="set-adaptive" checked>
+            <span class="track"></span>
+            <span class="text"><b>Dégradation automatique</b>
+              <small>baisser la qualité plutôt que planter</small></span>
+          </label>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Plafond de faces</h2>
+        <div class="field" style="margin-top:12px">
+          <div class="row">
+            <label for="set-faces">Faces dessinées par aperçu</label>
+            <output id="set-faces-out">auto</output>
+          </div>
+          <input type="range" id="set-faces" min="0" max="300000" step="500" value="0">
+          <p class="hint">0 = automatique (le budget décide). Un plafond explicite rend les
+             aperçus de très gros modèles plus rapides, au prix d'une image partielle :
+             c'est écrit dans le panneau du modèle.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Ce que ça donne</h2>
+        <ul class="list" id="settings-summary"><li class="muted">chargement…</li></ul>
+        <div class="actions">
+          <button class="ghost" id="set-reset">Revenir aux valeurs par défaut</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="view" id="view-mobs" hidden>

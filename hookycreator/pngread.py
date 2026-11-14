@@ -20,9 +20,12 @@ def _pil_decode(data: bytes):
         return None
     import io
 
-    with Image.open(io.BytesIO(data)) as image:
-        rgba = image.convert("RGBA")
-        return rgba.width, rgba.height, rgba.tobytes()
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            rgba = image.convert("RGBA")
+            return rgba.width, rgba.height, rgba.tobytes()
+    except Exception:                # format inconnu, fichier tronqué…
+        return None                  # le décodeur PNG maison prend le relais
 
 
 def _paeth(a: int, b: int, c: int) -> int:

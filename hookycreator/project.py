@@ -22,6 +22,9 @@ from hookymod import bntx as bntx_mod
 from hookymod import bntx_encode, blender, render, util, zs
 from hookymod.mesh import MeshData
 
+from .settings import Settings, SettingsError
+from . import vram
+
 MODEL_SUFFIXES = (".bfres.zs", ".bfres")
 TEXTURE_SUFFIXES = (".bntx.zs", ".bntx")
 MAX_SCAN_FILES = 40_000
@@ -69,6 +72,23 @@ class Project:
         self.work.mkdir(parents=True, exist_ok=True)
         (self.work / "cache").mkdir(exist_ok=True)
         (self.work / "mobs").mkdir(exist_ok=True)
+        self.settings = Settings.load(self.settings_path)
+
+    # ------------------------------------------------------------------ réglages
+    @property
+    def settings_path(self) -> Path:
+        return self.work / "settings.json"
+
+    def update_settings(self, payload: dict) -> dict:
+        """Applique des réglages venus de l'interface, les valide et les écrit."""
+        try:
+            merged = self.settings.as_json() | payload
+            self.settings = Settings.from_json(merged)
+        except SettingsError as error:
+            raise ProjectError(str(error)) from None
+        self.settings.save(self.settings_path)
+        self._cache.pop(("meshes",), None)
+        return self.settings.as_json()
 
     # ------------------------------------------------------------------ fichiers
     def asset(self, rel: str) -> Path:
@@ -297,13 +317,33 @@ class Project:
             self._cache[key] = bfres_mod.meshes_from_file(file)
         return self._cache[key]
 
+    def preview_plan(self, rel: str, width: int = 640, height: int = 480,
+                     face_limit: int | None = None) -> dict:
+        """Chiffre ce que coûterait l'aperçu avant de le rendre."""
+        meshes = self._model_meshes(rel)
+        try:
+            planned = vram.plan(self.settings, meshes, width, height, face_limit)
+        except vram.BudgetError as error:
+            raise ProjectError(str(error)) from None
+        return planned.as_json()
+
     def model_preview(self, rel: str, width: int = 640, height: int = 480,
                       yaw: float = 0.7, pitch: float = -0.35,
-                      views: int = 1) -> bytes:
+                      views: int = 1, face_limit: int | None = None) -> bytes:
+        """Rend un aperçu **dans le budget mémoire** réglé par l'utilisateur."""
         meshes = self._model_meshes(rel)
+        try:
+            planned = vram.plan(self.settings, meshes, width, height, face_limit)
+        except vram.BudgetError as error:
+            raise ProjectError(str(error)) from None
+        drawn = vram.trim(meshes, planned.face_limit)
+        options = dict(zoom=1.0, cull=self.settings.cull,
+                       frustum=self.settings.frustum,
+                       supersample=planned.supersample)
         if views and views > 1:
-            return render.turntable_png(meshes, views=views, width=width, height=height)
-        return render.render_png(meshes, width, height, yaw, pitch, supersample=2)
+            return render.turntable_png(drawn, views=views, width=width,
+                                        height=height, **options)
+        return render.render_png(drawn, width, height, yaw, pitch, **options)
 
     def export_model(self, rel: str, textures: bool = True) -> dict:
         meshes = self._model_meshes(rel)
@@ -443,6 +483,7 @@ class Project:
             "mobs": self.list_mobs(),
             "dicts": len(self._load_dicts()),
             "zstd": zs.zstd_available(),
+            "settings": self.settings.as_json(),
             "edited": sorted(
                 str(p.relative_to(self.work / "assets"))
                 for p in (self.work / "assets").rglob("*") if p.is_file()

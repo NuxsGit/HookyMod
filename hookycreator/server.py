@@ -69,6 +69,19 @@ class HookyCreatorServer:
         if route == "/api/state":
             return _json({"project": project.state()})
 
+        if route == "/api/settings":
+            if method == "POST":
+                return _json({"settings": project.update_settings(body or {})})
+            return _json({"settings": project.settings.as_json()})
+
+        if route == "/api/model/plan":
+            width = _size(query, "w", 640)
+            height = _size(query, "h", 480)
+            faces = query.get("faces", [None])[0]
+            plan = project.preview_plan(query["path"][0], width, height,
+                                        int(faces) if faces else None)
+            return _json({"plan": plan, "settings": project.settings.as_json()})
+
         if route == "/api/textures":
             entries = [a.as_json() for a in project.by_kind("texture")]
             return _json({"textures": entries})
@@ -101,13 +114,15 @@ class HookyCreatorServer:
             return _json(project.model_info(query["path"][0]))
 
         if route == "/api/model/preview":
-            width = max(64, min(1600, int(query.get("w", ["640"])[0])))
-            height = max(64, min(1600, int(query.get("h", ["480"])[0])))
+            width = _size(query, "w", 640)
+            height = _size(query, "h", 480)
             yaw = float(query.get("yaw", ["0.7"])[0])
             pitch = float(query.get("pitch", ["-0.35"])[0])
             views = max(1, min(8, int(query.get("views", ["1"])[0])))
+            faces = query.get("faces", [None])[0]
             return project.model_preview(query["path"][0], width, height, yaw, pitch,
-                                         views), "image/png"
+                                         views,
+                                         int(faces) if faces else None), "image/png"
 
         if route == "/api/model/export":
             return _json(project.export_model(body["path"], textures=bool(body.get("textures", True))))
@@ -169,6 +184,15 @@ class HookyCreatorServer:
             return None
         kind = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         return candidate.read_bytes(), kind
+
+
+def _size(query: dict, name: str, default: int) -> int:
+    """Taille d'aperçu bornée : un PNG de 20 000 px de large n'aide personne."""
+    try:
+        value = int(query.get(name, [str(default)])[0])
+    except (TypeError, ValueError):
+        value = default
+    return max(64, min(1600, value))
 
 
 def _json(payload: dict) -> tuple[bytes, str]:

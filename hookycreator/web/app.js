@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { project: null, filter: "", view: "home", selection: null };
+const state = { project: null, settings: null, filter: "", view: "home", selection: null };
 
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -13,6 +13,13 @@ const humanSize = (bytes) => {
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
 };
+
+function humanBytes(bytes) {
+  if (!bytes) return "0 o";
+  const units = ["o", "Ko", "Mo", "Go"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / 1024 ** i).toFixed(i ? 2 : 0)} ${units[i]}`;
+}
 
 function toast(message, kind = "ok") {
   const node = document.createElement("div");
@@ -46,6 +53,7 @@ function showView(view) {
   if (view === "textures") renderTextures();
   if (view === "models") renderModels();
   if (view === "mobs") renderMobs();
+  if (view === "settings") renderSettings();
   if (view === "home") renderActivity();
 }
 
@@ -60,7 +68,9 @@ function renderStats() {
   $("#stats").innerHTML = `
     <span class="chip"><b>${count("texture")}</b> textures</span>
     <span class="chip"><b>${count("model")}</b> modèles</span>
-    <span class="chip"><b>${state.project?.mobs.length || 0}</b> mobs</span>`;
+    <span class="chip"><b>${state.project?.mobs.length || 0}</b> mobs</span>
+    <span class="chip" title="Budget mémoire des aperçus">budget
+      <b>${(state.settings?.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go</b></span>`;
   $("#root-path").textContent = state.project?.root || "—";
   const dicts = state.project?.dicts || 0;
   $("#dict-state").textContent = state.project?.zstd
@@ -179,11 +189,19 @@ async function openModel(rel) {
     toast(error.message, "error");
     return;
   }
+
+  const qualities = [
+    { id: "auto", label: "Auto (budget)", faces: null },
+    { id: "smooth", label: "Détaillé", faces: 400000 },
+    { id: "fast", label: "Rapide", faces: 30000 },
+  ];
+  const shot = (faces) => `/api/model/preview?path=${encodeURIComponent(rel)}&w=440&h=340`
+    + (faces ? `&faces=${faces}` : "");
+
   showDetail(`
     <h3>${esc(info.models[0] || rel.split("/").pop())}</h3>
     <div class="sub">${esc(rel)}</div>
-    <img class="preview" id="model-shot" alt=""
-      src="/api/model/preview?path=${encodeURIComponent(rel)}&w=440&h=340">
+    <img class="preview" id="model-shot" alt="" src="${shot(null)}">
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}</dd>
       <dt>Maillages</dt><dd>${info.meshes}</dd>
@@ -191,12 +209,40 @@ async function openModel(rel) {
       <dt>Sommets</dt><dd>${info.vertices.toLocaleString("fr-FR")}</dd>
       <dt>Dimensions</dt><dd>${info.bounds.map((v) => v.toFixed(3)).join(" × ")}</dd>
       <dt>Matériaux</dt><dd>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
+      <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
     </dl>
     ${info.warnings.length ? `<ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     <div class="actions">
       <button class="primary" id="btn-blender">Exporter pour Blender</button>
       <button class="ghost" id="btn-turntable">Planche de rotations</button>
+    </div>
+    <div class="field" style="margin-top:16px">
+      <label for="model-quality">Qualité de l'aperçu</label>
+      <select id="model-quality">
+        ${qualities.map((q) => `<option value="${q.id}">${esc(q.label)}</option>`).join("")}
+      </select>
+      <p class="hint" id="model-budget-note">Le budget mémoire et le culling se règlent
+         dans <b>Réglages</b>.</p>
     </div>`);
+
+  async function refreshBudget(faces) {
+    const node = $("#model-budget");
+    const note = $("#model-budget-note");
+    try {
+      const payload = await api(`/api/model/plan?path=${encodeURIComponent(rel)}&w=440&h=340`
+        + (faces ? `&faces=${faces}` : ""));
+      const plan = payload.plan;
+      const percent = Math.round(plan.fill * 100);
+      node.innerHTML = `${humanBytes(plan.total_bytes)} estimés sur `
+        + `${humanBytes(plan.budget_bytes)} (${percent}&nbsp;%)`;
+      note.textContent = plan.notes.length
+        ? plan.notes.join(" · ")
+        : "Le modèle tient dans le budget sans dégradation.";
+    } catch (error) {
+      node.textContent = "indisponible";
+      note.textContent = error.message;
+    }
+  }
 
   $("#btn-turntable").onclick = () => {
     $("#model-shot").src = `/api/model/preview?path=${encodeURIComponent(rel)}&w=440&h=340&views=4`;
@@ -210,6 +256,94 @@ async function openModel(rel) {
       toast(`Export Blender : ${result.folder} (${result.faces} faces, ${result.textures} texture(s))`);
     } catch (error) { toast(error.message, "error"); }
   };
+  $("#model-quality").onchange = (event) => {
+    const chosen = qualities.find((q) => q.id === event.target.value) || qualities[0];
+    $("#model-shot").src = shot(chosen.faces);
+    refreshBudget(chosen.faces);
+  };
+  refreshBudget(null);
+}
+
+/* ------------------------------------------------------------------ réglages */
+function settingsOrDefault() {
+  return state.settings || {
+    vram_gb: 6, vram_max_gb: 25, vram_min_gb: 1, supersample: 2,
+    cull: true, frustum: true, adaptive: true, max_faces: null, lod: 0,
+  };
+}
+
+function renderSettings() {
+  const settings = settingsOrDefault();
+  state.settings = settings;
+  const vram = $("#set-vram");
+  vram.min = settings.vram_min_gb;
+  vram.max = settings.vram_max_gb;
+  vram.value = settings.vram_gb;
+  $("#set-vram-out").textContent = `${settings.vram_gb} Go`;
+  $("#set-vram-fill").style.width =
+    `${((settings.vram_gb - settings.vram_min_gb) / (settings.vram_max_gb - settings.vram_min_gb)) * 100}%`;
+  $("#set-ss").value = settings.supersample;
+  $("#set-ss-out").textContent = `×${settings.supersample}`;
+  $("#set-cull").checked = settings.cull;
+  $("#set-frustum").checked = settings.frustum;
+  $("#set-adaptive").checked = settings.adaptive;
+  $("#set-faces").value = settings.max_faces || 0;
+  $("#set-faces-out").textContent = settings.max_faces
+    ? `${settings.max_faces.toLocaleString("fr-FR")} faces` : "auto";
+  $("#settings-summary").innerHTML = [
+    `<li><span class="k">Budget</span>${humanBytes(settings.budget_bytes ||
+      settings.vram_gb * 1024 ** 3)} (${settings.vram_gb} Go)</li>`,
+    `<li><span class="k">Anticrénelage</span>×${settings.supersample}</li>`,
+    `<li><span class="k">Culling</span>${[
+      settings.cull ? "faces arrière" : null,
+      settings.frustum ? "hors écran" : null,
+    ].filter(Boolean).join(" + ") || "désactivé"}</li>`,
+    `<li><span class="k">Adaptation</span>${settings.adaptive
+      ? "active (qualité baissée avant de refuser)" : "désactivée (refus net)"}</li>`,
+    `<li><span class="k">Faces</span>${settings.max_faces
+      ? `${settings.max_faces.toLocaleString("fr-FR")} maximum`
+      : "automatique selon le budget"}</li>`,
+  ].join("");
+}
+
+let settingsTimer = null;
+async function saveSettings(patch, { quiet = true } = {}) {
+  const merged = { ...settingsOrDefault(), ...patch };
+  state.settings = merged;
+  renderSettings();
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(async () => {
+    try {
+      const payload = await api("/api/settings", {
+        method: "POST",
+        body: JSON.stringify(patch),
+      });
+      state.settings = payload.settings;
+      renderSettings();
+      renderStats();
+      if (state.view === "models") await renderModels();
+      if (!quiet) toast("Réglages enregistrés");
+    } catch (error) { toast(error.message, "error"); }
+  }, 180);
+}
+
+function wireSettings() {
+  $("#set-vram").oninput = (event) =>
+    saveSettings({ vram_gb: Number(event.target.value) });
+  $("#set-ss").oninput = (event) =>
+    saveSettings({ supersample: Number(event.target.value) });
+  $("#set-cull").onchange = (event) => saveSettings({ cull: event.target.checked });
+  $("#set-frustum").onchange = (event) => saveSettings({ frustum: event.target.checked });
+  $("#set-adaptive").onchange = (event) =>
+    saveSettings({ adaptive: event.target.checked });
+  $("#set-faces").oninput = (event) => {
+    const value = Number(event.target.value);
+    saveSettings({ max_faces: value > 0 ? value : null });
+  };
+  $("#set-reset").onclick = () => saveSettings({
+    vram_gb: 6, supersample: 2, cull: true, frustum: true,
+    adaptive: true, max_faces: null, lod: 0,
+  }, { quiet: false });
 }
 
 /* ------------------------------------------------------------------ mobs */
@@ -331,11 +465,13 @@ function hideDetail() { $("#detail").hidden = true; }
 async function refresh() {
   const payload = await api("/api/state");
   state.project = payload.project;
+  state.settings = payload.project.settings || state.settings;
   renderStats();
   if (state.view === "home") renderActivity();
   if (state.view === "textures") await renderTextures();
   if (state.view === "models") await renderModels();
   if (state.view === "mobs") await renderMobs();
+  if (state.view === "settings") renderSettings();
 }
 
 function wire() {
@@ -380,6 +516,7 @@ function wire() {
   };
   $("#mod-form").onsubmit = buildMod;
   $("#bulk-start").onclick = startBulk;
+  wireSettings();
 }
 
 async function boot() {
