@@ -39,6 +39,7 @@ import sys
 from array import array
 from dataclasses import dataclass, field
 
+from . import native
 from .mesh import MeshData
 
 #: valeurs historiques (papillon) conservées comme repli
@@ -376,6 +377,17 @@ EDGE_RATIO_MAX = 0.15
 #: rapport arête / diagonale au-delà duquel un triangle est écarté
 OVERSIZED_RATIO = 0.15
 
+# L'ABI doit copier les positions et les indices. Pour une petite suite ou un
+# énorme nuage associé à peu de triangles, cette copie coûte davantage que le
+# filtre Python ; la décision ne change jamais les critères géométriques.
+_NATIVE_FILTER_MIN = 512
+_NATIVE_POSITION_RATIO = 4
+
+
+def _use_native_filter(positions, triangles) -> bool:
+    return (native.available() and len(triangles) >= _NATIVE_FILTER_MIN
+            and len(positions) <= _NATIVE_POSITION_RATIO * len(triangles))
+
 
 def _diagonal(positions, step_max: int = 4000, cut: float = 0.02) -> float:
     """Diagonale **robuste** du nuage de points (2 % – 98 % par axe).
@@ -446,6 +458,10 @@ def _drop_oversized(positions, triangles, diagonal: float,
     if not positions or diagonal <= 0:
         return triangles
     threshold = diagonal * limit
+    if _use_native_filter(positions, triangles):
+        filtered = native.filter_triangles(positions, triangles, threshold * threshold)
+        if filtered is not None:
+            return filtered
     kept: list[tuple[int, int, int]] = []
     for a, b, c in triangles:
         try:
@@ -491,6 +507,10 @@ def _drop_outliers(positions, triangles, factor: float = 8.0,
         return triangles
     limit = median * factor
     limit2 = limit * limit
+    if _use_native_filter(positions, triangles):
+        filtered = native.filter_triangles(positions, triangles, limit2)
+        if filtered is not None:
+            return filtered
     kept: list[tuple[int, int, int]] = []
     for a, b, c in triangles:
         try:
@@ -556,6 +576,10 @@ def _decode_positions(data: bytes, start: int, count: int, stride: int,
     s'arrête donc au premier enregistrement incohérent, l'échelle de référence
     étant prise sur le début du tampon (les 128 premiers sommets).
     """
+    if type(count) is int and count >= 128 and native.available():
+        decoded = native.decode_positions(data, start, count, stride, offset, fmt)
+        if decoded is not None:
+            return decoded
     if fmt == 0x1805 and stride % 4 == 0 and offset % 4 == 0:
         fast = _decode_positions_f32(data, start, count, stride, offset)
         if fast is not None:
@@ -827,6 +851,10 @@ def _segment_indices(words, bounds: list[int],
 
     :return: liste de ``(indice de forme, position en mots, triangles)``.
     """
+    if len(words) >= 128 and native.available():
+        runs = native.segment_indices(words, bounds, minimum)
+        if runs is not None:
+            return runs
     ordered = sorted(range(len(bounds)), key=lambda index: bounds[index])
     total = len(words)
     runs: list[tuple[int, int, list]] = []

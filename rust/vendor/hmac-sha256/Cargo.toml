@@ -1,0 +1,15 @@
+# Manifest minimal pour un build hors ligne. Voir ../README.md.
+[package]
+name = "hmac-sha256"
+version = "1.1.15"
+edition = "2021"
+license = "ISC"
+
+[features]
+default = []
+opt_size = []
+# Les traits digest en option ne sont pas activés par HookyMod.
+traits = []
+traits09 = []
+traits010 = []
+traits011 = []

@@ -20,6 +20,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
+from . import native
 from .util import FormatError, align, cstring
 
 MAGIC = b"SARC"
@@ -33,6 +34,13 @@ BIG_ALIGN_MAGICS = (b"FRES", b"BNTX", b"BNSH", b"FRES")
 
 def is_sarc(data: bytes) -> bool:
     return data[:4] == MAGIC and len(data) >= 0x20
+
+
+def backend() -> dict:
+    """Chemin SARC utilisé par l'application, avec son repli historique."""
+    if native.available():
+        return {"name": "rust", "label": "Rust si compatible, sinon Python"}
+    return {"name": "python", "label": "Python"}
 
 
 def sarc_hash(name: str, mult: int = 0x65) -> int:
@@ -75,6 +83,18 @@ class SarcArchive:
     # ------------------------------------------------------------------ lecture
     @classmethod
     def parse(cls, data: bytes) -> "SarcArchive":
+        # Garder le chemin historique pour les sous-classes et les tampons
+        # mutables : leurs types et leurs surcharges font partie du comportement
+        # Python. Le natif peut aussi décliner les archives volumineuses.
+        if cls is SarcArchive and type(data) is bytes and native.available():
+            parsed = native.sarc_parse(data)
+            if parsed is not None:
+                endian, version, mult, metadata, warnings = parsed
+                entries = [SarcEntry(name=name, data=data[start:start + size],
+                                     alignment=alignment, hash=node_hash, hash_valid=True)
+                           for name, start, size, alignment, node_hash in metadata]
+                return cls(entries=entries, endian=endian, hash_mult=mult,
+                           version=version, warnings=warnings)
         if data[:4] != MAGIC:
             raise FormatError("Ce n'est pas une archive SARC (magic « SARC » absent).")
         if len(data) < 0x20:
@@ -211,6 +231,11 @@ class SarcArchive:
         """
         if not self.entries:
             raise FormatError("Impossible de construire une archive SARC vide.")
+        if type(self) is SarcArchive and native.available():
+            result = native.sarc_build(self.entries, self.endian, self.hash_mult,
+                                       self.version, verify=verify)
+            if result is not None:
+                return result
 
         e = self.endian
         if e not in ("<", ">"):

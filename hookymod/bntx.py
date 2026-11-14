@@ -5,16 +5,19 @@ compressées en BCn / ASTC.  Ce module les décode en RGBA afin de les afficher
 ou de les exporter en PNG.
 
 Référence de format : documentation publique BNTX (Syroot / BfresLibrary).
-Les décodeurs BCn utilisent ``texture2ddecoder`` s'il est installé, sinon un
-décodage Python pur (BC1/BC3/BC4/BC5).
+Les décodeurs BCn utilisent ``texture2ddecoder`` s'il est installé, sinon le
+cœur Rust facultatif ou un décodage Python pur (BC1/BC2/BC3/BC4/BC5).
 """
 
 from __future__ import annotations
 
 import struct
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import native
 from .util import FormatError, HookyError, cstring, u16, u32, u64, png_bytes
 
 try:  # accélérateur optionnel (BCn/ASTC en C)
@@ -156,6 +159,63 @@ def surface_size(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
     return align_up(blocks_w * bpp, 64) * align_up(blocks_h, block_height * 8)
 
 
+#: Repli Python : tables d'adresses réutilisées pour les textures complètes.
+#: Le nombre *d'entrées*, pas seulement de tables, est borné pour éviter qu'un
+#: grand dump ne consomme des centaines de Mo. L'accès est protégé : le serveur
+#: peut décoder plusieurs textures simultanément.
+_OFFSET_TABLES: OrderedDict[tuple, tuple[int, ...]] = OrderedDict()
+_OFFSET_TABLE_LIMIT = 48
+_OFFSET_ENTRY_LIMIT = 262_144
+_OFFSET_LOCK = threading.Lock()
+
+
+def block_linear_offsets(wb: int, hb: int, bpp: int, block_height: int,
+                         orin: bool = False) -> tuple[int, ...]:
+    """Adresses source des unités de 16 octets, dans l'ordre linéaire."""
+    key = (wb, hb, bpp, block_height, bool(orin))
+    with _OFFSET_LOCK:
+        table = _OFFSET_TABLES.get(key)
+        if table is not None:
+            _OFFSET_TABLES.move_to_end(key)
+            return table
+    per_chunk = max(1, 16 // bpp)
+    table = tuple(get_addr_block_linear(x, y, wb, bpp, 0, block_height, orin)
+                  for y in range(hb) for x in range(0, wb, per_chunk))
+    if len(table) > _OFFSET_ENTRY_LIMIT:
+        return table
+    with _OFFSET_LOCK:
+        # Un autre fil peut avoir construit la même table entre-temps.
+        cached = _OFFSET_TABLES.get(key)
+        if cached is not None:
+            _OFFSET_TABLES.move_to_end(key)
+            return cached
+        while (_OFFSET_TABLES and
+               (len(_OFFSET_TABLES) >= _OFFSET_TABLE_LIMIT or
+                sum(map(len, _OFFSET_TABLES.values())) + len(table) > _OFFSET_ENTRY_LIMIT)):
+            _OFFSET_TABLES.popitem(last=False)
+        _OFFSET_TABLES[key] = table
+    return table
+
+
+def decoder_backend() -> dict:
+    """Décodeur BCn et désentrelacement actifs, exposés dans les réglages."""
+    swizzle = "Rust" if native.available() else "Python"
+    if _t2d is not None:
+        return {"name": "c", "label": "C (texture2ddecoder ; BC2 en Python)",
+                "version": getattr(_t2d, "__version__", ""), "hint": "",
+                "formats": ["BC1", "BC3", "BC4", "BC5", "BC6", "BC7", "ASTC"],
+                "deswizzle": swizzle}
+    if native.available():
+        return {"name": "rust", "label": "Rust (BC1 à BC5)", "version": "",
+                "hint": "BC6, BC7 et ASTC : pip install texture2ddecoder",
+                "formats": ["BC1", "BC2", "BC3", "BC4", "BC5"],
+                "deswizzle": swizzle}
+    return {"name": "python", "label": "Python (repli)", "version": "",
+            "hint": "BC6, BC7 et ASTC : pip install texture2ddecoder",
+            "formats": ["BC1", "BC2", "BC3", "BC4", "BC5"],
+            "deswizzle": swizzle}
+
+
 def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
               tile_mode: int, block_height_log2: int, data: bytes,
               round_pitch: bool = True, orin: bool = False) -> bytes:
@@ -166,9 +226,14 @@ def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
     wb = div_round_up(width, blk_w)
     hb = div_round_up(height, blk_h)
     needed = wb * hb * bpp
-    out = bytearray(needed)
     if needed == 0:
-        return bytes(out)
+        return b""
+    if native.available():
+        result = native.deswizzle(width, height, blk_w, blk_h, bpp, tile_mode,
+                                  block_height_log2, data, round_pitch, orin)
+        if result is not None:
+            return result
+    out = bytearray(needed)
 
     if tile_mode == 1:  # linéaire (avec pitch aligné sur 32 octets)
         pitch = wb * bpp
@@ -185,6 +250,15 @@ def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
     block_height = 1 << max(0, min(5, block_height_log2))
     # Une unité contiguë fait 16 octets (plusieurs pixels pour les petits formats).
     chunk_bytes = 16
+    # La concaténation n'est équivalente à la boucle que pour les formats dont
+    # 16 octets contiennent un nombre entier de blocs. Pour une surface tronquée
+    # on garde la boucle : elle complète les octets manquants avec des zéros.
+    if (bpp in (1, 2, 4, 8, 16) and (wb * bpp) % 16 == 0
+            and wb * hb * bpp // 16 <= _OFFSET_ENTRY_LIMIT
+            and len(data) >= surface_size(width, height, blk_w, blk_h, bpp,
+                                          tile_mode, block_height_log2)):
+        table = block_linear_offsets(wb, hb, bpp, block_height, orin)
+        return b"".join([data[offset:offset + 16] for offset in table])
     per_chunk = max(1, 16 // bpp)
     size = len(data)
     for y in range(hb):
@@ -215,6 +289,11 @@ def swizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
     linear_size = wb * hb * bpp
     if linear_size == 0:
         return b""
+    if native.available():
+        result = native.swizzle(width, height, blk_w, blk_h, bpp, tile_mode,
+                                block_height_log2, data, round_pitch, orin)
+        if result is not None:
+            return result
     if tile_mode == 1:
         pitch = align_up(wb * bpp, 32) if round_pitch else wb * bpp
         out = bytearray(pitch * hb)
@@ -355,6 +434,13 @@ def _compose_bc5(data: bytes, width: int, height: int, signed: bool = False) -> 
 
 def _decode_bcn(name: str, data: bytes, width: int, height: int,
                 blk_w: int, blk_h: int) -> bytes:
+    # Conserver les résultats du décodeur C s'il est installé. En son absence,
+    # Rust remplace le repli Python BC1–BC5 ; les formats non pris en charge
+    # continuent dans la branche existante et produisent les mêmes erreurs.
+    if _t2d is None and native.available():
+        decoded = native.decode_bc(name, data, width, height)
+        if decoded is not None:
+            return decoded
     if name.startswith(("BC1", "BC2", "BC3")):
         if _t2d is not None:
             if name.startswith("BC1"):

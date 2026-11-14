@@ -21,7 +21,9 @@ reverse-engineering tool for the *Ocarina of Time Remake* romfs. It is designed 
 alongside PC decompilations and mod loaders like **Hookshot**, and lets modders inspect,
 extract, edit, convert and repackage assets.
 
-Everything is Python (Tkinter for the GUI): no proprietary library, no game asset bundled.
+The application is primarily Python (Tkinter for the desktop explorer), with an
+optional Rust core for texture layout, BFRES geometry checks and preview rendering.
+No proprietary library or game asset is bundled.
 
 ## ⚡ Features
 
@@ -94,6 +96,17 @@ Application web locale (aucune installation, pas de Tkinter) pour **créer** :
 textures remplacées, modèles envoyés vers Blender, fiches de mobs, et
 assemblage d'un dossier `mods/<nom>/romfs/` prêt à charger. Détails et feuille
 de route : `docs/HOOKYCREATOR.md`.
+
+**Moteur Rust (première étape du portage).** Sous Windows, ferme HookyCreator,
+puis double-clique sur `Compiler_Rust.bat` ou lance `py -3 tools\build_rust.py`.
+Redémarre l'application et vérifie **Réglages → Moteur & performances**. Le
+rendu, l'encodage et la disposition des textures, certains contrôles de géométrie,
+la lecture et reconstruction SARC/RESTBL et une partie de la décompression
+Zstandard passent en Rust quand compatibles ; le reste de l'application reste en Python
+pour l'instant. Un outil Rust autonome permet aussi de lire des SARC/RESTBL,
+des `.zs` avec leurs dictionnaires et des NUP, sans Python ; la recompression avec
+dictionnaire n'est pas encore portée. Voir [`docs/RUST.md`](docs/RUST.md) pour
+les commandes, les tests et les limites.
 
 ### 🧩 Modèle → Blender (aller simple, sans add-on)
 

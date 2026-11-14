@@ -7,13 +7,16 @@ sert aux machines où ce n'est pas le cas (Windows sans tcl/tk, serveur, CI) et
 Le rendu réutilise exactement la même géométrie, la même caméra et le même
 éclairage que la fenêtre 3D (:mod:`hookymod.viewer`), mais rasterise les
 triangles dans un tampon mémoire puis encode un PNG avec :mod:`hookymod.util`.
-Aucune dépendance externe.
+Le cœur Rust facultatif accélère les pixels ; le repli n'a aucune dépendance
+externe.
 """
 
 from __future__ import annotations
 
 import math
+import struct
 
+from . import native
 from .mesh import MeshData
 from .util import HookyError, png_bytes
 from .viewer import (LIGHT, Projector, build_render_data, fit_view,
@@ -63,16 +66,38 @@ def render_rgba(meshes, width: int = 800, height: int = 600,
         raise HookyError("Aucune face visible sous cet angle "
                          "(essaie --yaw / --pitch ou désactive le culling).")
 
+    trig = (math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch))
+    if native.available() and len(visible) * 76 <= 64 * 1024 * 1024:
+        # Même géométrie, même ordre et même éclairage que le repli Python ;
+        # seuls le z-buffer, les pixels et la réduction AA passent en Rust.
+        # Le passage par ctypes libère le GIL pendant le rendu natif.
+        record = struct.Struct("<9d4B")
+        triangles = bytearray(len(visible) * record.size)
+        offset = 0
+        for index in visible:
+            a, b, c = data.faces[index]
+            p0, p1, p2 = projector(a), projector(b), projector(c)
+            area = ((p1[0] - p0[0]) * (p2[1] - p0[1])
+                    - (p2[0] - p0[0]) * (p1[1] - p0[1]))
+            if -1e-9 < area < 1e-9:
+                continue
+            r, g, bl = shade_rgb(data.colors[index], data.normals[index], trig)
+            record.pack_into(triangles, offset, *p0, *p1, *p2, r, g, bl, 255)
+            offset += record.size
+        del triangles[offset:]
+        result = native.rasterize(width, height, supersample, triangles, background,
+                                  _owned=True)
+        del triangles
+        if result is not None:
+            return width, height, result
+
     pixels = bytearray(bytes(background) * (rw * rh))
     # La profondeur croît vers la caméra (cf. Projector) : le plus grand z est
     # le plus proche, comme dans le viewer.
     zbuf = [float("-inf")] * (rw * rh)
-    stride = rw * 4
 
     # Balayage de lignes par triangle : les trois sommets sont triés par y, on
     # parcourt les deux arêtes gauches/droites et on avance en z par addition.
-    # (Avant : trois produits scalaires par pixel, 1,83 s pour une armure.)
-    trig = (math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch))
     zbuffer = zbuf
     for index in visible:
         a, b, c = data.faces[index]
@@ -210,7 +235,8 @@ def render_png(meshes, width: int = 800, height: int = 600,
 def turntable_png(meshes, views: int = 4, width: int = 480, height: int = 480,
                   pitch: float = -0.3, zoom: float = 1.0,
                   cull: bool = True, frustum: bool = True,
-                  supersample: int = 1) -> bytes:
+                  supersample: int = 1, data=None,
+                  max_faces: int | None = None) -> bytes:
     """Planche de ``views`` rotations (de 0 à 360°) côte à côte.
 
     Pratique pour juger un modèle d'un coup d'œil sans interface graphique.
@@ -222,8 +248,8 @@ def turntable_png(meshes, views: int = 4, width: int = 480, height: int = 480,
         yaw = 6.283185307179586 * i / views
         try:
             frames.append(render_rgba(meshes, width, height, yaw, pitch, zoom,
-                                      cull, supersample=supersample,
-                                      frustum=frustum))
+                                      cull, max_faces=max_faces, supersample=supersample,
+                                      frustum=frustum, data=data))
             rendered += 1
         except HookyError:
             # vue sans face visible (modèle plat vu de dos) : on garde la place

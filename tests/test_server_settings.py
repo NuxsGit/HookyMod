@@ -9,6 +9,7 @@ from pathlib import Path
 
 from hookycreator.project import ProjectError
 from hookycreator.server import HookyCreatorServer
+from hookymod import native, restbl, sarc, zs
 
 from tests import synth
 
@@ -55,6 +56,26 @@ class SettingsApiTests(unittest.TestCase):
             project = json.loads(body)["project"]
             self.assertEqual(project["settings"]["vram_gb"], 6.0)
 
+    def test_system_reports_the_active_native_and_texture_backends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_server(Path(tmp))
+            body, _ = server.api("GET", "/api/system", {}, {})
+            payload = json.loads(body)
+            self.assertIn("cache", payload)
+            self.assertIn("settings", payload)
+            self.assertEqual(payload["engine"]["rust"]["available"], native.available())
+            self.assertIn(payload["engine"]["texture"]["name"], ("c", "rust", "python"))
+            self.assertEqual(payload["engine"]["texture"]["deswizzle"],
+                             "Rust" if native.available() else "Python")
+            self.assertEqual(payload["engine"]["zstd"], zs.decoder_backend())
+            self.assertIn(payload["engine"]["zstd"]["name"], ("rust", "zstandard", "missing"))
+            self.assertEqual(payload["engine"]["sarc"], sarc.backend())
+            self.assertEqual(payload["engine"]["sarc"]["name"],
+                             "rust" if native.available() else "python")
+            self.assertEqual(payload["engine"]["restbl"], restbl.backend())
+            self.assertEqual(payload["engine"]["restbl"]["name"],
+                             "rust" if native.available() else "python")
+
 
 class PreviewApiTests(unittest.TestCase):
     def test_plan_reports_the_budget(self) -> None:
@@ -85,6 +106,17 @@ class PreviewApiTests(unittest.TestCase):
                                      "h": ["120"], "faces": ["600"]}, {})
             self.assertEqual(kind, "image/png")
             self.assertTrue(body.startswith(b"\x89PNG"))
+
+    def test_turntable_preview_reuses_render_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_server(Path(tmp))
+            body, kind = server.api("GET", "/api/model/preview",
+                                    {"path": ["Model/Petit.bfres"], "w": ["64"],
+                                     "h": ["64"], "views": ["3"]}, {})
+            self.assertEqual(kind, "image/png")
+            from hookymod.util import decode_png
+            width, height, _ = decode_png(body)
+            self.assertEqual((width, height), (192, 64))
 
     def test_preview_sizes_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

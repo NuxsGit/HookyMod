@@ -86,6 +86,19 @@ class WebContractTests(unittest.TestCase):
         self.assertIn("renderEnsembles", self.js)
         self.assertIn("tex=1", self.js)
 
+    def test_native_engine_status_is_visible_in_settings(self) -> None:
+        self.assertIn('id="engine-list"', self.html)
+        self.assertIn('id="engine-hint"', self.html)
+        self.assertIn('payload.engine', self.js)
+        self.assertIn('renderEngine()', self.js)
+        self.assertIn('texture.deswizzle', self.js)
+        self.assertIn('zstd.label', self.js)
+        self.assertIn('Décompression Zstandard', self.js)
+        self.assertIn('sarc.label', self.js)
+        self.assertIn('Lecture et reconstruction SARC', self.js)
+        self.assertIn('restbl.label', self.js)
+        self.assertIn('Lecture et reconstruction RESTBL', self.js)
+
     def test_blend_export_is_wired_to_the_api(self) -> None:
         self.assertIn("/api/model/blend", self.js)
         self.assertIn("/api/blender", self.js)
