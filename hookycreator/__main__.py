@@ -75,9 +75,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  projet : {state['root']}")
     print(f"  écoute : http://127.0.0.1:{server.port}/")
     try:
-        while True:
-            import time
-            time.sleep(3600)
+        import time
+        while not server.stopped:
+            time.sleep(0.5)
     except KeyboardInterrupt:
         print("\nArrêt.")
         server.stop()

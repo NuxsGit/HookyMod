@@ -163,3 +163,43 @@ message et propose l'export Blender — il ne produit jamais un fichier faux.
 Formats acceptés pour le `.blend` : Blender 2.5 à 4.x, compressé ou non.
 Rien n'est écrit dans le dump : le résultat part dans le dossier de travail et
 sera repris par l'assemblage du mod.
+
+## Rapidité : cache disque et préchauffage
+
+Décoder un BFRES coûte près d'une seconde (analyse des tampons, cohérence des
+indices) : redessiner une grille de vingt-cinq modèles à chaque ouverture prenait
+**22 secondes**. Trois choses ont changé :
+
+* **cache disque des vignettes** — la clé contient le chemin, la taille, la date
+  du fichier, la taille demandée et les réglages de rendu : modifier un modèle
+  ou changer l'anticrénelage invalide la vignette tout seul. Servir les mêmes
+  vingt-cinq tuiles prend désormais **3 ms** ;
+* **préchauffage** — au démarrage, deux fils remplissent le cache en tâche de
+  fond (le décodage reste mono-thread : c'est du Python pur) ; la barre d'état
+  affiche `vignettes 12/25`. Ce qui est déjà en cache est sauté ;
+* **ETag** — le navigateur reçoit un `ETag` par image et redemande `304` : une
+  vignette déjà vue ne retélécharge aucun octet. L'URL porte `&v=<date>`, donc
+  une modification du fichier change l'URL et l'image.
+
+Les grilles sont **paginées** (48 tuiles, puis « afficher plus ») et chargées en
+`loading="lazy"` : une grille de mille modèles n'ouvre pas mille requêtes.
+
+Réglages → **Mémoire & cache** : mémoire du processus, taille du cache, nombre de
+maillages gardés en RAM (LRU borné à la moitié du budget), bouton « vider le
+cache », bouton « rescanner ». Un bug de concurrence a été corrigé au passage :
+deux vignettes qui se rendaient ensemble se volaient les dictionnaires zstd
+(« aucun dictionnaire trouvé » aléatoire).
+
+## Sélection multiple et export groupé
+
+Clic = ouvrir, **Ctrl+clic** = ajouter/retirer, **Maj+clic** = plage,
+**Ctrl+A** = tout. Une barre flottante indique la sélection et propose
+« Exporter en ZIP » : le serveur écrit un seul fichier (`modèles/…/OBJ+glTF`,
+`textures/…/PNG`, `LISEZMOI.txt`) au lieu de N téléchargements.
+
+## Les trois pastilles
+
+Elles font quelque chose : 🔴 quitte l'atelier (arrêt du serveur après
+confirmation), 🟡 réduit l'interface (rail masqué), 🟢 passe en plein écran réel
+(API Fullscreen). Le titre des boutons suit l'état, et un refus du navigateur est
+signalé plutôt qu'ignoré.

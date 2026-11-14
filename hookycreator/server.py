@@ -12,9 +12,11 @@ retouche d'image sont déjà.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import mimetypes
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +26,9 @@ from . import blend as blend_mod
 from .project import Project, ProjectError
 
 WEB_DIR = Path(__file__).parent / "web"
+
+#: routes qui coûtent un rendu CPU (limitées en parallèle)
+IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png", "/api/blend/preview")
 
 
 class HookyCreatorServer:
@@ -37,6 +42,9 @@ class HookyCreatorServer:
         self.port = port
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
+        self.stopped = False
+        # deux rendus à la fois : au-delà, les tuiles se battent pour le processeur
+        self.render_slots = threading.Semaphore(2)
         self.job: dict = {"running": False, "done": 0, "total": 0, "label": "",
                           "report": None, "error": None}
 
@@ -57,6 +65,7 @@ class HookyCreatorServer:
             self.httpd.shutdown()
             self.httpd.server_close()
             self.httpd = None
+        self.stopped = True
 
     @property
     def url(self) -> str:
@@ -173,7 +182,37 @@ class HookyCreatorServer:
         if route == "/api/mod/build":
             return _json(project.build_mod(body.get("name", "HookyMod")))
 
+        # -- cache, mémoire, maintenance
+        if route == "/api/system":
+            return _json({"cache": project.cache_stats(),
+                          "settings": project.settings.as_json()})
+
+        if route == "/api/thumbs/warm":
+            return _json({"warm": project.warm_thumbnails()})
+
+        if route == "/api/thumbs/status":
+            return _json({"warm": project.warm})
+
+        if route == "/api/cache/clear":
+            removed = project.clear_cache()
+            return _json({"cleared": removed, "cache": project.cache_stats()})
+
+        if route == "/api/scan":
+            summary = project.scan()
+            return _json({"scan": summary, "project": project.state()})
+
+        if route == "/api/export/selection":
+            return project.export_selection(body.get("items") or []), "application/zip"
+
+        if route == "/api/shutdown":
+            threading.Thread(target=self._stop_soon, daemon=True).start()
+            return _json({"stopping": True})
+
         raise ProjectError(f"Route inconnue : {route}")
+
+    def _stop_soon(self) -> None:
+        time.sleep(0.4)                 # laisser la réponse HTTP partir
+        self.stop()
 
     # ------------------------------------------------------------------ export global
     def start_bulk(self, kinds, limit=None) -> dict:
@@ -251,13 +290,25 @@ def _make_handler(server: HookyCreatorServer):
                 super().log_message(fmt, *args)
 
         # -- utilitaires
-        def _send(self, body: bytes, kind: str, status: int = 200) -> None:
+        def _send(self, body: bytes, kind: str, status: int = 200,
+                  headers: dict | None = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            headers = dict(headers or {})
+            if "Cache-Control" not in headers:
+                self.send_header("Cache-Control", "no-store")
+            for name, value in headers.items():
+                self.send_header(name, value)
             self.end_headers()
-            self.wfile.write(body)
+            if body:
+                self.wfile.write(body)
+
+        def _not_modified(self, etag: str) -> None:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "public, max-age=604800")
+            self.end_headers()
 
         def _error(self, message: str, status: int = 400) -> None:
             self._send(*_json({"error": message}), status=status)
@@ -265,12 +316,26 @@ def _make_handler(server: HookyCreatorServer):
         def do_GET(self) -> None:                # noqa: N802 (API HTTP)
             parsed = urlparse(self.path)
             if parsed.path.startswith("/api/"):
+                rendered = parsed.path in IMAGE_ROUTES
                 try:
-                    body, kind = server.api("GET", parsed.path, parse_qs(parsed.query), {})
+                    if rendered:
+                        with server.render_slots:
+                            body, kind = server.api("GET", parsed.path,
+                                                    parse_qs(parsed.query), {})
+                    else:
+                        body, kind = server.api("GET", parsed.path,
+                                                parse_qs(parsed.query), {})
                 except ProjectError as exc:
                     return self._error(str(exc))
                 except Exception as exc:         # jamais de trace dans l'UI
                     return self._error(f"Erreur interne : {exc}", 500)
+                if rendered and body:
+                    # une image ne change que si le fichier change : son ETag suffit
+                    etag = '"%s"' % hashlib.sha1(body).hexdigest()[:20]
+                    if self.headers.get("If-None-Match") == etag:
+                        return self._not_modified(etag)
+                    return self._send(body, kind, headers={
+                        "ETag": etag, "Cache-Control": "public, max-age=604800"})
                 return self._send(body, kind)
             found = server.static(parsed.path)
             if not found:
@@ -306,6 +371,9 @@ def _make_handler(server: HookyCreatorServer):
                 return self._error(f"Champ manquant : {exc}")
             except Exception as exc:
                 return self._error(f"Erreur interne : {exc}", 500)
+            if kind == "application/zip":
+                return self._send(content, kind, headers={
+                    "Content-Disposition": 'attachment; filename="hookycreator-selection.zip"'})
             self._send(content, kind)
 
     return Handler
