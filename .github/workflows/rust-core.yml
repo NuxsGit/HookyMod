@@ -40,13 +40,21 @@ jobs:
       - name: Rust unit tests (library and CLI)
         run: cargo test --manifest-path rust/Cargo.toml --offline --locked --all-targets
       - name: Build and verify native library
+        id: build_native
         run: |
           python tools/build_rust.py
           python -c "from hookymod import native; assert native.available(), native.status()"
           python -c "from tests.test_rust_cli import EXE; import zstandard; assert EXE.is_file(), EXE"
       - name: Python suite with Rust (including parity tests)
-        run: python -m pytest -q tests/
+        run: python -m pytest -q tests/ --junitxml=pytest-rust.xml
+      - name: Report native suite failures
+        if: ${{ failure() }}
+        run: python .github/scripts/report_pytest_failures.py pytest-rust.xml
       - name: Python suite without Rust (fallback)
+        if: ${{ !cancelled() && steps.build_native.outcome == 'success' }}
         env:
           HOOKYMOD_DISABLE_RUST: '1'
-        run: python -m pytest -q tests/
+        run: python -m pytest -q tests/ --junitxml=pytest-fallback.xml
+      - name: Report fallback suite failures
+        if: ${{ failure() }}
+        run: python .github/scripts/report_pytest_failures.py pytest-fallback.xml
