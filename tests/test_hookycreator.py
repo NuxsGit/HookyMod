@@ -51,6 +51,22 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(state["models"], 1)
         self.assertEqual(state["count"], 2)
 
+    def test_animations_are_not_counted_as_models(self):
+        """Un `.anim.bfres` n'a pas de maillage : le grille des modèles ne doit
+
+        pas le proposer (l'ancien scan le classait « model » par suffixe).
+        """
+        root = Path(tempfile.mkdtemp())
+        (root / "Model").mkdir()
+        (root / "Model" / "B.bfres").write_bytes(synth.make_bfres())
+        (root / "Model" / "B_Animation.anim.bfres").write_bytes(b"FRES" + bytes(0x40))
+        project = Project(root)
+        state = project.scan()
+        self.assertEqual(state["models"], 1)
+        self.assertEqual(state["animations"], 1)
+        kinds = {asset.rel: asset.kind for asset in project.assets}
+        self.assertEqual(kinds["Model/B_Animation.anim.bfres"], "animation")
+
     def test_paths_outside_the_project_are_refused(self):
         with self.assertRaises(ProjectError):
             self.project.asset("../secret.txt")
