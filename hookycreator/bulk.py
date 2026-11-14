@@ -47,22 +47,27 @@ class Item:
                 "archive": self.archive, "editable": self.editable}
 
 
-#: signatures internes d'un BFRES d'animations (pas de maillage dedans)
-ANIM_SIGNATURES = (b"FSKA", b"FVIS", b"ANIM", b"FANI")
+#: mots qui trahissent un BFRES sans maillage (animations, squelettes, coquilles)
+ANIM_NAMES = (".anim.", "animation", "skeleton", ".camera.", ".light.")
 
 
 def _classify(data: bytes, name: str) -> str:
+    """Classe par contenu quand c'est fiable, par nom quand le contenu se tait.
+
+    Les BFRES de ce jeu ne portent pas les magies ``FMDL``/``FSHP`` en clair :
+    les sections sont atteintes par des offsets relatifs. On ne peut donc pas
+    décider « modèle » sur la présence d'une magie ; en revanche un fichier
+    ``*.anim.bfres`` ou ``*.Skeleton.bfres`` ne contiendra jamais de faces.
+    """
     if data[:4] == b"BNTX":
         return "texture"
-    if data[:4] == b"FRES":
-        if any(signature in data for signature in ANIM_SIGNATURES) and b"FSHP" not in data:
-            return "animation"
-        return "model"
     low = name.lower()
+    if any(word in low for word in ANIM_NAMES):
+        return "animation"
+    if data[:4] == b"FRES":
+        return "model"
     if low.endswith((".bntx", ".bntx.zs")):
         return "texture"
-    if ".anim." in low:
-        return "animation"
     if low.endswith((".bfres", ".bfres.zs")):
         return "model"
     return "other"

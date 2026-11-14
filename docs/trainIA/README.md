@@ -142,3 +142,36 @@ la surface n'est pas continue. Hypothèses à trancher à la prochaine passe —
 soit des blocs d'indices valides encore refusés, soit des formes en espace
 local qu'il faut replacer avec le squelette (`FSKL`, lu mais pas encore
 exploité).
+
+## Passer une famille au crible
+
+```bash
+python -m tools.coverage /chemin/vers/Model -o previews/<famille>
+```
+
+Sortie : un tableau (fichier, état, sous-maillages, faces, sommets,
+avertissements), un PNG par modèle traduit, plus `coverage.md` et
+`coverage.json` dans le dossier de sortie. Les états sont explicites :
+
+* `ok` — géométrie produite et aperçu écrit ;
+* `refuse` — le traducteur a dit non, avec sa raison ;
+* `animation` — BFRES d'animations : rien à traduire ;
+* `error` — fichier illisible ou plantage (jamais masqué).
+
+L'outil trouve tout seul les `ZsDic.pack.zs` posés dans le dossier et
+décompresse les `.bfres.zs` avec, comme le fait HookyCreator.
+
+## Familles passées au crible
+
+| famille | fichiers | traduits | faces | rapport |
+| --- | ---: | ---: | ---: | --- |
+| ennemis | 15 | 14 (+1 animation écartée) | 471 000 | `couverture-ennemis.md` |
+| animaux | 26 | 26 | 372 378 | `couverture-animaux.md` |
+
+Deux seuils nommés pilotent la sélection des blocs d'indices dans
+`hookymod/bfres_v10.py` : `COHERENCE_MAX = 0.33` (accord géométrique) et
+`EDGE_RATIO_MAX = 0.15` (aucune arête traversant le modèle), plus
+`OVERSIZED_RATIO` pour retirer les triangles aberrants un par un. Le second
+garde-fou a été ajouté en voyant le rendu Wolfos partir en spaghettis ; il
+permet de garder le premier seuil assez large pour ne pas amputer les petits
+modèles.

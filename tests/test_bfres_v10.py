@@ -266,3 +266,47 @@ class RealV10Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class GuardrailTests(unittest.TestCase):
+    """Les garde-fous géométriques sont nommés, donc réglables et testables."""
+
+    def test_thresholds_are_module_constants(self) -> None:
+        from hookymod import bfres_v10 as module
+
+        for name in ("COHERENCE_MAX", "EDGE_RATIO_MAX", "OVERSIZED_RATIO"):
+            self.assertTrue(hasattr(module, name), name)
+            self.assertGreater(getattr(module, name), 0.0, name)
+        self.assertLessEqual(module.COHERENCE_MAX, 1.0)
+
+    def test_oversized_triangle_is_dropped(self) -> None:
+        from hookymod import bfres_v10 as module
+
+        positions = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (50.0, 0.0, 0.0)]
+        good = [(0, 1, 2)]
+        # diagonale 1000 : l'arête de 49 unités reste locale, on garde
+        self.assertEqual(module._drop_oversized(positions, good, 1000.0), good)
+        # diagonale 100 : la même arête traverse la moitié du modèle, on écarte
+        self.assertEqual(module._drop_oversized(positions, good, 100.0), [])
+
+    def test_edge_ratio_sees_a_stretched_mesh(self) -> None:
+        from hookymod import bfres_v10 as module
+
+        tight = [(0.0, 0.0, 0.0), (0.1, 0.0, 0.0), (0.0, 0.1, 0.0)]
+        self.assertLess(module._edge_ratio(tight, [(0, 1, 2)], 1.0), 0.15)
+        stretched = [(0.0, 0.0, 0.0), (9.0, 0.0, 0.0), (0.0, 0.1, 0.0)]
+        self.assertGreater(module._edge_ratio(stretched, [(0, 1, 2)], 1.0), 0.15)
+
+    def test_runaway_vertex_buffer_stops_at_garbage(self) -> None:
+        from hookymod import bfres_v10 as module
+        import struct
+
+        blob = bytearray(12 * 200)
+        for index in range(200):
+            struct.pack_into("<3f", blob, index * 12, 0.1, 0.1, 0.1)
+        struct.pack_into("<3f", blob, 150 * 12, 1e6, 1e6, 1e6)  # donnée étrangère
+        points = module._decode_positions(bytes(blob), 0, 200, 12, 0, 0x1805)
+        # l'échelle de référence vient des 128 premiers sommets : au-delà, le
+        # premier sommet aberrant arrête la lecture au lieu de laisser passer
+        # un million de « sommets » inventés
+        self.assertEqual(len(points), 150)
