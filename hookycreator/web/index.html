@@ -97,6 +97,7 @@
             <div>
               <h2>Atelier</h2>
               <p class="muted" id="home-sub">Chargement du projet…</p>
+              <p class="warn" id="scan-notice" role="status" hidden></p>
             </div>
             <div class="chips" id="stats"></div>
           </div>
@@ -414,8 +415,13 @@
                   <button class="btn" id="cache-clear">Vider le cache</button>
                   <button class="btn ghost" id="scan-now">Rescanner le projet</button>
                 </div>
-                <p class="hint">Les vignettes sont écrites sur disque et réutilisées : un
-                  dossier de mille modèles ne se redessine plus à chaque ouverture.</p>
+                <div class="row">
+                  <button class="btn ghost" id="warm-start" type="button">Préparer les vignettes</button>
+                  <button class="btn ghost" id="warm-stop" type="button" hidden>Arrêter</button>
+                </div>
+                <p class="hint" id="warm-status" role="status" aria-live="polite">Préparation non lancée.</p>
+                <p class="hint">La préparation complète est facultative. Les vignettes visibles
+                  passent d'abord et le cache est réutilisé à la prochaine ouverture.</p>
               </div>
             </section>
 
@@ -450,6 +456,9 @@
   <footer class="statusbar">
     <span class="status-dot" id="status-dot"></span>
     <span id="status-message">prêt</span>
+    <button class="thumb-toggle" id="thumb-toggle" type="button" aria-pressed="false"
+            title="Suspendre les vignettes visibles ; les aperçus détaillés restent disponibles">⏸ Vignettes</button>
+    <span class="scan-warning" id="scan-warning" role="status" hidden>⚠ Scan incomplet</span>
     <span class="status-gap"></span>
     <span id="status-counts"></span>
     <span id="status-budget"></span>
@@ -468,6 +477,7 @@
 </div>
 <div class="toasts" id="toasts"></div>
 
+<script src="/static/thumbnails.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

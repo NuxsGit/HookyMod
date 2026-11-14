@@ -106,10 +106,10 @@ def is_archive_name(name: str) -> bool:
     return any(low.endswith(suffix) for suffix in ARCHIVE_SUFFIXES)
 
 
-def discover(project, include_archives: bool = True) -> list[Item]:
-    """Liste tout ce qui est exploitable : fichiers seuls **et** contenu des packs."""
+def discover(project, include_archives: bool = True, *, assets=None) -> list[Item]:
+    """Liste les fichiers seuls **et** le contenu des packs d'un inventaire donné."""
     items: list[Item] = []
-    for asset in project.assets:
+    for asset in project.assets if assets is None else assets:
         if ".anim." in asset.rel.lower():
             items.append(Item(label=asset.rel, kind="animation", size=asset.size))
             continue
@@ -134,11 +134,24 @@ def export_all(project, out_dir, kinds: tuple[str, ...] = ("texture", "model"),
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    items = [item for item in discover(project) if item.kind in kinds]
+    # Un scan simultané ne doit pas associer le diagnostic d'un inventaire à
+    # la liste d'un autre, ni bloquer pendant l'ouverture de toutes les archives.
+    snapshot = getattr(project, "scan_snapshot", None)
+    if callable(snapshot):
+        assets, scan = snapshot()
+    else:
+        # Compatibilité avec les projets légers utilisés hors de l'application.
+        assets = tuple(project.assets)
+        truncated = bool(getattr(project, "scan_truncated", False))
+        errors = getattr(project, "scan_errors", 0)
+        scan = {"scan_truncated": truncated, "scan_incomplete": truncated or bool(errors),
+                "scan_limit": getattr(project, "scan_limit", 0), "scan_errors": errors,
+                "scan_error_examples": list(getattr(project, "scan_error_examples", ()))}
+    items = [item for item in discover(project, assets=assets) if item.kind in kinds]
     if limit:
         items = items[:limit]
     report = {"out": str(out), "started": len(items), "ok": 0, "skip": 0,
-              "error": 0, "items": [], "textures": 0, "models": 0}
+              "error": 0, "items": [], "textures": 0, "models": 0, **scan}
     for index, item in enumerate(items, start=1):
         if progress:
             progress(index - 1, len(items), item.label)
@@ -211,6 +224,12 @@ def summary(report: dict) -> str:
         f"{report['skip']} ignoré(s), {report['error']} en erreur",
         f"  textures : {report['textures']} PNG   ·   modèles : {report['models']} export(s)",
     ]
+    if report.get("scan_truncated"):
+        lines.append("  ⚠ Scan incomplet : relance avec --scan-limit 0 pour indexer "
+                     "tous les fichiers reconnus.")
+    if report.get("scan_errors"):
+        lines.append(f"  ⚠ Scan incomplet : {report['scan_errors']} entrée(s) illisible(s).")
+        lines.extend(f"    {detail}" for detail in report.get("scan_error_examples", ()))
     for item in report["items"]:
         if item["status"] == "skip":
             lines.append(f"  ⚠ {item['label']} — {item.get('reason', '')}")

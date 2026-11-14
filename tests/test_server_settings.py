@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 from hookycreator.project import ProjectError
 from hookycreator.server import HookyCreatorServer
@@ -32,11 +35,42 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(settings["vram_max_gb"], 25.0)
             self.assertEqual(settings["budget_bytes"], int(6 * 1024 ** 3))
 
+    def test_settings_response_pairs_settings_with_the_same_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_server(Path(tmp))
+            project = server.project
+            entered, release = threading.Event(), threading.Event()
+            original = project.update_settings
+            def delayed(payload):
+                result = original(payload)
+                if payload.get("cache_mb") == 32:
+                    entered.set()
+                    if not release.wait(5):
+                        raise AssertionError("réponse non libérée")
+                return result
+            try:
+                with mock.patch.object(project, "update_settings", side_effect=delayed):
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        old = pool.submit(server.api, "POST", "/api/settings", {}, {"cache_mb": 32})
+                        self.assertTrue(entered.wait(5))
+                        original({"cache_mb": 64})
+                        revision = project.image_revision()
+                        release.set()
+                        payload = json.loads(old.result(timeout=5)[0])
+                self.assertEqual(payload["settings"]["cache_mb"], 64)
+                self.assertEqual(payload["image_revision"], revision)
+            finally:
+                release.set()
+
     def test_post_settings_persists_and_clamps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = make_server(Path(tmp))
+            old_revision = server.project.image_revision()
             body, _ = server.api("POST", "/api/settings", {}, {"vram_gb": 18.5})
-            self.assertEqual(json.loads(body)["settings"]["vram_gb"], 18.5)
+            payload = json.loads(body)
+            self.assertEqual(payload["settings"]["vram_gb"], 18.5)
+            self.assertEqual(payload["image_revision"], server.project.image_revision())
+            self.assertNotEqual(payload["image_revision"], old_revision)
             stored = json.loads((server.project.work / "settings.json").read_text())
             self.assertEqual(stored["vram_gb"], 18.5)
             # au-delà de 25 Go, on retombe sur le maximum au lieu d'accepter
@@ -75,6 +109,21 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(payload["engine"]["restbl"], restbl.backend())
             self.assertEqual(payload["engine"]["restbl"]["name"],
                              "rust" if native.available() else "python")
+
+
+class StaticPathTests(unittest.TestCase):
+    def test_directory_with_same_prefix_is_not_public(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "web"
+            sibling = Path(tmp) / "web-secret"
+            base.mkdir()
+            sibling.mkdir()
+            (base / "index.html").write_text("public", encoding="utf-8")
+            (sibling / "secret.txt").write_text("privé", encoding="utf-8")
+            server = make_server(Path(tmp))
+            with mock.patch("hookycreator.server.WEB_DIR", base):
+                self.assertIsNotNone(server.static("/"))
+                self.assertIsNone(server.static("/static/../web-secret/secret.txt"))
 
 
 class PreviewApiTests(unittest.TestCase):

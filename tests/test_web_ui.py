@@ -115,19 +115,49 @@ class WebContractTests(unittest.TestCase):
         self.assertIn("function onInputDebounced", self.js)
         self.assertIn('onInputDebounced("#search"', self.js)
         self.assertIn('onInputDebounced("#search-tex"', self.js)
+        self.assertIn('onInputDebounced("#search-ens"', self.js)
+        self.assertIn('ensembles: "#search-ens"', self.js)
         # l'ancien câblage direct relançait un rendu par frappe
         self.assertNotIn('$("#search-tex").oninput = (event) => {', self.js)
 
     def test_vignettes_de_texture_demandent_une_taille_reduite(self) -> None:
         """Une texture de 1024 px ne part pas entière pour une tuile de 160 px."""
         self.assertIn("&max=", self.js)
-        self.assertIn("max=192", self.js)
+        self.assertIn("textureThumb(t, 192)", self.js)
+
+    def test_visible_thumbnails_are_queued_and_not_prewarmed_at_boot(self) -> None:
+        self.assertIn('id="thumb-toggle"', self.html)
+        self.assertIn('/static/thumbnails.js', self.html)
+        self.assertIn('data-thumb=', self.js)
+        self.assertIn('thumbnailQueue.observe(grid)', self.js)
+        self.assertIn('thumbnailQueue.release(grid)', self.js)
+        self.assertNotIn('startWarming()', self.js)
+        boot = self.js[self.js.index('async function boot()'):]
+        self.assertNotIn('prepareThumbnails()', boot)
+        self.assertIn('id="warm-start"', self.html)
+        self.assertIn('id="warm-stop"', self.html)
+        self.assertIn('on("#warm-start", "onclick", prepareThumbnails)', self.js)
+        self.assertIn('/api/thumbs/warm', self.js)
 
     @unittest.skipUnless(shutil.which("node"), "node absent")
     def test_javascript_parses(self) -> None:
-        result = subprocess.run(["node", "--check", str(WEB / "app.js")],
-                                capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ("app.js", "thumbnails.js"):
+            with self.subTest(name=name):
+                result = subprocess.run(["node", "--check", str(WEB / name)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "node absent")
+    def test_javascript_behaviour(self) -> None:
+        for script, message in (("thumbnail_queue_test.js", "ThumbnailQueue: OK"),
+                                ("settings_ui_test.js", "Settings UI: OK"),
+                                ("image_revision_ui_test.js", "Image revision UI: OK"),
+                                ("interaction_ui_test.js", "Interaction UI: OK")):
+            with self.subTest(script=script):
+                result = subprocess.run(["node", str(ROOT / "tests" / script)],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(message, result.stdout)
 
 
 if __name__ == "__main__":               # pragma: no cover

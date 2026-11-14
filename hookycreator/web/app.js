@@ -8,7 +8,7 @@ const state = {
   project: null,
   settings: null,
   view: "home",
-  filter: "",
+  filters: { models: "", textures: "", ensembles: "" },
   tabs: [],
   tab: "home",
   logs: [],
@@ -23,8 +23,19 @@ const state = {
   shown: { models: 48, textures: 48, ensembles: 48 },
   system: null,
   engine: null,
+  warm: null,
   fullscreen: false,
 };
+
+const thumbnailQueue = new ThumbnailQueue();
+let apiThumbnailHold = null;
+let inspectionSequence = 0;
+let blendInspectionSequence = 0;
+let ensembleLoad = null;
+let ensembleRenderSequence = 0;
+let projectSnapshotRevision = null;
+let projectRequestSequence = 0;
+let appliedProjectRequest = 0;
 
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -76,7 +87,12 @@ function status(message, kind = "ok") {
 }
 
 function busy(active) {
+  if (active && !state.busy) apiThumbnailHold = thumbnailQueue.hold();
   state.busy = Math.max(0, state.busy + (active ? 1 : -1));
+  if (!state.busy && apiThumbnailHold) {
+    apiThumbnailHold();
+    apiThumbnailHold = null;
+  }
   const dot = $("#status-dot");
   if (dot && state.busy) dot.className = "status-dot busy";
 }
@@ -92,18 +108,19 @@ function toast(message, kind = "ok") {
 }
 
 async function api(path, options = {}) {
-  busy(true);
+  const { background = false, ...requestOptions } = options;
+  if (!background) busy(true);
   try {
     const response = await fetch(path, {
       headers: { "Content-Type": "application/json" },
-      ...options,
+      ...requestOptions,
     });
     const isJson = (response.headers.get("Content-Type") || "").includes("json");
     const payload = isJson ? await response.json() : await response.blob();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     return payload;
   } finally {
-    busy(false);
+    if (!background) busy(false);
   }
 }
 
@@ -156,6 +173,7 @@ function closeTab(id) {
 
 /* ------------------------------------------------------------------ vues */
 function showView(view, options = {}) {
+  if (state.view !== view) thumbnailQueue.release($(`#view-${state.view}`));
   state.view = view;
   $$(".view").forEach((node) => { node.hidden = node.id !== `view-${view}`; });
   $$(".rail-btn[data-view]").forEach((node) => {
@@ -208,6 +226,22 @@ function renderStatus() {
       + `${count("texture")} textures · `
       + `${state.project?.mobs?.length || 0} mobs`;
   }
+  const scan = state.project || {};
+  const incomplete = Boolean(scan.scan_incomplete || scan.scan_truncated || scan.scan_errors);
+  const reasons = [];
+  if (scan.scan_truncated) {
+    reasons.push(`limite de ${scan.scan_limit || "?"} fichiers reconnus atteinte. `
+      + "Relance avec --scan-limit 0 pour tous les indexer (plus de mémoire peut être nécessaire)");
+  }
+  if (scan.scan_errors) {
+    reasons.push(`${scan.scan_errors} entrée(s) illisible(s)`
+      + ((scan.scan_error_examples || []).length ? ` : ${scan.scan_error_examples.join(" · ")}` : ""));
+  }
+  const guidance = `Scan incomplet : ${reasons.join(" ; ")}.`;
+  const warning = $("#scan-warning");
+  if (warning) { warning.hidden = !incomplete; warning.title = incomplete ? guidance : ""; }
+  const notice = $("#scan-notice");
+  if (notice) { notice.hidden = !incomplete; notice.textContent = incomplete ? guidance : ""; }
   const budget = $("#status-budget");
   if (budget) {
     const cache = state.project?.cache?.thumbs;
@@ -260,21 +294,27 @@ function thumbFaces() {
   return state.settings?.thumb_faces || "";
 }
 
-// 320 × 240 et « faces » du réglage : mêmes paramètres que le préchauffage serveur,
-// sinon la vignette serait rendue une deuxième fois pour rien.
+// Certains navigateurs réutilisent l'image décodée en mémoire sans requête,
+// même avec un ETag à revalider. Changer l'URL après une édition ou un réglage.
+function imageRevisionQuery(assetRevision = "") {
+  return `&rev=${encodeURIComponent(state.project?.image_revision || "0")}`
+    + (assetRevision ? `&assetrev=${encodeURIComponent(assetRevision)}` : "");
+}
+
+// Le serveur reconnaît les vignettes et réserve une place aux aperçus détaillés.
 function modelThumb(asset) {
   const faces = thumbFaces();
-  return `/api/model/preview?path=${encodeURIComponent(asset.rel)}&w=320&h=240`
+  return `/api/model/preview?path=${encodeURIComponent(asset.rel)}&w=320&h=240&thumb=1`
     + (faces ? `&faces=${faces}` : "")
-    + (asset.mtime ? `&v=${asset.mtime}` : "");
+    + (asset.mtime ? `&v=${asset.mtime}` : "") + imageRevisionQuery();
 }
 
 // 320 px : la tuile en fait 160, et une texture de 1024² pèse 20 fois plus
 // lourd pour des pixels que l'écran ne montre jamais
 function textureThumb(asset, size = 320) {
-  return `/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=0`
+  return `/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=0&thumb=1`
     + `&max=${size}`
-    + (asset.mtime ? `&v=${asset.mtime}` : "");
+    + (asset.mtime ? `&v=${asset.mtime}` : "") + imageRevisionQuery();
 }
 
 /* le suffixe d'un `.bntx` dit tout (Alb, Nrm, Rgh…) : on l'affiche en clair,
@@ -307,9 +347,9 @@ function tileMarkup(asset, kind) {
   const key = `${kind}:${asset.rel}`;
   const chosen = state.selection.has(key);
   const shown = kind === "model"
-    ? (state.shots ? `<img loading="lazy" decoding="async" alt="" src="${modelThumb(asset)}">`
+    ? (state.shots ? `<img decoding="async" alt="" data-thumb="${esc(modelThumb(asset))}">`
                    : "aperçu désactivé")
-    : `<img loading="lazy" decoding="async" alt="" src="${textureThumb(asset)}">`;
+    : `<img decoding="async" alt="" data-thumb="${esc(textureThumb(asset))}">`;
   return `
     <article class="tile ${chosen ? "selected" : ""}" data-kind="${kind}"
              data-rel="${esc(asset.rel)}" data-key="${esc(key)}">
@@ -336,27 +376,48 @@ function updateMore(kind, total, shown) {
 function ensembleThumb(row) {
   const faces = thumbFaces();
   const textured = $("#ens-textures")?.checked !== false;
-  return `/api/model/preview?path=${encodeURIComponent(row.rel)}&w=320&h=240`
+  return `/api/model/preview?path=${encodeURIComponent(row.rel)}&w=320&h=240&thumb=1`
     + (faces ? `&faces=${faces}` : "")
     + (textured ? "&tex=1" : "&tex=0")
-    + (row.mtime ? `&v=${row.mtime}` : "");
+    + (row.mtime ? `&v=${row.mtime}` : "") + imageRevisionQuery();
 }
 
 function ensembleMatches(row) {
-  return !state.filter || row.rel.toLowerCase().includes(state.filter);
+  const filter = state.filters.ensembles;
+  return !filter || row.rel.toLowerCase().includes(filter);
 }
 
 async function renderEnsembles() {
   const grid = $("#ensemble-grid");
-  if (!grid) return;
+  if (!grid || state.view !== "ensembles") return;
+  const render = ++ensembleRenderSequence;
   if (!state.ensembles.length) {
+    const revision = state.project?.image_revision;
+    // Plusieurs frappes ou changements de vue partagent la même requête.
+    if (!ensembleLoad || ensembleLoad.revision !== revision) {
+      ensembleLoad = { revision, promise: api("/api/ensembles") };
+    }
+    const load = ensembleLoad;
     try {
-      const payload = await api("/api/ensembles");
+      const payload = await load.promise;
+      if (render !== ensembleRenderSequence) return;
+      // Un scan ou une édition a pu remplacer le projet pendant la requête.
+      if (state.project?.image_revision !== revision) {
+        if (state.view === "ensembles") return renderEnsembles();
+        return;
+      }
       state.ensembles = payload.ensembles || [];
       state.blender = payload.blender || null;
       renderBlenderState();
-    } catch (error) { toast(error.message, "error"); return; }
+    } catch (error) {
+      if (render === ensembleRenderSequence && state.view === "ensembles") toast(error.message, "error");
+      return;
+    } finally {
+      if (render === ensembleRenderSequence && ensembleLoad === load) ensembleLoad = null;
+    }
   }
+  // La vue ou le filtre a pu changer pendant le chargement de la liste.
+  if (render !== ensembleRenderSequence || state.view !== "ensembles") return;
   const rows = state.ensembles.filter(ensembleMatches);
   const shown = rows.slice(0, state.shown.ensembles);
   const count = $("#ensemble-count");
@@ -364,15 +425,16 @@ async function renderEnsembles() {
     const complete = state.ensembles.filter((row) => row.complete).length;
     count.textContent = `${state.ensembles.length} modèle(s) · ${complete} complet(s) `
       + "(textures + animations repérées)"
-      + (state.filter ? ` · filtre « ${state.filter} »` : "");
+      + (state.filters.ensembles ? ` · filtre « ${state.filters.ensembles} »` : "");
   }
+  thumbnailQueue.release(grid);
   grid.innerHTML = shown.length
     ? shown.map((row) => `
       <article class="tile ensemble" data-kind="model" data-rel="${esc(row.rel)}"
                data-key="model:${esc(row.rel)}" data-ensemble="1">
         <button class="pick" data-pick="model:${esc(row.rel)}" title="Sélectionner (Ctrl+clic)">✓</button>
         <div class="thumb">
-          <img loading="lazy" decoding="async" alt="" src="${ensembleThumb(row)}">
+          <img decoding="async" alt="" data-thumb="${esc(ensembleThumb(row))}">
         </div>
         <div class="meta">
           <strong title="${esc(row.rel)}">${esc(row.name)}</strong>
@@ -384,6 +446,7 @@ async function renderEnsembles() {
         </div>
       </article>`).join("")
     : `<p class="muted">Aucun modèle repéré dans ce dossier.</p>`;
+  thumbnailQueue.observe(grid);
   const more = $("#ensemble-more");
   const button = $("#ensemble-more-btn");
   if (more && button) {
@@ -395,21 +458,23 @@ async function renderEnsembles() {
 
 async function renderModels() {
   const grid = $("#model-grid");
-  if (!grid) return;
+  if (!grid || state.view !== "models") return;
   state.shots = $("#model-shots")?.checked !== false;
   const models = (state.project?.assets || [])
-    .filter((asset) => asset.kind === "model" && matches(asset));
+    .filter((asset) => asset.kind === "model" && matches(asset, state.filters.models));
   state.models = models;
   const shown = models.slice(0, state.shown.models);
   const count = $("#model-count");
   if (count) {
     count.textContent = `${models.length} modèle(s)`
-      + (state.filter ? ` pour « ${state.filter} »` : "")
+      + (state.filters.models ? ` pour « ${state.filters.models} »` : "")
       + (shown.length < models.length ? ` — ${shown.length} affichés` : "");
   }
+  thumbnailQueue.release(grid);
   grid.innerHTML = shown.length
     ? shown.map((asset) => tileMarkup(asset, "model")).join("")
     : `<p class="muted">Aucun modèle repéré dans ce dossier.</p>`;
+  thumbnailQueue.observe(grid);
   updateMore("model", models.length, shown.length);
   updateSelectionBar();
 }
@@ -427,15 +492,29 @@ function onInputDebounced(selector, handler, delay = 120) {
   };
 }
 
-function matches(asset) {
-  return !state.filter || asset.rel.toLowerCase().includes(state.filter);
+function matches(asset, filter) {
+  return !filter || asset.rel.toLowerCase().includes(filter);
+}
+
+function focusSearch() {
+  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens" }[state.view];
+  if (selector) $(selector)?.focus();
 }
 
 async function openModel(rel, options = {}) {
+  showInspector("Modèle", `<h3>Chargement du modèle…</h3><p class="muted">${esc(rel)}</p>`);
+  const request = inspectionSequence;
   let info;
   try {
     info = await api(`/api/model/info?path=${encodeURIComponent(rel)}`);
-  } catch (error) { toast(error.message, "error"); return; }
+  } catch (error) {
+    if (request === inspectionSequence) {
+      showInspector("Modèle", `<h3>Modèle indisponible</h3><p>${esc(error.message)}</p>`);
+      toast(error.message, "error");
+    }
+    return;
+  }
+  if (request !== inspectionSequence) return;
 
   const name = info.models[0] || rel.split("/").pop();
   const qualities = [
@@ -445,12 +524,12 @@ async function openModel(rel, options = {}) {
   ];
   const textured = info.textures.length ? "&tex=1" : "";
   const shot = (faces) => `/api/model/preview?path=${encodeURIComponent(rel)}&w=460&h=345`
-    + (faces ? `&faces=${faces}` : "") + textured;
+    + (faces ? `&faces=${faces}` : "") + textured + imageRevisionQuery(info.revision);
 
   showInspector("Modèle", `
     <h3>${esc(name)}</h3>
     <div class="sub">${esc(rel)}</div>
-    <img class="preview" id="model-shot" alt="" src="${shot(null)}">
+    <img class="preview" id="model-shot" alt="" src="${esc(shot(null))}">
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}</dd>
       <dt>Maillages</dt><dd>${info.meshes}${info.dropped ? ` <span class="warn">(${info.dropped} ignoré(s))</span>` : ""}</dd>
@@ -468,8 +547,7 @@ async function openModel(rel, options = {}) {
       <h4>Cartes du modèle (${info.textures.length})</h4>
       <div class="strip">${info.textures.map((t) => `
         <button class="strip-item" data-open-texture="${esc(t.rel)}" title="${esc(t.rel)}">
-          <img loading="lazy" decoding="async" alt=""
-               src="/api/texture/png?path=${encodeURIComponent(t.rel)}&index=0&max=192${t.mtime ? `&v=${t.mtime}` : ""}">
+          <img decoding="async" alt="" data-thumb="${esc(textureThumb(t, 192))}">
           <span>${esc(t.name)}</span>
           <span class="strip-role">${ROLE_BADGE(t.role)}</span>
         </button>`).join("")}</div>
@@ -516,7 +594,7 @@ async function openModel(rel, options = {}) {
   }
 
   $("#btn-turntable").onclick = () => {
-    $("#model-shot").src = `/api/model/preview?path=${encodeURIComponent(rel)}&w=460&h=345&views=4`;
+    $("#model-shot").src = `${shot(null)}&views=4`;
   };
   $("#btn-blender").onclick = () => exportModel(rel);
   $("#btn-blend").onclick = () => exportBlend(rel);
@@ -541,10 +619,10 @@ async function openModel(rel, options = {}) {
 /* ------------------------------------------------------------------ textures */
 async function renderTextures() {
   const grid = $("#texture-grid");
-  if (!grid) return;
+  if (!grid || state.view !== "textures") return;
   const role = $("#tex-role")?.value || "";
   const textures = (state.project?.assets || [])
-    .filter((asset) => asset.kind === "texture" && matches(asset)
+    .filter((asset) => asset.kind === "texture" && matches(asset, state.filters.textures)
       && (!role || (asset.role || "autre") === role));
   state.textures = textures;
   const shown = textures.slice(0, state.shown.textures);
@@ -553,28 +631,44 @@ async function renderTextures() {
     const roleName = role ? (ROLE_NAMES[role] || role) : "";
     count.textContent = `${textures.length} texture(s)`
       + (role ? ` de type ${roleName}` : "")
-      + (state.filter ? ` pour « ${state.filter} »` : "")
+      + (state.filters.textures ? ` pour « ${state.filters.textures} »` : "")
       + (shown.length < textures.length ? ` — ${shown.length} affichées` : "");
   }
+  thumbnailQueue.release(grid);
   grid.innerHTML = shown.length
     ? shown.map((asset) => tileMarkup(asset, "texture")).join("")
     : `<p class="muted">Aucune texture repérée dans ce dossier.</p>`;
+  thumbnailQueue.observe(grid);
   updateMore("texture", textures.length, shown.length);
   updateSelectionBar();
 }
 
 async function openTexture(rel) {
+  showInspector("Texture", `<h3>Chargement de la texture…</h3><p class="muted">${esc(rel)}</p>`);
+  const request = inspectionSequence;
   let info;
   try {
     info = await api(`/api/texture/info?path=${encodeURIComponent(rel)}`);
-  } catch (error) { toast(error.message, "error"); return; }
+  } catch (error) {
+    if (request === inspectionSequence) {
+      showInspector("Texture", `<h3>Texture indisponible</h3><p>${esc(error.message)}</p>`);
+      toast(error.message, "error");
+    }
+    return;
+  }
+  if (request !== inspectionSequence) return;
   const texture = info.textures[0];
+  if (!texture) {
+    showInspector("Texture", `<h3>Texture indisponible</h3><p>Aucune texture dans ce fichier.</p>`);
+    return;
+  }
   const editable = info.textures.filter((item) => item.editable).length;
+  const image = `/api/texture/png?path=${encodeURIComponent(rel)}&index=0`
+    + imageRevisionQuery(info.revision);
   showInspector("Texture", `
     <h3>${esc(texture.name)}</h3>
     <div class="sub">${esc(rel)}</div>
-    <img class="preview" alt=""
-      src="/api/texture/png?path=${encodeURIComponent(rel)}&index=0">
+    <img class="preview" alt="" src="${esc(image)}">
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}${info.orin ? " · Orin" : ""}</dd>
       <dt>Format</dt><dd>${esc(texture.format)} ${texture.editable
@@ -610,19 +704,23 @@ async function openTexture(rel) {
   input.onchange = async () => {
     const file = input.files[0];
     if (!file) return;
-    const base64 = await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(",")[1]);
-      reader.readAsDataURL(file);
-    });
+    const request = inspectionSequence;
     try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onerror = () => reject(new Error("Impossible de lire l'image choisie."));
+        reader.onabort = () => reject(new Error("Lecture de l'image annulée."));
+        reader.readAsDataURL(file);
+      });
       const result = await api("/api/texture/import", {
         method: "POST",
         body: JSON.stringify({ path: rel, index: 0, image: base64 }),
       });
       toast(`Texture remplacée (${result.texture}) → ${result.wrote}`);
       await refresh();
-      openTexture(rel);
+      // L'utilisateur a pu ouvrir une autre fiche pendant l'import.
+      if (request === inspectionSequence) openTexture(rel);
     } catch (error) { toast(error.message, "error"); }
   };
 }
@@ -735,8 +833,12 @@ function blendOptions() {
 }
 
 async function inspectBlend() {
+  const request = ++blendInspectionSequence;
   const ref = state.blend.ref || $("#blend-list")?.value;
-  if (!ref) return;
+  if (!ref) {
+    state.blend.objects = [];
+    return;
+  }
   state.blend.ref = ref;
   const info = $("#blend-info");
   if (info) info.innerHTML = `<dt class="muted">analyse…</dt><dd></dd>`;
@@ -745,6 +847,7 @@ async function inspectBlend() {
       method: "POST",
       body: JSON.stringify({ ref, ...blendOptions() }),
     });
+    if (request !== blendInspectionSequence || state.blend.ref !== ref) return;
     state.blend.objects = payload.objects || [];
     const objects = payload.objects || [];
     if (info) {
@@ -773,6 +876,7 @@ async function inspectBlend() {
     }
     log("ok", `${payload.file} : ${payload.faces} face(s) lues`);
   } catch (error) {
+    if (request !== blendInspectionSequence || state.blend.ref !== ref) return;
     if (info) info.innerHTML = `<dt class="muted">erreur</dt><dd>${esc(error.message)}</dd>`;
     toast(error.message, "error");
   }
@@ -890,6 +994,7 @@ function renderSettings() {
   $("#set-export-textures").checked = settings.export_textures !== false;
   $("#set-textured").checked = settings.textured_previews !== false;
   renderBlenderState();
+  updateWarmStatus(state.warm);
 
   $("#settings-summary").innerHTML = [
     `<li><span class="k">Budget</span>${humanBytes(settings.budget_bytes
@@ -911,24 +1016,65 @@ function renderSettings() {
 }
 
 let settingsTimer = null;
-async function saveSettings(patch, options = {}) {
+let settingsPending = {};
+let settingsInFlight = {};
+let settingsWaiters = [];
+let settingsSending = false;
+let settingsNotify = false;
+
+function saveSettings(patch, options = {}) {
   state.settings = { ...settingsOrDefault(), ...patch };
   applyUiSettings(state.settings);
   renderSettings();
+  // Regrouper toutes les modifications rapprochées, pas seulement la dernière.
+  Object.assign(settingsPending, patch);
+  settingsNotify ||= !options.quiet;
   clearTimeout(settingsTimer);
-  settingsTimer = setTimeout(async () => {
-    try {
-      const payload = await api("/api/settings", {
-        method: "POST",
-        body: JSON.stringify(patch),
-      });
-      state.settings = payload.settings;
-      renderSettings();
-      renderStatus();
-      if (state.view === "models") await renderModels();
-      if (!options.quiet) toast("Réglages enregistrés");
-    } catch (error) { toast(error.message, "error"); }
+  const saved = new Promise((resolve) => settingsWaiters.push(resolve));
+  settingsTimer = setTimeout(() => {
+    settingsTimer = null;
+    flushSettings();
   }, 180);
+  return saved;
+}
+
+async function flushSettings() {
+  if (settingsSending || !Object.keys(settingsPending).length) return;
+  const patch = settingsPending;
+  const waiters = settingsWaiters;
+  const notify = settingsNotify;
+  settingsPending = {};
+  settingsInFlight = patch;
+  settingsWaiters = [];
+  settingsNotify = false;
+  settingsSending = true;
+  let saved = false;
+  try {
+    const payload = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    });
+    // Une modification arrivée pendant l'écriture reste affichée et sera
+    // envoyée ensuite ; une réponse plus ancienne qu'un scan ne l'annule pas.
+    const obsolete = payload.image_revision
+      && revisionOrder(payload.image_revision, state.project?.image_revision) === -1;
+    state.settings = { ...(obsolete ? state.settings : payload.settings), ...settingsPending };
+    if (state.project && payload.image_revision && !obsolete) {
+      state.project.image_revision = payload.image_revision;
+      state.project.settings = payload.settings;
+    }
+    renderSettings();
+    renderStatus();
+    if (state.view === "models") await renderModels();
+    if (notify) toast("Réglages enregistrés");
+    saved = true;
+  } catch (error) { toast(error.message, "error"); }
+  finally {
+    settingsSending = false;
+    settingsInFlight = {};
+    waiters.forEach((resolve) => resolve(saved));
+    if (Object.keys(settingsPending).length && !settingsTimer) flushSettings();
+  }
 }
 
 function wireSettings() {
@@ -950,9 +1096,10 @@ function wireSettings() {
   on("#set-textured", "onchange", (event) => {
     saveSettings({ textured_previews: event.target.checked });
   });
-  on("#set-blender-path", "change", async (event) => {
-    await saveSettings({ blender_path: event.target.value.trim() });
-    await refreshBlender();
+  on("#set-blender-path", "onchange", async (event) => {
+    if (await saveSettings({ blender_path: event.target.value.trim() })) {
+      await refreshBlender();
+    }
   });
   on("#set-preview-faces", "onchange", (event) => {
     saveSettings({ preview_faces: Number(event.target.value) });
@@ -968,8 +1115,10 @@ function wireSettings() {
     $("#set-cache-out").textContent = `${value} Mo`;
     saveSettings({ cache_mb: value });
   });
-  on("#cache-clear", "click", clearCache);
-  on("#scan-now", "click", rescanProject);
+  on("#cache-clear", "onclick", clearCache);
+  on("#scan-now", "onclick", rescanProject);
+  on("#warm-start", "onclick", prepareThumbnails);
+  on("#warm-stop", "onclick", stopPreparingThumbnails);
   on("#set-reset", "onclick", () => saveSettings({
     vram_gb: 6, supersample: 2, cull: true, frustum: true, adaptive: true,
     max_faces: null, lod: 0, accent: "menthe", density: "confort",
@@ -1064,13 +1213,19 @@ async function exportSelection(blend = false) {
 
 /* ------------------------------------------------------------------ inspecteur */
 function showInspector(title, html) {
+  inspectionSequence += 1;
+  const body = $("#inspector-body");
+  thumbnailQueue.release(body);
   $("#inspector-title").textContent = title;
-  $("#inspector-body").innerHTML = html;
+  body.innerHTML = html;
   $("#inspector").hidden = false;
   $(".workspace").classList.add("with-inspector");
+  thumbnailQueue.observe(body);
 }
 
 function hideInspector() {
+  inspectionSequence += 1;
+  thumbnailQueue.release($("#inspector-body"));
   $("#inspector").hidden = true;
   $(".workspace").classList.remove("with-inspector");
 }
@@ -1118,14 +1273,23 @@ async function exportModel(rel) {
 /* ------------------------------------------------------------------ vérificateur d'UV */
 function uvShot(rel, flip, size = 512) {
   return `/api/model/uv?path=${encodeURIComponent(rel)}&size=${size}`
-    + `&flip=${flip ? 1 : 0}`;
+    + `&flip=${flip ? 1 : 0}` + imageRevisionQuery();
 }
 
 async function showUv(rel) {
+  showInspector("UV", `<h3>Analyse des UV…</h3><p class="muted">${esc(rel)}</p>`);
+  const request = inspectionSequence;
   let report;
   try {
     report = await api(`/api/model/uv/info?path=${encodeURIComponent(rel)}`);
-  } catch (error) { toast(error.message, "error"); return; }
+  } catch (error) {
+    if (request === inspectionSequence) {
+      showInspector("UV", `<h3>Analyse indisponible</h3><p>${esc(error.message)}</p>`);
+      toast(error.message, "error");
+    }
+    return;
+  }
+  if (request !== inspectionSequence) return;
   const name = rel.split("/").pop();
   const range = (pair) => `${pair[0].toFixed(2)} → ${pair[1].toFixed(2)}`;
   const facts = report.has_uvs
@@ -1169,6 +1333,7 @@ async function showUv(rel) {
 }
 
 async function exportBlend(rel) {
+  const request = inspectionSequence;
   const button = $("#btn-blend");
   const label = button ? button.textContent : "";
   if (button) { button.disabled = true; button.textContent = "Blender travaille…"; }
@@ -1181,29 +1346,29 @@ async function exportBlend(rel) {
       toast(`.blend écrit : ${result.blend}`);
       log("ok", `${result.message}`);
     } else {
-      // le .blend n'a pas pu être produit : on dit exactement quoi faire
-      toast("Blender introuvable : le script est prêt", "error");
+      // Blender peut être absent *ou* avoir échoué : conserver la vraie raison.
+      toast("Aucun nouveau .blend confirmé : voir le journal", "error");
       log("warn", result.message);
       if (result.command) log("info", `à lancer : ${result.command}`);
       if (result.platform_note) log("info", result.platform_note);
-      showInspector("Blender introuvable", `
-        <h3>Le .blend n'a pas été écrit</h3>
-        <p class="muted">${esc(result.message)}</p>
-        <p>Deux solutions :</p>
-        <ol class="todo">
-          <li>renseigne le chemin de <code>blender.exe</code> dans <b>Réglages</b>, puis relance ;</li>
-          <li>ou lance la commande ci-dessous dans le dossier de l'export.</li>
-        </ol>
-        <pre class="command" id="blend-command">${esc(result.command || "")}</pre>
-        <button class="btn ghost tiny" id="copy-command">Copier la commande</button>
-        <p class="hint">${esc(result.platform_note || "")}</p>
-        <p class="hint">Le dossier contient déjà ${result.files.length} fichier(s) :
-          ${esc(result.files.join(", "))}</p>`);
-      const copy = $("#copy-command");
-      if (copy) copy.onclick = async () => {
-        try { await navigator.clipboard.writeText(result.command || ""); toast("Commande copiée"); }
-        catch (error) { toast("Copie impossible : sélectionne le texte", "error"); }
-      };
+      // Un export long ne doit pas remplacer une fiche ouverte entre-temps.
+      if (request === inspectionSequence) {
+        showInspector("Export Blender incomplet", `
+          <h3>Le .blend n'a pas été écrit</h3>
+          <p class="muted">${esc(result.message)}</p>
+          <p>Vérifie Blender et son chemin dans <b>Réglages</b>, puis relance.</p>
+          ${result.command ? `<p>Ou lance cette commande dans le dossier de l'export :</p>
+            <pre class="command" id="blend-command">${esc(result.command)}</pre>
+            <button class="btn ghost tiny" id="copy-command">Copier la commande</button>` : ""}
+          <p class="hint">${esc(result.platform_note || "")}</p>
+          <p class="hint">Le dossier contient déjà ${result.files.length} fichier(s) :
+            ${esc(result.files.join(", "))}</p>`);
+        const copy = $("#copy-command");
+        if (copy) copy.onclick = async () => {
+          try { await navigator.clipboard.writeText(result.command || ""); toast("Commande copiée"); }
+          catch (error) { toast("Copie impossible : sélectionne le texte", "error"); }
+        };
+      }
     }
     if (result.output) log("info", result.output.split("\n").slice(-6).join(" · "));
   } catch (error) {
@@ -1252,7 +1417,8 @@ async function startBulk() {
 async function pollBulk() {
   let job;
   try {
-    job = await api("/api/bulk/status");
+    // Le suivi périodique ne doit pas annuler une vignette toutes les 400 ms.
+    job = await api("/api/bulk/status", { background: true, cache: "no-store" });
   } catch (error) {
     toast(error.message, "error");
     $("#bulk-start").disabled = false;
@@ -1272,9 +1438,11 @@ async function pollBulk() {
   const report = job.report;
   if (!report) return;
   $("#bulk-fill").style.width = "100%";
+  const incompleteScan = Boolean(report.scan_incomplete || report.scan_truncated || report.scan_errors);
   $("#bulk-label").textContent =
     `${report.ok} réussi(s) · ${report.skip} ignoré(s) · ${report.error} erreur(s) — `
-    + `${report.textures} PNG, ${report.models} modèle(s)`;
+    + `${report.textures} PNG, ${report.models} modèle(s)`
+    + (incompleteScan ? " · scan incomplet" : "");
   $("#bulk-report").innerHTML = report.items.slice(0, 60).map((item) => {
     const flavor = item.status === "ok"
       ? `<span class="badge">ok</span>`
@@ -1284,7 +1452,11 @@ async function pollBulk() {
       : (item.reason || "");
     return `<li>${flavor}<span>${esc(item.label)}<br><small class="muted">${esc(detail)}</small></span></li>`;
   }).join("");
-  toast(`Export complet : ${report.ok} élément(s)`);
+  if (incompleteScan) {
+    toast(`Export partiel : ${report.ok} élément(s), scan incomplet`, "error");
+  } else {
+    toast(`Export terminé : ${report.ok} élément(s)`);
+  }
   await refresh();
 }
 
@@ -1341,7 +1513,7 @@ const MENUS = {
   ],
   edition: [
     { label: "Palette de commandes", hint: "Ctrl+K", run: openPalette },
-    { label: "Chercher dans la vue", hint: "Ctrl+F", run: () => $("#search")?.focus() },
+    { label: "Chercher dans la vue", hint: "Ctrl+F", run: focusSearch },
     { sep: true },
     { label: "Vider le journal", run: () => { state.logs = []; renderLogs(); } },
   ],
@@ -1516,44 +1688,77 @@ function runPalette(index) {
   item.run();
 }
 
-/* ------------------------------------------------------------------ préchauffage */
+/* ------------------------------------------------------------------ mémoire */
 let warmTimer = null;
 
-function watchWarm(warm) {
-  clearTimeout(warmTimer);
-  if (!warm || !warm.total) return;
-  const label = $("#status-message");
-  if (label) label.textContent = `vignettes ${warm.done}/${warm.total}`;
-  if (!warm.running) {
-    log("ok", `vignettes prêtes : ${warm.done}/${warm.total}`);
-    if (state.view === "models") renderModels();
-    refreshSystem();
-    return;
+function updateWarmStatus(warm) {
+  if (!warm) return;
+  state.warm = warm;
+  const start = $("#warm-start");
+  const stop = $("#warm-stop");
+  const label = $("#warm-status");
+  if (start) start.disabled = Boolean(warm.running) || state.settings?.cache_mb === 0;
+  if (stop) {
+    stop.hidden = !warm.running;
+    stop.disabled = Boolean(warm.stopping);
   }
-  warmTimer = setTimeout(async () => {
-    try {
-      const payload = await api("/api/thumbs/status");
-      watchWarm(payload.warm);
-    } catch (error) { /* le serveur peut être occupé, on retentera */ }
-  }, 1200);
+  if (label) {
+    if (warm.running) {
+      label.textContent = `${warm.stopping ? "Arrêt en cours" : "Préparation"} : ${warm.done}/${warm.total}`;
+    } else if (warm.cancelled) {
+      label.textContent = `Préparation arrêtée : ${warm.done}/${warm.total}`;
+    } else if (warm.total) {
+      label.textContent = `Préparation terminée : ${warm.done}/${warm.total}`;
+    } else {
+      label.textContent = state.settings?.cache_mb === 0
+        ? "Active le cache pour préparer les vignettes." : "Préparation non lancée.";
+    }
+    if (warm.failed) label.textContent += ` · ${warm.failed} échec(s)`;
+    label.title = warm.error || "";
+  }
+  clearTimeout(warmTimer);
+  warmTimer = warm.running ? setTimeout(pollWarmStatus, 1500) : null;
 }
 
-async function startWarming() {
+async function pollWarmStatus() {
+  warmTimer = null;
+  try {
+    // Une simple lecture d'état ne doit pas interrompre les images en cours.
+    const payload = await api("/api/thumbs/status", { background: true, cache: "no-store" });
+    updateWarmStatus(payload.warm);
+  } catch (error) {
+    const label = $("#warm-status");
+    if (label) label.textContent = `État de préparation indisponible : ${error.message}`;
+    if (state.warm?.running) warmTimer = setTimeout(pollWarmStatus, 3000);
+  }
+}
+
+async function prepareThumbnails() {
+  const start = $("#warm-start");
+  if (start) start.disabled = true;
   try {
     const payload = await api("/api/thumbs/warm", { method: "POST", body: "{}" });
-    if (payload.warm?.running) {
-      log("ok", `préparation des vignettes : ${payload.warm.total} modèle(s)`);
-      watchWarm(payload.warm);
-    }
-  } catch (error) { log("error", `préchauffage impossible : ${error.message}`); }
+    updateWarmStatus(payload.warm);
+    if (!payload.warm?.total) toast("Aucun modèle à préparer.");
+  } catch (error) {
+    if (start) start.disabled = false;
+    toast(error.message, "error");
+  }
 }
 
-/* ------------------------------------------------------------------ mémoire */
+async function stopPreparingThumbnails() {
+  try {
+    const payload = await api("/api/thumbs/stop", { method: "POST", body: "{}" });
+    updateWarmStatus(payload.warm);
+  } catch (error) { toast(error.message, "error"); }
+}
+
 async function refreshSystem() {
   try {
     const payload = await api("/api/system");
     state.system = payload.cache;
     state.engine = payload.engine;
+    updateWarmStatus(payload.cache?.warm);
     renderMemory();
     renderEngine();
     renderStatus();
@@ -1628,18 +1833,25 @@ async function clearCache() {
 }
 
 async function rescanProject() {
+  const request = ++projectRequestSequence;
   status("scan du projet…", "busy");
   try {
     const payload = await api("/api/scan", { method: "POST", body: "{}" });
-    state.project = payload.project;
-    state.settings = payload.project.settings || state.settings;
+    if (!acceptProjectSnapshot(payload.project, request)) { status("scan terminé"); return; }
+    state.ensembles = [];
     state.shown.models = 48;
     state.shown.textures = 48;
+    state.shown.ensembles = 48;
     renderStatus();
     if (state.view === "models") await renderModels();
+    if (state.view === "ensembles") await renderEnsembles();
     if (state.view === "textures") await renderTextures();
     if (state.view === "home") renderHome();
-    toast(`${payload.scan.count} fichier(s) en ${payload.scan.scan_seconds} s`);
+    if (payload.scan.incomplete || payload.scan.truncated) {
+      toast("Scan incomplet : consulte les détails à l'accueil.", "error");
+    } else {
+      toast(`${payload.scan.count} fichier(s) en ${payload.scan.scan_seconds} s`);
+    }
   } catch (error) { toast(error.message, "error"); }
 }
 
@@ -1702,10 +1914,37 @@ function toggleConsole(force) {
 }
 
 /* ------------------------------------------------------------------ état */
+function revisionOrder(candidate, current) {
+  if (!candidate || !current) return null;
+  if (candidate === current) return 0;
+  const a = String(candidate).match(/^(.*)-(\d+)$/);
+  const b = String(current).match(/^(.*)-(\d+)$/);
+  if (!a || !b || a[1] !== b[1]) return null;
+  const left = Number(a[2]), right = Number(b[2]);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function acceptProjectSnapshot(project, request) {
+  const previous = projectSnapshotRevision || state.project?.image_revision;
+  const order = revisionOrder(project?.image_revision, previous);
+  if (order === -1 || (order === null && request < appliedProjectRequest)) return false;
+  appliedProjectRequest = Math.max(appliedProjectRequest, request);
+  projectSnapshotRevision = project.image_revision || null;
+  // Un réglage peut avoir avancé la révision d'image après ce scan. Garder ses
+  // images et ses réglages tout en acceptant le nouvel inventaire du scan.
+  const keepNewerImages = revisionOrder(project.image_revision, state.project?.image_revision) === -1;
+  const incomingSettings = keepNewerImages ? state.settings : (project.settings || state.settings);
+  state.project = keepNewerImages
+    ? { ...project, image_revision: state.project.image_revision }
+    : project;
+  state.settings = { ...(incomingSettings || {}), ...settingsInFlight, ...settingsPending };
+  return true;
+}
+
 async function refresh(options = {}) {
+  const request = ++projectRequestSequence;
   const payload = await api("/api/state");
-  state.project = payload.project;
-  state.settings = payload.project.settings || state.settings;
+  if (!acceptProjectSnapshot(payload.project, request)) return;
   state.ensembles = [];          // la liste dépend des fichiers : on la relit
   applyUiSettings(state.settings);
   renderStatus();
@@ -1723,7 +1962,23 @@ async function refresh(options = {}) {
 }
 
 /* ------------------------------------------------------------------ câblage */
+function setThumbnailPause(paused) {
+  thumbnailQueue.setPaused(paused);
+  const button = $("#thumb-toggle");
+  if (button) {
+    button.textContent = paused ? "▶ Reprendre vignettes" : "⏸ Pause vignettes";
+    button.setAttribute("aria-pressed", String(paused));
+  }
+  try { localStorage.setItem("hooky-thumbnails-paused", paused ? "1" : "0"); }
+  catch (_) { /* stockage facultatif */ }
+}
+
 function wire() {
+  let paused = false;
+  try { paused = localStorage.getItem("hooky-thumbnails-paused") === "1"; }
+  catch (_) { /* stockage facultatif */ }
+  setThumbnailPause(paused);
+  $("#thumb-toggle").onclick = () => setThumbnailPause(!thumbnailQueue.paused);
   $$(".rail-btn[data-view]").forEach((node) => {
     node.onclick = () => showView(node.dataset.view);
   });
@@ -1745,14 +2000,19 @@ function wire() {
   // taper dans la recherche ne doit pas reconstruire la grille à chaque touche :
   // sur un dump de 12 000 fichiers, l'affichage attend 120 ms de calme
   onInputDebounced("#search", (value) => {
-    state.filter = value.trim().toLowerCase();
+    state.filters.models = value.trim().toLowerCase();
     state.shown.models = 48;
     renderModels();
   });
   onInputDebounced("#search-tex", (value) => {
-    state.filter = value.trim().toLowerCase();
+    state.filters.textures = value.trim().toLowerCase();
     state.shown.textures = 48;
     renderTextures();
+  });
+  onInputDebounced("#search-ens", (value) => {
+    state.filters.ensembles = value.trim().toLowerCase();
+    state.shown.ensembles = 48;
+    renderEnsembles();
   });
   $("#model-shots").onchange = renderModels;
   const ensMore = $("#ensemble-more-btn");
@@ -1885,7 +2145,7 @@ function wire() {
     if (meta && event.key.toLowerCase() === "j") { event.preventDefault(); toggleConsole(); return; }
     if (meta && event.key.toLowerCase() === "f") {
       event.preventDefault();
-      (state.view === "textures" ? $("#search-tex") : $("#search"))?.focus();
+      focusSearch();
       return;
     }
     if (meta && "123456".includes(event.key)) {
@@ -1930,8 +2190,11 @@ async function boot() {
     await refresh();
     log("ok", `Projet ouvert : ${state.project.root}`);
     refreshSystem();
-    startWarming();
-    status("prêt");
+    if (state.project.scan_incomplete || state.project.scan_truncated) {
+      toast("Scan incomplet : consulte les détails à l'accueil.", "error");
+    } else {
+      status("prêt");
+    }
   } catch (error) {
     toast(error.message, "error");
   }

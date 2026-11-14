@@ -78,9 +78,10 @@ def write(path, meshes, meta: dict | None = None) -> int:
                 flat.append(z)
             body += flat.tobytes()
     blob += body
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_bytes(bytes(blob))
-    temporary.replace(path)
+    from hookymod.util import write_atomic
+
+    # Noms temporaires uniques : deux processus peuvent décoder le même modèle.
+    write_atomic(path, bytes(blob))
     return len(blob)
 
 

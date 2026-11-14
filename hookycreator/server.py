@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 from hookymod import bntx, native, restbl, sarc, zs
 
 from . import blend as blend_mod
-from .project import Project, ProjectError
+from .project import MAX_SCAN_FILES, Project, ProjectError
 
 WEB_DIR = Path(__file__).parent / "web"
 
@@ -34,20 +34,53 @@ WEB_DIR = Path(__file__).parent / "web"
 IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png", "/api/blend/preview")
 
 
+class ThumbnailActivity:
+    """Le préchauffage explicite cède aux vignettes demandées par les vues."""
+
+    def __init__(self, quiet_seconds: float = 1.5) -> None:
+        self.quiet_seconds = quiet_seconds
+        self._last = float("-inf")
+        self._lock = threading.Lock()
+
+    def note(self) -> None:
+        with self._lock:
+            self._last = time.monotonic()
+
+    def _remaining(self) -> float:
+        with self._lock:
+            return self.quiet_seconds - (time.monotonic() - self._last)
+
+    def idle(self) -> bool:
+        return self._remaining() <= 0
+
+    def wait_idle(self, cancelled: threading.Event) -> bool:
+        while not cancelled.is_set():
+            remaining = self._remaining()
+            if remaining <= 0:
+                return True
+            cancelled.wait(min(0.1, remaining))
+        return False
+
+
 class HookyCreatorServer:
     """Serveur HTTP + état du projet (un projet à la fois, comme un éditeur)."""
 
     def __init__(self, root: str | Path, work: str | Path | None = None,
-                 host: str = "0.0.0.0", port: int = 8765) -> None:
-        self.project = Project(Path(root), Path(work) if work else None)
-        self.project.scan()
+                 host: str = "0.0.0.0", port: int = 8765, *,
+                 scan_limit: int = MAX_SCAN_FILES) -> None:
+        self.project = Project(Path(root), Path(work) if work else None, scan_limit=scan_limit)
+        self.scan_summary = self.project.scan()
         self.host = host
         self.port = port
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.stopped = False
-        # deux rendus à la fois : au-delà, les tuiles se battent pour le processeur
-        self.render_slots = threading.Semaphore(2)
+        # Au plus un rendu de vignette et deux rendus au total : une action
+        # interactive garde toujours une place, même avec plusieurs onglets.
+        self.render_slots = threading.BoundedSemaphore(2)
+        self.thumbnail_slot = threading.BoundedSemaphore(1)
+        self.thumbnail_activity = ThumbnailActivity()
+        self._job_lock = threading.Lock()
         self.job: dict = {"running": False, "done": 0, "total": 0, "label": "",
                           "report": None, "error": None}
         # fichiers statiques lus une fois : un rechargement ne relit pas le disque
@@ -66,6 +99,7 @@ class HookyCreatorServer:
         return self
 
     def stop(self) -> None:
+        self.project.stop_warming()
         if self.httpd:
             self.httpd.shutdown()
             self.httpd.server_close()
@@ -86,8 +120,10 @@ class HookyCreatorServer:
 
         if route == "/api/settings":
             if method == "POST":
-                return _json({"settings": project.update_settings(body or {})})
-            return _json({"settings": project.settings.as_json()})
+                project.update_settings(body or {})
+            # Une autre requête peut avoir mis les réglages à jour entre-temps :
+            # renvoyer la version courante et sa révision du même instantané.
+            return _json(project.settings_snapshot())
 
         if route == "/api/model/plan":
             width = _size(query, "w", 640)
@@ -187,7 +223,8 @@ class HookyCreatorServer:
                                          body.get("limit")))
 
         if route == "/api/bulk/status":
-            return _json(self.job)
+            with self._job_lock:
+                return _json(self.job)
 
         # -- traduction .blend → modèle du jeu
         if route == "/api/blend/list":
@@ -231,10 +268,15 @@ class HookyCreatorServer:
                                      "restbl": restbl.backend()}})
 
         if route == "/api/thumbs/warm":
-            return _json({"warm": project.warm_thumbnails()})
+            return _json({"warm": project.warm_thumbnails(
+                background_slot=self.thumbnail_slot, render_slots=self.render_slots,
+                visible_activity=self.thumbnail_activity)})
+
+        if route == "/api/thumbs/stop":
+            return _json({"warm": project.stop_warming()})
 
         if route == "/api/thumbs/status":
-            return _json({"warm": project.warm})
+            return _json({"warm": project.warm_status()})
 
         if route == "/api/cache/clear":
             removed = project.clear_cache()
@@ -242,6 +284,7 @@ class HookyCreatorServer:
 
         if route == "/api/scan":
             summary = project.scan()
+            self.scan_summary = summary
             return _json({"scan": summary, "project": project.state()})
 
         if route == "/api/export/selection":
@@ -265,28 +308,36 @@ class HookyCreatorServer:
         """Lance l'export de tout le projet en tâche de fond (non bloquant)."""
         from .bulk import export_all
 
-        if self.job["running"]:
-            raise ProjectError("Un export est déjà en cours.")
-
         def progress(done: int, total: int, label: str) -> None:
-            self.job.update(done=done, total=total, label=label)
+            with self._job_lock:
+                self.job.update(done=done, total=total, label=label)
 
         def run() -> None:
-            self.job.update(running=True, done=0, total=0, label="analyse…",
-                            report=None, error=None)
+            report = None
+            error = None
             try:
                 out = self.project.work / "export_all"
                 report = export_all(self.project, out,
                                     kinds=tuple(kinds) or ("texture", "model"),
                                     limit=limit, progress=progress)
-                self.job["report"] = report
             except Exception as exc:          # l'UI doit voir la raison
-                self.job["error"] = str(exc)
+                error = str(exc)
             finally:
-                self.job["running"] = False
-                self.job["label"] = ""
+                with self._job_lock:
+                    self.job.update(running=False, label="", report=report, error=error)
 
-        threading.Thread(target=run, daemon=True).start()
+        # Réserver le travail avant de lancer le fil pour que deux requêtes ne
+        # démarrent pas simultanément et n'écrivent pas dans le même dossier.
+        with self._job_lock:
+            if self.job["running"]:
+                raise ProjectError("Un export est déjà en cours.")
+            self.job.update(running=True, done=0, total=0, label="analyse…",
+                            report=None, error=None)
+            try:
+                threading.Thread(target=run, daemon=True).start()
+            except Exception:
+                self.job.update(running=False, label="")
+                raise
         return {"started": True}
 
     # ------------------------------------------------------------------ statique
@@ -294,8 +345,13 @@ class HookyCreatorServer:
         """Fichier statique + son ETag (calculé une fois par version du fichier)."""
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
         rel = rel.removeprefix("static/")
-        candidate = (WEB_DIR / rel).resolve()
-        if not str(candidate).startswith(str(WEB_DIR)) or not candidate.is_file():
+        base = WEB_DIR.resolve()
+        candidate = (base / rel).resolve()
+        try:
+            candidate.relative_to(base)
+        except ValueError:
+            return None
+        if not candidate.is_file():
             return None
         kind = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         try:
@@ -359,6 +415,13 @@ def _make_handler(server: HookyCreatorServer):
             if "--verbose" in __import__("sys").argv:
                 super().log_message(fmt, *args)
 
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except ConnectionError:
+                # Le navigateur peut annuler une vignette en changeant de vue.
+                self.close_connection = True
+
         # -- utilitaires
         def _send(self, body: bytes, kind: str, status: int = 200,
                   headers: dict | None = None) -> None:
@@ -388,7 +451,7 @@ def _make_handler(server: HookyCreatorServer):
         def _not_modified(self, etag: str) -> None:
             self.send_response(304)
             self.send_header("ETag", etag)
-            self.send_header("Cache-Control", "public, max-age=604800")
+            self.send_header("Cache-Control", "public, max-age=0, must-revalidate")
             self.end_headers()
 
         def _error(self, message: str, status: int = 400) -> None:
@@ -397,26 +460,52 @@ def _make_handler(server: HookyCreatorServer):
         def do_GET(self) -> None:                # noqa: N802 (API HTTP)
             parsed = urlparse(self.path)
             if parsed.path.startswith("/api/"):
+                query = parse_qs(parsed.query)
                 rendered = parsed.path in IMAGE_ROUTES
+                background = rendered and query.get("thumb", [""])[0] == "1"
+                if background:
+                    server.thumbnail_activity.note()
+
+                def busy_thumbnail():
+                    # Pas de file de threads serveur pour des images devenues
+                    # invisibles : le navigateur réessaie seulement si nécessaire.
+                    return self._send(*_json({"error": "Vignette en attente."}),
+                                      status=429, headers={"Retry-After": "1"})
+
                 try:
-                    if rendered:
+                    if background:
+                        if not server.thumbnail_slot.acquire(blocking=False):
+                            return busy_thumbnail()
+                        try:
+                            if not server.render_slots.acquire(blocking=False):
+                                return busy_thumbnail()
+                            try:
+                                body, kind = server.api("GET", parsed.path, query, {})
+                            finally:
+                                server.render_slots.release()
+                        finally:
+                            # Laisser le navigateur lancer la vignette suivante
+                            # avant qu'un préchauffage facultatif ne reprenne.
+                            server.thumbnail_activity.note()
+                            server.thumbnail_slot.release()
+                    elif rendered:
                         with server.render_slots:
-                            body, kind = server.api("GET", parsed.path,
-                                                    parse_qs(parsed.query), {})
+                            body, kind = server.api("GET", parsed.path, query, {})
                     else:
-                        body, kind = server.api("GET", parsed.path,
-                                                parse_qs(parsed.query), {})
+                        body, kind = server.api("GET", parsed.path, query, {})
                 except ProjectError as exc:
                     return self._error(str(exc))
                 except Exception as exc:         # jamais de trace dans l'UI
                     return self._error(f"Erreur interne : {exc}", 500)
                 if rendered and body:
-                    # une image ne change que si le fichier change : son ETag suffit
+                    # Revalider : un réglage ou une texture peut changer sans
+                    # changer l'URL de l'aperçu ; l'ETag évite le retransfert.
                     etag = '"%s"' % hashlib.sha1(body).hexdigest()[:20]
                     if self.headers.get("If-None-Match") == etag:
                         return self._not_modified(etag)
                     return self._send(body, kind, headers={
-                        "ETag": etag, "Cache-Control": "public, max-age=604800"})
+                        "ETag": etag,
+                        "Cache-Control": "public, max-age=0, must-revalidate"})
                 return self._send(body, kind)
             found = server.static(parsed.path)
             if not found:
@@ -470,5 +559,5 @@ def _make_handler(server: HookyCreatorServer):
 
 
 def serve(root, work=None, host: str = "0.0.0.0", port: int = 8765,
-          open_browser: bool = False) -> HookyCreatorServer:
-    return HookyCreatorServer(root, work, host, port).start(open_browser)
+          open_browser: bool = False, *, scan_limit: int = MAX_SCAN_FILES) -> HookyCreatorServer:
+    return HookyCreatorServer(root, work, host, port, scan_limit=scan_limit).start(open_browser)

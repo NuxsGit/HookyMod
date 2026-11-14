@@ -213,6 +213,13 @@ def translate(project: Project, ref: str, target_rel: str, *, model: int = 0,
               shape: int = 0, axis: str = "y_up", scale: float = 1.0,
               only: str | None = None, fit: bool = True) -> dict:
     """Écrit la géométrie du ``.blend`` dans le BFRES cible et rend compte."""
+    with project._edit_flights.hold(project.asset(target_rel)):  # noqa: SLF001
+        return _translate(project, ref, target_rel, model=model, shape=shape,
+                          axis=axis, scale=scale, only=only, fit=fit)
+
+
+def _translate(project: Project, ref: str, target_rel: str, *, model: int,
+               shape: int, axis: str, scale: float, only: str | None, fit: bool) -> dict:
     result = _load(project, ref, axis=axis, scale=scale, only=only)
     meshes = [mesh for mesh in result.meshes if mesh.faces]
     if not meshes:
@@ -253,9 +260,11 @@ def translate(project: Project, ref: str, target_rel: str, *, model: int = 0,
             notes.append("la taille compressée change d'un octet ou deux : si le jeu "
                          "refuse le fichier, mets à jour la table de tailles (restbl).")
 
-    written = project.work / "assets" / target_rel
-    written.parent.mkdir(parents=True, exist_ok=True)
-    written.write_bytes(payload)
+    from hookymod.util import write_atomic
+
+    written = project.edited_asset_path(target_rel)
+    write_atomic(written, payload)
+    project.bump()
 
     preview = b""
     try:

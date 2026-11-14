@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .server import HookyCreatorServer
-from .project import ProjectError
+from .project import MAX_SCAN_FILES, ProjectError
 
 
 def _export_all(argv: list[str]) -> int:
@@ -24,11 +24,14 @@ def _export_all(argv: list[str]) -> int:
                         help="types à exporter (texture, model, animation)")
     parser.add_argument("--limit", type=int, help="s'arrêter après N éléments (essai)")
     parser.add_argument("--work", help="dossier de travail (dictionnaires, cache)")
+    parser.add_argument("--scan-limit", type=int, default=MAX_SCAN_FILES,
+                        help="maximum de fichiers reconnus (0 = illimité)")
     args = parser.parse_args(argv)
 
     from .project import Project, ProjectError
     try:
-        project = Project(Path(args.root), Path(args.work) if args.work else None)
+        project = Project(Path(args.root), Path(args.work) if args.work else None,
+                          scan_limit=args.scan_limit)
     except ProjectError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2
@@ -44,7 +47,7 @@ def _export_all(argv: list[str]) -> int:
                         progress=progress)
     print(summary(report))
     print(f"\nRapport : {Path(args.out) / 'rapport.json'}")
-    return 0 if report["error"] == 0 else 1
+    return 0 if report["error"] == 0 and not report.get("scan_incomplete") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,20 +63,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="0.0.0.0", help="adresse d'écoute (défaut 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8765, help="port (défaut 8765)")
     parser.add_argument("--open", action="store_true", help="ouvre le navigateur")
+    parser.add_argument("--scan-limit", type=int, default=MAX_SCAN_FILES,
+                        help="maximum de fichiers reconnus (0 = illimité)")
     args = parser.parse_args(argv)
 
     try:
-        server = HookyCreatorServer(args.root, args.work, args.host, args.port)
+        server = HookyCreatorServer(args.root, args.work, args.host, args.port,
+                                    scan_limit=args.scan_limit)
     except ProjectError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2
     server.start(open_browser=args.open)
-    state = server.project.scan()
+    # Le constructeur a déjà scanné le projet avant d'ouvrir le navigateur.
+    state = server.scan_summary
     print(f"HookyCreator 1.0 — {state['count']} asset(s) "
           f"({state['textures']} textures, {state['models']} modèles, "
           f"{state['bytecode']} fichiers de données)")
     print(f"  projet : {state['root']}")
     print(f"  écoute : http://127.0.0.1:{server.port}/")
+    if state.get("truncated"):
+        print("  Attention : scan limité. Relance avec --scan-limit 0 pour indexer "
+              "tous les fichiers reconnus.")
+    if state.get("scan_errors"):
+        print(f"  Attention : {state['scan_errors']} entrée(s) illisible(s) pendant le scan.")
+        for detail in state.get("scan_error_examples", []):
+            print(f"    {detail}")
     try:
         import time
         while not server.stopped:

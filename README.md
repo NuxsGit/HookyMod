@@ -95,13 +95,18 @@ python -m hookycreator dump/romfs --open     # http://127.0.0.1:8765/
 ```
 
 ```bash
-python -m hookycreator export-all dump/romfs -o export_all   # tout : textures PNG + modèles glTF/OBJ
+python -m hookycreator export-all dump/romfs -o export_all   # assets reconnus : PNG + glTF/OBJ
 ```
 
-Application web locale (aucune installation, pas de Tkinter) pour **créer** :
-textures remplacées, modèles envoyés vers Blender, fiches de mobs, et
-assemblage d'un dossier `mods/<nom>/romfs/` prêt à charger. Détails et feuille
-de route : `docs/HOOKYCREATOR.md`.
+Application web locale (pas de Tkinter) pour préparer des modifications :
+textures remplacées, modèles envoyés vers Blender, fiches de mobs et assemblage
+d'un dossier `mods/<nom>/romfs/`. Les assets d'origine restent intacts et les
+aperçus utilisent la copie modifiée quand elle existe. Les fiches de mobs ne
+créent pas encore un acteur jouable. Les vignettes visibles se chargent
+progressivement ; le bouton **Pause vignettes** les suspend et la préparation
+complète du cache reste facultative dans les réglages. Un scan limité ou des
+fichiers illisibles sont signalés ; `--scan-limit 0` retire le plafond de scan
+(et peut nécessiter plus de mémoire). Détails et limites : `docs/HOOKYCREATOR.md`.
 
 **Moteur Rust (première étape du portage).** Sous Windows, ferme HookyCreator,
 puis double-clique sur `Compiler_Rust.bat` ou lance `py -3 tools\build_rust.py`.
