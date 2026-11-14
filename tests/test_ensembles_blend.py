@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -31,6 +33,27 @@ from hookycreator.server import HookyCreatorServer  # noqa: E402
 from hookymod import blendfile  # noqa: E402
 from hookymod.mesh import MeshData  # noqa: E402
 from hookymod.viewer import build_render_data  # noqa: E402
+
+
+def _blender_stub(test: unittest.TestCase, directory: Path, body: str) -> Path:
+    """Lance un faux Blender Python avec les vrais arguments, même sous Windows.
+
+    Une ligne ``#!`` exécutable ne fonctionne pas avec CreateProcess sur
+    Windows. On intercepte uniquement le lancement, puis on démarre réellement
+    l'interpréteur Python avec le script et les arguments construits par l'app.
+    """
+    stub = directory / "blender stub.py"
+    stub.write_text(body + "\n", encoding="utf-8")
+    real_run = subprocess.run
+
+    def launch(command, *args, **kwargs):
+        test.assertEqual(command[0], str(stub))
+        test.assertEqual(command[1:4], ["--background", "--factory-startup", "--python"])
+        test.assertEqual(command[5], "--")
+        return real_run([sys.executable, str(stub), *command[1:]], *args, **kwargs)
+
+    test.enterContext(patch.object(blendfile.subprocess, "run", side_effect=launch))
+    return stub
 
 
 def _red_blue_image() -> tuple[int, int, bytes]:
@@ -194,11 +217,7 @@ class BlendScriptTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _stub(self, body: str) -> Path:
-        """Faux Blender : un exécutable qui joue le script demandé."""
-        path = self.tmp / "blender-stub"
-        path.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
-        path.chmod(0o755)
-        return path
+        return _blender_stub(self, self.tmp, body)
 
     def test_without_blender_the_script_and_command_are_ready(self) -> None:
         folder = self.tmp / "export"
@@ -302,12 +321,8 @@ class BlendExportProjectTests(unittest.TestCase):
             self.assertIn("blender", result["command"])
 
     def test_configured_blender_is_used(self) -> None:
-        stub = self.tmp / "blender-stub"
-        stub.write_text(f"#!{sys.executable}\n"
-                        "import sys\n"
-                        "open(sys.argv[-1], 'wb').write(b'BLENDER')\n",
-                        encoding="utf-8")
-        stub.chmod(0o755)
+        stub = _blender_stub(self, self.tmp,
+                             "import sys\nopen(sys.argv[-1], 'wb').write(b'BLENDER')")
         self.project.update_settings({"blender_path": str(stub)})
         result = self.project.export_blend("Model/Heros.bfres")
         self.assertEqual(result["method"], "blender")
