@@ -15,6 +15,21 @@ Le dossier du projet peut être un `romfs` complet (avec `Pack/ZsDic.pack.zs`)
 ou un simple dossier contenant trois-quatre assets extraits : les dictionnaires
 zstd sont cherchés dans le projet et ses parents.
 
+Le scan accepte jusqu'à **200 000 fichiers reconnus** par défaut (au lieu de
+40 000). Si cette limite est dépassée, ou si des entrées sont illisibles,
+l'interface affiche un avertissement persistant : les listes et exports issus de
+ce scan sont incomplets. Les causes et quelques chemins sont indiqués sur
+l'accueil. Pour supprimer la limite après avoir vérifié la mémoire disponible :
+
+```powershell
+py -3 -m hookycreator "C:\chemin\vers\romfs" --open --scan-limit 0
+```
+
+On peut aussi choisir un autre plafond avec `--scan-limit N`. Le scan ne prend
+que les suffixes reconnus et ne suit pas les liens symboliques ; supprimer la
+limite ne rend pas les formats inconnus exploitables. Les dossiers de travail et
+de mods assemblés sont exclus des sources.
+
 ## Accélération Rust
 
 Ferme l'application, double-clique sur `Compiler_Rust.bat` (Windows), puis
@@ -42,7 +57,7 @@ formats et tests :
 | **Modèles** | aperçu 3D rendu côté serveur, planche de rotations, export glTF + OBJ (+ textures voisines) pour Blender | ✅ BFRES v9 et **v10** |
 | **Mobs** | fiche de mob : modèle + textures copiés sous un nouveau nom, liste de ce qui reste à faire côté jeu | ✅ préparation des fichiers |
 | **Mod** | assemble `mods/<nom>/romfs/…` (chemins d'origine) + `hookycreator.json` | ✅ |
-| **Tout exploiter** | parcourt aussi l'intérieur des packs (`.pack.zs`, SARC) et exporte **toutes** les textures (PNG) et tous les modèles (glTF + OBJ) avec un `rapport.json` | ✅ |
+| **Tout exploiter** | parcourt aussi l'intérieur des packs (`.pack.zs`, SARC) et exporte les textures et modèles reconnus (PNG, glTF + OBJ) avec un `rapport.json` | ✅ avec limites ci-dessous |
 
 ## Tout exploiter (lots)
 
@@ -57,16 +72,26 @@ python -m hookycreator export-all dump/romfs -o export_all     # en ligne de com
   une texture qui vit dans une archive est trouvée et exportée comme les autres ;
 * classement par **contenu** (magic `BNTX`/`FRES`) et, à défaut, par nom — les
   fichiers d'animation (`.anim.bfres`) sont reconnus comme tels ;
-* chaque élément obtient un statut : `ok`, `skip` (avec la raison : format non
-  décodable, animation pas encore lue…) ou `error`. Le tout est écrit dans
-  `rapport.json` à côté des fichiers ;
+* chaque élément découvert obtient un statut : `ok`, `skip` (avec la raison :
+  format non décodable, animation pas encore lue…) ou `error`. Le tout est écrit
+  dans `rapport.json` à côté des fichiers ; certaines archives illisibles ou
+  trop imbriquées peuvent ne pas être découvertes ;
+* si le scan initial a été limité ou a rencontré des entrées illisibles, le
+  rapport indique `scan_incomplete` et l'interface indique un export partiel.
+  La commande d'export termine alors avec un code non nul ; elle accepte aussi
+  `--scan-limit 0` pour lever le plafond de fichiers reconnus ;
 * progression affichée (barre + libellé) sans bloquer l'interface ; l'export
   tourne en tâche de fond côté serveur.
 
 ## Règles tenues
 
-* **Rien n'est écrasé** : toute modification va dans `hookycreator_work/`
-  (assets/, mobs/, export/), l'original du projet reste intact.
+* **Les assets source ne sont pas écrasés** : les modifications vont dans le dossier
+  de travail (`assets/`, `mobs/`, `export/`). Les aperçus, exports et éditions
+  suivantes utilisent la copie modifiée quand elle existe ; l'original reste intact.
+  Avec `--work`, choisir un dossier distinct de la racine du projet : s'il est
+  à l'intérieur du projet, il est exclu du scan des fichiers source.
+  L'assemblage réécrit le dossier du mod choisi : ne pas réutiliser un nom de
+  mod dont le contenu doit être conservé.
 * **Rien de faux** : si une texture ne peut pas être réencodée (ASTC), l'import
   est refusé avec la raison ; si un modèle n'est pas décodable, l'aperçu
   explique pourquoi au lieu d'afficher une géométrie inventée.
@@ -183,32 +208,35 @@ Formats acceptés pour le `.blend` : Blender 2.5 à 4.x, compressé ou non.
 Rien n'est écrit dans le dump : le résultat part dans le dossier de travail et
 sera repris par l'assemblage du mod.
 
-## Rapidité : cache disque et préchauffage
+## Rapidité : vignettes, cache et préparation facultative
 
-Décoder un BFRES coûte près d'une seconde (analyse des tampons, cohérence des
-indices) : redessiner une grille de vingt-cinq modèles à chaque ouverture prenait
-**22 secondes**. Trois choses ont changé :
+* Les grilles sont paginées (48 tuiles, puis « afficher plus »). Seules les
+  vignettes visibles ou proches de l'écran sont demandées, **une à la fois**.
+  Lors d'une action ou d'un changement de vue, le navigateur interrompt les
+  demandes devenues inutiles. Un rendu déjà commencé côté serveur peut toutefois
+  se terminer ; sa place reste réservée jusqu'à la fin.
+* **Pause vignettes** dans la barre du bas suspend leur chargement ; le choix
+  est conservé dans le navigateur. Les aperçus détaillés restent disponibles.
+  Le serveur limite les rendus en arrière-plan et réserve une place à l'interactif ;
+  en cas d'occupation, les vignettes visibles réessaient automatiquement.
+* Le **cache disque** utilise un index incrémental et des écritures atomiques.
+  Sa clé dépend de la version du modèle, des textures associées, des dimensions
+  et des réglages. Les aperçus déjà calculés sont réutilisés ; l'ETag est
+  revalidé, notamment après une modification d'une texture ou d'un réglage.
+* Le cache n'est **plus préchauffé automatiquement** au démarrage. Pour préparer
+  tous les modèles volontairement, utiliser Réglages → Mémoire & cache →
+  **Préparer les vignettes**, puis **Arrêter** si nécessaire. Un seul rendu est
+  lancé à la fois, les vignettes visibles ont la priorité et l'arrêt prend effet
+  entre deux rendus. Le cache doit être activé.
+* Avec le moteur Rust, la table de couleurs des albédos est calculée dans le
+  noyau natif ; sans lui, le repli Python continue de fonctionner. Un albédo
+  partagé par plusieurs modèles n'est pas redécodé pour chaque modèle.
 
-* **cache disque des vignettes** — la clé contient le chemin, la taille, la date
-  du fichier, la taille demandée et les réglages de rendu : modifier un modèle
-  ou changer l'anticrénelage invalide la vignette tout seul. Servir les mêmes
-  vingt-cinq tuiles prend désormais **3 ms** ;
-* **préchauffage** — au démarrage, deux fils remplissent le cache en tâche de
-  fond ; la barre d'état affiche `vignettes 12/25`. Ce qui est déjà en cache
-  est sauté. Les noyaux Rust libèrent le GIL, mais le parsing et certaines
-  étapes restent en Python ;
-* **ETag** — le navigateur reçoit un `ETag` par image et redemande `304` : une
-  vignette déjà vue ne retélécharge aucun octet. L'URL porte `&v=<date>`, donc
-  une modification du fichier change l'URL et l'image.
-
-Les grilles sont **paginées** (48 tuiles, puis « afficher plus ») et chargées en
-`loading="lazy"` : une grille de mille modèles n'ouvre pas mille requêtes.
-
-Réglages → **Mémoire & cache** : mémoire du processus, taille du cache, nombre de
-maillages gardés en RAM (LRU borné à la moitié du budget), bouton « vider le
-cache », bouton « rescanner ». Un bug de concurrence a été corrigé au passage :
-deux vignettes qui se rendaient ensemble se volaient les dictionnaires zstd
-(« aucun dictionnaire trouvé » aléatoire).
+Réglages → **Mémoire & cache** affiche aussi la mémoire du processus et la taille
+du cache, et permet de le vider ou de rescanner le projet. Les maillages décodés
+sont gardés en mémoire sous un budget, puis relus depuis le cache géométrique si
+nécessaire. La durée réelle dépend du dump, de la machine, des textures et des
+réglages : aucune durée fixe n'est garantie.
 
 ## Sélection multiple et export groupé
 

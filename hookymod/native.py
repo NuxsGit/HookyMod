@@ -20,7 +20,7 @@ import sys
 from array import array
 from pathlib import Path
 
-_ABI = 5
+_ABI = 6
 _U32_MAX = (1 << 32) - 1
 _U64_MAX = (1 << 64) - 1
 _BFRES_SHAPE_INPUT_LIMIT = 1024 * 1024 * 1024
@@ -133,6 +133,10 @@ def _load():
             u8p, size, u8p, size, u32, u32,
         ]
         library.hookymod_core_downsample_mip.restype = ctypes.c_int32
+        library.hookymod_core_preview_sample_table.argtypes = [
+            u8p, size, u8p, size, u32, u32, u32,
+        ]
+        library.hookymod_core_preview_sample_table.restype = ctypes.c_int32
         library.hookymod_core_segment_indices.argtypes = [
             u8p, size, u8p, size, u8p, size, u32,
         ]
@@ -615,6 +619,27 @@ def downsample_mip(rgba: bytes, width: int, height: int) -> bytes | None:
         source, len(rgba), destination, length, width, height)
     del source_owner, destination_owner
     return bytes(out) if result == 0 else None
+
+
+def preview_sample_table(rgba, width: int, height: int, size: int = 48) -> bytes | None:
+    """Moyennes RGB des cellules d'un aperçu, ou ``None`` pour le repli.
+
+    Les buffers mutables sont copiés avant l'appel : ctypes libère le GIL.
+    La grille est bornée à 256² et l'image à 64 millions de pixels.
+    """
+    if (_lib is None or type(rgba) not in (bytes, bytearray)
+            or any(type(value) is not int for value in (width, height, size))
+            or not 1 <= size <= 256 or width < 1 or height < 1
+            or not _valid_u32(width, height)
+            or width * height > 64 * 1024 * 1024
+            or len(rgba) != width * height * 4):
+        return None
+    source, source_owner = _source(rgba)
+    output, target, target_owner = _destination(size * size * 3)
+    result = _lib.hookymod_core_preview_sample_table(
+        source, len(rgba), target, len(output), width, height, size)
+    del source_owner, target_owner
+    return bytes(output) if result == 0 else None
 
 
 def segment_indices(words, bounds, minimum: int = 4) -> list | None:

@@ -185,10 +185,11 @@ class Settings:
             return cls()
 
     def save(self, path: Path) -> Path:
+        from hookymod.util import write_atomic
+
         path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.as_json(), indent=2, ensure_ascii=False),
-                        encoding="utf-8")
+        data = json.dumps(self.as_json(), indent=2, ensure_ascii=False).encode("utf-8")
+        write_atomic(path, data)
         return path
 
     # ------------------------------------------------------------------ dérivés

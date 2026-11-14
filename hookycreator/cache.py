@@ -18,7 +18,11 @@ import os
 import shutil
 import sys
 import time
+import threading
+from collections import OrderedDict
 from pathlib import Path
+
+from hookymod.util import KeyedLocks, write_atomic
 
 CACHE_MIN_MB = 0
 CACHE_MAX_MB = 4096
@@ -35,58 +39,40 @@ def digest(*parts) -> str:
 
 
 def file_stamp(path: Path) -> tuple[int, int]:
-    """(taille, date) d'un fichier, ou (0, 0) s'il a disparu."""
+    """(taille, date en nanosecondes), ou (0, 0) si le fichier a disparu."""
     try:
         stat = Path(path).stat()
     except OSError:
         return 0, 0
-    return stat.st_size, int(stat.st_mtime)
+    return stat.st_size, stat.st_mtime_ns
 
 
 class ImageCache:
-    """Vignettes PNG sur disque, avec plafond et statistiques."""
+    """PNG sur disque : index LRU incrémental, écritures atomiques et verrou.
+
+    Le premier accès à l'index lit le dossier une fois. Les insertions suivantes
+    sont O(1) tant que le plafond n'est pas atteint, au lieu de rescanner et
+    trier toutes les images après chaque rendu. Un rafraîchissement périodique
+    reprend aussi les changements effectués par un autre processus.
+    """
+
+    _REFRESH_SECONDS = 30.0
 
     def __init__(self, folder: Path, limit_mb: int = CACHE_DEFAULT_MB) -> None:
         self.folder = Path(folder)
         self.limit_bytes = max(0, int(limit_mb)) * 1024 * 1024
         self.hits = 0
         self.misses = 0
+        self._lock = threading.RLock()
+        self._entries: OrderedDict[Path, int] | None = None
+        self._bytes = 0
+        self._refreshed_at = 0.0
 
-    # ------------------------------------------------------------------ accès
     def _path(self, key: str) -> Path:
         return self.folder / key[:2] / f"{key}.png"
 
-    def get(self, key: str) -> bytes | None:
-        path = self._path(key)
-        try:
-            data = path.read_bytes()
-        except OSError:
-            self.misses += 1
-            return None
-        if not data:
-            self.misses += 1
-            return None
-        self.hits += 1
-        try:                                  # garde la vignette « fraîche » pour l'élagage
-            os.utime(path, None)
-        except OSError:
-            pass
-        return data
-
-    def put(self, key: str, data: bytes) -> bytes:
-        if self.limit_bytes <= 0 or not data:
-            return data
-        path = self._path(key)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        except OSError:
-            return data
-        self.trim()
-        return data
-
-    # ------------------------------------------------------------------ entretien
     def files(self) -> list[tuple[float, int, Path]]:
+        """Inventaire physique, également utilisé pour réconcilier l'index."""
         found: list[tuple[float, int, Path]] = []
         if not self.folder.is_dir():
             return found
@@ -98,42 +84,124 @@ class ImageCache:
             found.append((stat.st_mtime, stat.st_size, path))
         return found
 
-    def trim(self) -> int:
-        """Élague les vignettes les plus anciennes au-delà du plafond."""
-        if self.limit_bytes <= 0:
-            return 0
+    def _index(self, force: bool = False) -> None:
+        if (not force and self._entries is not None
+                and time.monotonic() - self._refreshed_at < self._REFRESH_SECONDS):
+            return
         entries = sorted(self.files())
-        total = sum(size for _, size, _ in entries)
+        self._entries = OrderedDict((path, size) for _, size, path in entries)
+        self._bytes = sum(self._entries.values())
+        self._refreshed_at = time.monotonic()
+
+    def _evict(self) -> int:
+        assert self._entries is not None
+        if self._bytes <= self.limit_bytes:
+            return 0
         removed = 0
-        for _mtime, size, path in entries:
-            if total <= self.limit_bytes:
+        for path in list(self._entries):
+            if self._bytes <= self.limit_bytes:
                 break
             try:
-                path.unlink()
+                path.unlink(missing_ok=True)
             except OSError:
                 continue
-            total -= size
+            self._bytes -= self._entries.pop(path)
             removed += 1
         return removed
 
+    # ------------------------------------------------------------------ accès
+    def get(self, key: str) -> bytes | None:
+        path = self._path(key)
+        with self._lock:
+            if self.limit_bytes <= 0:
+                self.misses += 1
+                return None
+            try:
+                data = path.read_bytes()
+            except OSError:
+                data = b""
+            if not data:
+                self.misses += 1
+                if self._entries is not None and path in self._entries:
+                    self._bytes -= self._entries.pop(path)
+                return None
+            self.hits += 1
+            try:
+                os.utime(path, None)
+            except OSError:
+                pass
+            if self._entries is not None:
+                old = self._entries.pop(path, 0)
+                self._entries[path] = len(data)
+                self._bytes += len(data) - old
+            return data
+
+    def put(self, key: str, data: bytes) -> bytes:
+        with self._lock:
+            if self.limit_bytes <= 0 or not data or len(data) > self.limit_bytes:
+                return data
+            self._index()
+            assert self._entries is not None
+            path = self._path(key)
+            try:
+                # Un lecteur, même dans un autre processus, ne voit jamais un
+                # PNG partiellement écrit. Les noms temporaires sont uniques.
+                write_atomic(path, data)
+            except OSError:
+                return data
+            old = self._entries.pop(path, 0)
+            self._entries[path] = len(data)
+            self._bytes += len(data) - old
+            self._evict()
+            return data
+
+    # ------------------------------------------------------------------ entretien
+    def set_limit_mb(self, limit_mb: int) -> int:
+        """Change le plafond sous le même verrou que les lectures et écritures."""
+        with self._lock:
+            self.limit_bytes = max(0, int(limit_mb)) * 1024 * 1024
+            if not self.limit_bytes:
+                return 0
+            self._index(force=True)
+            return self._evict()
+
+    def trim(self) -> int:
+        """Réconcilie le dossier et élague les plus anciennes au-delà du plafond.
+
+        Un plafond nul désactive les lectures/écritures sans effacer le cache.
+        """
+        with self._lock:
+            if self.limit_bytes <= 0:
+                return 0
+            self._index(force=True)
+            return self._evict()
+
     def stats(self) -> dict:
-        entries = self.files()
-        return {
-            "entries": len(entries),
-            "bytes": sum(size for _, size, _ in entries),
-            "limit_bytes": self.limit_bytes,
-            "hits": self.hits,
-            "misses": self.misses,
-            "folder": str(self.folder),
-        }
+        with self._lock:
+            self._index()
+            assert self._entries is not None
+            return {
+                "entries": len(self._entries),
+                "bytes": self._bytes,
+                "limit_bytes": self.limit_bytes,
+                "hits": self.hits,
+                "misses": self.misses,
+                "folder": str(self.folder),
+            }
 
     def clear(self) -> dict:
-        before = self.stats()
-        if self.folder.is_dir():
-            shutil.rmtree(self.folder, ignore_errors=True)
-        self.folder.mkdir(parents=True, exist_ok=True)
-        self.hits = self.misses = 0
-        return {"removed_entries": before["entries"], "freed_bytes": before["bytes"]}
+        with self._lock:
+            self._index(force=True)
+            before_entries = len(self._entries or ())
+            before_bytes = self._bytes
+            if self.folder.is_dir():
+                shutil.rmtree(self.folder, ignore_errors=True)
+            self.folder.mkdir(parents=True, exist_ok=True)
+            # Si la suppression a échoué partiellement, les chiffres restent exacts.
+            self._index(force=True)
+            self.hits = self.misses = 0
+            return {"removed_entries": before_entries - len(self._entries or ()),
+                    "freed_bytes": before_bytes - self._bytes}
 
 
 # --------------------------------------------------------------------------- mémoire

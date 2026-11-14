@@ -31,7 +31,7 @@ La bibliothèque doit être compilée pour la **même architecture** que Python.
 Le script vérifie son chargement avant de l'installer dans
 `hookymod/_native_lib/`. Ce dossier est local et ignoré par Git : il faut donc
 recompiler après une nouvelle copie du dépôt ou un changement du code Rust.
-La version actuelle utilise l'**ABI 5** : si une ancienne DLL est encore
+La version actuelle utilise l'**ABI 6** : si une ancienne DLL est encore
 présente, l'application la refuse et fonctionne en Python jusqu'à recompilation.
 Les dépendances Rust (`ruzstd` et `twox-hash` sous licence MIT,
 `hmac-sha256` sous licence ISC) sont incluses dans
@@ -52,6 +52,7 @@ La compilation exige Rust **1.87 ou plus récent**.
 | Encodage BC1/BC3/BC4/BC5, pixels non compressés et mips | Rust pour les formats déjà encodables, repli Python ; les octets produits restent identiques |
 | BC6 / BC7 / ASTC en lecture | `texture2ddecoder` reste nécessaire |
 | Rastérisation 3D, profondeur et réduction anticrénelée | Rust ; projection, éclairage et sélection des faces restent en Python |
+| Table de couleurs des albédos pour les aperçus | Rust (jusqu'à 64 millions de pixels et une grille de 256²), repli Python ; décodage BNTX partagé sans détour PNG |
 | Tables de formes et d'attributs BFRES 10.x | Recherche et validation heuristique Rust pour les octets compatibles, repli Python ; objets et reste de la lecture toujours en Python |
 | Indices et positions BFRES 10.x | Rust pour les gros tampons compatibles, avec les mêmes arrêts et sous-maillages ; repli Python |
 | Filtre des triangles BFRES 10.x | Rust pour les gros lots compatibles ; mêmes seuils et mêmes indices que le filtre Python |

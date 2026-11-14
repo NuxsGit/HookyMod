@@ -12,6 +12,7 @@ mod bridge;
 mod encode;
 mod geometry;
 pub mod nup;
+mod preview;
 mod raster;
 pub mod restbl;
 pub mod sarc;
@@ -23,7 +24,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::slice;
 
-const ABI_VERSION: u32 = 5;
+const ABI_VERSION: u32 = 6;
 const MAX_INPUT: usize = 1024 * 1024 * 1024;
 
 type CoreResult = Result<(), ()>;
@@ -658,6 +659,26 @@ pub unsafe extern "C" fn hookymod_core_downsample_mip(
     guarded(|| {
         let (src, dst) = unsafe { buffers(source, source_len, target, target_len)? };
         encode::downsample(src, dst, width, height)
+    })
+}
+
+/// Calcule les moyennes de couleurs d'une grille d'aperçu RGBA.
+///
+/// # Safety
+/// Les deux tampons doivent respecter le contrat de `buffers`.
+#[no_mangle]
+pub unsafe extern "C" fn hookymod_core_preview_sample_table(
+    source: *const u8,
+    source_len: usize,
+    target: *mut u8,
+    target_len: usize,
+    width: u32,
+    height: u32,
+    size: u32,
+) -> i32 {
+    guarded(|| {
+        let (src, dst) = unsafe { buffers(source, source_len, target, target_len)? };
+        preview::sample_table(src, dst, width, height, size)
     })
 }
 

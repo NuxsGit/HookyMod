@@ -6,7 +6,10 @@ import os
 import re
 import struct
 import tempfile
+import threading
+import time
 import zlib
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -80,6 +83,50 @@ def sanitize_name(name: str) -> str:
     return "/".join(parts) or "sans_nom"
 
 
+class KeyedLocks:
+    """Un verrou par clé active, sans conserver les clés après utilisation."""
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._locks: dict[object, list] = {}
+
+    @contextmanager
+    def hold(self, key):
+        with self._guard:
+            entry = self._locks.setdefault(key, [threading.Lock(), 0])
+            entry[1] += 1
+        try:
+            with entry[0]:
+                yield
+        finally:
+            with self._guard:
+                entry[1] -= 1
+                if not entry[1]:
+                    del self._locks[key]
+
+
+_atomic_replacements = KeyedLocks()
+# Les accès refusés ou partages momentanés sous Windows peuvent persister
+# pendant un remplacement concurrent ou le passage d'un antivirus.
+_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25)
+
+
+def _replace_atomic(source: str, target: Path) -> None:
+    # Sérialiser uniquement une destination identique dans ce processus ; les
+    # autres fichiers peuvent continuer, et les autres processus sont gérés
+    # par une courte série de tentatives bornées.
+    key = os.path.normcase(os.path.abspath(target))
+    with _atomic_replacements.hold(key):
+        for delay in (*_REPLACE_RETRY_DELAYS, None):
+            try:
+                os.replace(source, target)
+                return
+            except PermissionError as exc:
+                if getattr(exc, "winerror", None) not in (5, 32, 33) or delay is None:
+                    raise
+                time.sleep(delay)
+
+
 def write_atomic(path: Path, data: bytes) -> None:
     """Écrit ``data`` dans ``path`` de façon atomique (fichier temporaire + rename)."""
     path = Path(path)
@@ -88,7 +135,7 @@ def write_atomic(path: Path, data: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        os.replace(tmp, path)
+        _replace_atomic(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

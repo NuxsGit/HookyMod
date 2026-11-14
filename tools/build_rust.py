@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "rust" / "Cargo.toml"
 DESTINATION = ROOT / "hookymod" / "_native_lib"
-ABI = 5
+ABI = 6
 REQUIRED_SYMBOLS = (
     "hookymod_core_zstd_decompress", "hookymod_core_zstd_free", "hookymod_core_buffer_free",
     "hookymod_core_sarc_parse", "hookymod_core_sarc_build",
@@ -25,6 +25,7 @@ REQUIRED_SYMBOLS = (
     "hookymod_core_bfres_find_shapes",
     "hookymod_core_deswizzle", "hookymod_core_swizzle", "hookymod_core_decode_bc",
     "hookymod_core_encode_pixels", "hookymod_core_downsample_mip",
+    "hookymod_core_preview_sample_table",
     "hookymod_core_segment_indices", "hookymod_core_decode_positions",
     "hookymod_core_filter_triangles", "hookymod_core_rasterize",
 )
