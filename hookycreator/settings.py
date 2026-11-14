@@ -27,6 +27,10 @@ SUPERSAMPLE_MIN, SUPERSAMPLE_MAX = 1, 4
 FACES_MIN, FACES_MAX = 200, 4_000_000
 LOD_MAX = 3
 
+#: préférences d'interface (le « look » de l'atelier)
+ACCENTS = ("menthe", "azur", "ambre", "framboise")
+DENSITIES = ("confort", "compact")
+
 
 class SettingsError(ValueError):
     """Réglage refusé (valeur hors bornes ou type inattendu)."""
@@ -48,6 +52,14 @@ def _flag(value, name: str) -> bool:
     raise SettingsError(f"{name} : booléen attendu")
 
 
+def _choice(value, name: str, allowed: tuple[str, ...]) -> str:
+    text = str(value).strip().lower()
+    if text not in allowed:
+        raise SettingsError(f"{name} : « {value} » inconnu "
+                            f"(attendu : {', '.join(allowed)})")
+    return text
+
+
 @dataclass
 class Settings:
     """Tout ce qui décide du coût d'un aperçu."""
@@ -59,6 +71,11 @@ class Settings:
     adaptive: bool = True                     # dégrader plutôt que de planter
     max_faces: int | None = None               # plafond manuel (None = auto)
     lod: int = 0                              # niveau de détail demandé
+    # -- préférences d'interface
+    accent: str = "menthe"                    # couleur d'accent
+    density: str = "confort"                  # confort | compact
+    export_textures: bool = True              # joindre les PNG à l'export Blender
+    thumb_faces: int | None = None            # plafond des vignettes (None = auto)
 
     # ------------------------------------------------------------------ état
     def clamp(self) -> "Settings":
@@ -73,6 +90,12 @@ class Settings:
             max_faces=(None if self.max_faces is None
                        else int(_number(self.max_faces, "max_faces", FACES_MIN, FACES_MAX))),
             lod=int(_number(self.lod, "lod", 0, LOD_MAX)),
+            accent=_choice(self.accent, "accent", ACCENTS),
+            density=_choice(self.density, "density", DENSITIES),
+            export_textures=bool(self.export_textures),
+            thumb_faces=(None if self.thumb_faces is None
+                         else int(_number(self.thumb_faces, "thumb_faces",
+                                          FACES_MIN, FACES_MAX))),
         )
 
     @property
@@ -91,6 +114,12 @@ class Settings:
             "adaptive": self.adaptive,
             "max_faces": self.max_faces,
             "lod": self.lod,
+            "accent": self.accent,
+            "density": self.density,
+            "export_textures": self.export_textures,
+            "thumb_faces": self.thumb_faces,
+            "accents": list(ACCENTS),
+            "densities": list(DENSITIES),
         }
 
     # ------------------------------------------------------------------ entrée/sortie
@@ -108,11 +137,16 @@ class Settings:
             "adaptive": payload.get("adaptive", base.adaptive),
             "max_faces": payload.get("max_faces", base.max_faces),
             "lod": payload.get("lod", base.lod),
+            "accent": payload.get("accent", base.accent),
+            "density": payload.get("density", base.density),
+            "export_textures": payload.get("export_textures", base.export_textures),
+            "thumb_faces": payload.get("thumb_faces", base.thumb_faces),
         }
-        for name in ("cull", "frustum", "adaptive"):
+        for name in ("cull", "frustum", "adaptive", "export_textures"):
             values[name] = _flag(values[name], name)
-        if values["max_faces"] in ("", 0, "auto", None):
-            values["max_faces"] = None
+        for name in ("max_faces", "thumb_faces"):
+            if values[name] in ("", 0, "auto", None):
+                values[name] = None
         return cls(**values).clamp()
 
     @classmethod

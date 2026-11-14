@@ -186,3 +186,15 @@ class BfresMeshHelperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class CullFlagTests(unittest.TestCase):
+    def test_back_faces_follow_the_cull_flag(self):
+        """La face tournée vers l'arrière doit dépendre du drapeau `cull`."""
+        mesh = MeshData(name="dos", positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0),
+                                               (0.0, 0.0, 1.0)],
+                        faces=[(0, 1, 2)])
+        with self.assertRaises(util.HookyError):
+            render.render_png([mesh], 64, 64, yaw=0.0, pitch=0.0, cull=True)
+        png = render.render_png([mesh], 64, 64, yaw=0.0, pitch=0.0, cull=False)
+        self.assertTrue(png.startswith(b"\x89PNG"))

@@ -1,18 +1,31 @@
 "use strict";
 
-const state = { project: null, settings: null, filter: "", view: "home", selection: null };
+/* ============================================================================
+   HookyCreator — application (pas une page web : une fenêtre d'atelier)
+   ========================================================================== */
+
+const state = {
+  project: null,
+  settings: null,
+  view: "home",
+  filter: "",
+  tabs: [],
+  tab: "home",
+  logs: [],
+  models: [],
+  textures: [],
+  blends: [],
+  blend: { ref: "", objects: [] },
+  busy: 0,
+};
 
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
 const esc = (text) => String(text ?? "").replace(/[&<>"']/g, (ch) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
 ));
-const humanSize = (bytes) => {
-  if (!bytes) return "0 o";
-  const units = ["o", "Ko", "Mo", "Go"];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
-};
 
 function humanBytes(bytes) {
   if (!bytes) return "0 o";
@@ -21,81 +34,335 @@ function humanBytes(bytes) {
   return `${(bytes / 1024 ** i).toFixed(i ? 2 : 0)} ${units[i]}`;
 }
 
+const humanSize = (bytes) => humanBytes(bytes);
+const now = () => new Date().toLocaleTimeString("fr-FR", { hour12: false });
+
+function log(kind, text) {
+  state.logs.push({ at: now(), kind, text: String(text) });
+  if (state.logs.length > 300) state.logs.splice(0, state.logs.length - 300);
+  renderLogs();
+}
+
+function renderLogs() {
+  const console_ = $("#console-log");
+
+  if (console_) {
+    console_.innerHTML = state.logs.slice(-120).map((entry) => `
+      <li class="${entry.kind}"><span class="time">${entry.at}</span>${esc(entry.text)}</li>`
+    ).join("") || `<li class="muted">(rien pour l'instant)</li>`;
+    console_.scrollTop = console_.scrollHeight;
+  }
+  const home = $("#home-log");
+  if (home) {
+    const last = [...state.logs].reverse().slice(0, 8);
+    home.innerHTML = last.map((entry) => `
+      <li class="${entry.kind}"><span class="time">${entry.at}</span>${esc(entry.text)}</li>`
+    ).join("") || `<li class="muted">Aucune action pour l'instant.</li>`;
+  }
+}
+
+function status(message, kind = "ok") {
+  const node = $("#status-message");
+  if (node) node.textContent = message;
+  const dot = $("#status-dot");
+  if (dot) dot.className = `status-dot ${kind === "ok" ? "" : kind}`.trim();
+}
+
+function busy(active) {
+  state.busy = Math.max(0, state.busy + (active ? 1 : -1));
+  const dot = $("#status-dot");
+  if (dot && state.busy) dot.className = "status-dot busy";
+}
+
 function toast(message, kind = "ok") {
   const node = document.createElement("div");
   node.className = `toast ${kind === "error" ? "error" : ""}`;
   node.textContent = message;
   $("#toasts").append(node);
-  setTimeout(() => node.remove(), kind === "error" ? 9000 : 4500);
+  setTimeout(() => node.remove(), kind === "error" ? 9000 : 4000);
+  log(kind === "error" ? "error" : "ok", message);
+  status(message, kind === "error" ? "error" : "ok");
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  const isJson = (response.headers.get("Content-Type") || "").includes("json");
-  const payload = isJson ? await response.json() : await response.blob();
-  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-  return payload;
+  busy(true);
+  try {
+    const response = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+    const isJson = (response.headers.get("Content-Type") || "").includes("json");
+    const payload = isJson ? await response.json() : await response.blob();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    return payload;
+  } finally {
+    busy(false);
+  }
+}
+
+/* ------------------------------------------------------------------ onglets */
+function ensureTab(tab) {
+  const existing = state.tabs.find((item) => item.id === tab.id);
+  if (existing) return existing;
+  state.tabs.push(tab);
+  return tab;
+}
+
+function renderTabs() {
+  const strip = $("#tabs");
+  if (!strip) return;
+  strip.innerHTML = state.tabs.map((tab) => `
+    <button class="tab" data-tab="${esc(tab.id)}" data-kind="${esc(tab.kind || "view")}"
+            aria-selected="${state.tab === tab.id}">
+      <i class="dot"></i>
+      <span class="label">${esc(tab.label)}</span>
+      ${tab.closable === false ? "" : `<span class="close" data-close="${esc(tab.id)}"
+        title="Fermer">✕</span>`}
+    </button>`).join("");
+}
+
+function ensureViewTab(view, label) {
+  return ensureTab({ id: `view:${view}`, kind: "view", label, view, closable: view !== "home" });
+}
+
+function activateTab(id) {
+  const tab = state.tabs.find((item) => item.id === id);
+  if (!tab) return;
+  state.tab = id;
+  renderTabs();
+  if (tab.view) return showView(tab.view, { tab: false });
+  if (tab.doc) return openDoc(tab.doc);
+}
+
+function closeTab(id) {
+  const index = state.tabs.findIndex((item) => item.id === id);
+  if (index < 0) return;
+  const tab = state.tabs[index];
+  if (tab.closable === false) return;
+  state.tabs.splice(index, 1);
+  if (state.tab === id) {
+    const fallback = state.tabs[Math.max(0, index - 1)] || state.tabs[0];
+    if (fallback) activateTab(fallback.id);
+  }
+  renderTabs();
 }
 
 /* ------------------------------------------------------------------ vues */
-function showView(view) {
+function showView(view, options = {}) {
   state.view = view;
-  document.querySelectorAll(".view").forEach((node) => {
-    node.hidden = node.id !== `view-${view}`;
-  });
-  document.querySelectorAll(".nav").forEach((node) => {
+  $$(".view").forEach((node) => { node.hidden = node.id !== `view-${view}`; });
+  $$(".rail-btn[data-view]").forEach((node) => {
     if (node.dataset.view === view) node.setAttribute("aria-current", "page");
     else node.removeAttribute("aria-current");
   });
-  if (view === "textures") renderTextures();
+  if (options.tab !== false) {
+    ensureViewTab(view, VIEW_LABELS[view] || view);
+    state.tab = `view:${view}`;
+    renderTabs();
+  }
+  if (view === "home") renderHome();
   if (view === "models") renderModels();
+  if (view === "textures") renderTextures();
   if (view === "mobs") renderMobs();
+  if (view === "blender") renderBlends();
   if (view === "settings") renderSettings();
-  if (view === "home") renderActivity();
+}
+
+const VIEW_LABELS = {
+  home: "Accueil", models: "Modèles", textures: "Textures",
+  mobs: "Mobs", blender: "Blender", settings: "Réglages",
+};
+
+/* ------------------------------------------------------------------ barre d'état */
+function renderStatus() {
+  const assets = state.project?.assets || [];
+  const count = (kind) => assets.filter((asset) => asset.kind === kind).length;
+  const settings = state.settings || {};
+  const node = $("#status-counts");
+  if (node) {
+    node.textContent = `${count("model")} modèles · ${count("texture")} textures · `
+      + `${state.project?.mobs?.length || 0} mobs`;
+  }
+  const budget = $("#status-budget");
+  if (budget) {
+    budget.textContent = `budget ${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go`;
+  }
+  const project = $("#status-project");
+  if (project) project.textContent = state.project?.root || "—";
+  const name = $("#project-name");
+  if (name) name.textContent = state.project?.root || "—";
+  const stats = $("#stats");
+  if (stats) {
+    stats.innerHTML = `
+      <span class="chip"><b>${count("texture")}</b> textures</span>
+      <span class="chip"><b>${count("model")}</b> modèles</span>
+      <span class="chip"><b>${state.project?.mobs?.length || 0}</b> mobs</span>
+      <span class="chip"><b>${state.project?.edited?.length || 0}</b> fichiers modifiés</span>
+      <span class="chip" title="Budget mémoire des aperçus">budget
+        <b>${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go</b></span>`;
+  }
+}
+
+/* ------------------------------------------------------------------ accueil */
+function renderHome() {
+  const project = state.project;
+  if (!project) return;
+  const edited = project.edited || [];
+  const sub = $("#home-sub");
+  if (sub) {
+    sub.textContent = `${project.assets.length} fichier(s) repéré(s) · `
+      + `${project.zstd ? (project.dicts ? `${project.dicts} dictionnaire(s) zstd` : "sans dictionnaire zstd") : "zstandard absent"}`;
+  }
+  const activity = $("#activity");
+  if (activity) {
+    activity.innerHTML = [
+      ["Racine", `<code>${esc(project.root)}</code>`],
+      ["Dossier de travail", `<code>${esc(project.work)}</code>`],
+      ["Fichiers modifiés", edited.length ? `${edited.length} en attente d'assemblage` : "aucun"],
+      ["Mobs créés", project.mobs.length || "aucun"],
+      ["Réglages", `écrits dans <code>settings.json</code>`],
+    ].map(([key, value]) => `<li><span class="k">${key}</span><span>${value}</span></li>`).join("");
+  }
+  renderLogs();
+  renderStatus();
+}
+
+/* ------------------------------------------------------------------ modèles */
+function thumbFaces() {
+  return state.settings?.thumb_faces || "";
+}
+
+function modelThumb(rel) {
+  const faces = thumbFaces();
+  return `/api/model/preview?path=${encodeURIComponent(rel)}&w=360&h=270`
+    + (faces ? `&faces=${faces}` : "");
+}
+
+async function renderModels() {
+  const grid = $("#model-grid");
+  const shots = $("#model-shots")?.checked !== false;
+  const models = (state.project?.assets || [])
+    .filter((asset) => asset.kind === "model" && matches(asset));
+  state.models = models;
+  const count = $("#model-count");
+  if (count) {
+    count.textContent = `${models.length} modèle(s)`
+      + (state.filter ? ` pour « ${state.filter} »` : "")
+      + (shots ? "" : " — vignettes désactivées");
+  }
+  if (!models.length) {
+    grid.innerHTML = `<p class="muted">Aucun modèle repéré dans ce dossier.</p>`;
+    return;
+  }
+  grid.innerHTML = models.map((asset) => `
+    <article class="tile" data-kind="model" data-rel="${esc(asset.rel)}">
+      <div class="thumb ${shots ? "" : "placeholder"}">
+        ${shots ? `<img loading="lazy" alt="" src="${modelThumb(asset.rel)}">` : "aperçu désactivé"}
+      </div>
+      <div class="meta">
+        <strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
+        <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}</small>
+      </div>
+    </article>`).join("");
 }
 
 function matches(asset) {
   return !state.filter || asset.rel.toLowerCase().includes(state.filter);
 }
 
-/* ------------------------------------------------------------------ accueil */
-function renderStats() {
-  const assets = state.project?.assets || [];
-  const count = (kind) => assets.filter((a) => a.kind === kind).length;
-  $("#stats").innerHTML = `
-    <span class="chip"><b>${count("texture")}</b> textures</span>
-    <span class="chip"><b>${count("model")}</b> modèles</span>
-    <span class="chip"><b>${state.project?.mobs.length || 0}</b> mobs</span>
-    <span class="chip" title="Budget mémoire des aperçus">budget
-      <b>${(state.settings?.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go</b></span>`;
-  $("#root-path").textContent = state.project?.root || "—";
-  const dicts = state.project?.dicts || 0;
-  $("#dict-state").textContent = state.project?.zstd
-    ? (dicts ? `${dicts} dictionnaire(s) chargés` : "aucun dictionnaire zstd")
-    : "zstandard absent";
-}
+async function openModel(rel, options = {}) {
+  let info;
+  try {
+    info = await api(`/api/model/info?path=${encodeURIComponent(rel)}`);
+  } catch (error) { toast(error.message, "error"); return; }
 
-function renderActivity() {
-  const project = state.project;
-  if (!project) return;
-  const edited = project.edited || [];
-  $("#activity").innerHTML = [
-    `<li><span class="k">Racine</span><code>${esc(project.root)}</code></li>`,
-    `<li><span class="k">Dossier de travail</span><code>${esc(project.work)}</code></li>`,
-    `<li><span class="k">Fichiers modifiés</span>${edited.length ? edited.length + " en attente d'assemblage" : "aucun"}</li>`,
-    `<li><span class="k">Mobs créés</span>${project.mobs.length || "aucun"}</li>`,
-  ].join("");
+  const name = info.models[0] || rel.split("/").pop();
+  const qualities = [
+    { id: "auto", label: "Auto (budget)", faces: null },
+    { id: "detail", label: "Détaillé", faces: 400000 },
+    { id: "rapide", label: "Rapide", faces: 30000 },
+  ];
+  const shot = (faces) => `/api/model/preview?path=${encodeURIComponent(rel)}&w=460&h=345`
+    + (faces ? `&faces=${faces}` : "");
+
+  showInspector("Modèle", `
+    <h3>${esc(name)}</h3>
+    <div class="sub">${esc(rel)}</div>
+    <img class="preview" id="model-shot" alt="" src="${shot(null)}">
+    <dl class="kv">
+      <dt>Version</dt><dd>${esc(info.version)}</dd>
+      <dt>Maillages</dt><dd>${info.meshes}</dd>
+      <dt>Faces</dt><dd>${info.faces.toLocaleString("fr-FR")}</dd>
+      <dt>Sommets</dt><dd>${info.vertices.toLocaleString("fr-FR")}</dd>
+      <dt>Dimensions</dt><dd>${info.bounds.map((value) => value.toFixed(3)).join(" × ")}</dd>
+      <dt>Matériaux</dt><dd>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
+      <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
+    </dl>
+    ${info.warnings.length ? `<ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+    <div class="actions">
+      <button class="btn primary" id="btn-blender">Exporter pour Blender</button>
+      <button class="btn ghost" id="btn-turntable">Planche de rotations</button>
+      <button class="btn ghost" id="btn-translate-model">Injecter un .blend…</button>
+    </div>
+    <label class="field"><span>Qualité de l'aperçu</span>
+      <select id="model-quality">
+        ${qualities.map((q) => `<option value="${q.id}">${esc(q.label)}</option>`).join("")}
+      </select>
+    </label>
+    <p class="hint" id="model-budget-note">Le budget et le culling se règlent dans Réglages.</p>`);
+
+  ensureTab({ id: `model:${rel}`, kind: "model", label: name, doc: { type: "model", rel } });
+  state.tab = `model:${rel}`;
+  renderTabs();
+  markTile("model", rel);
+
+  async function refreshBudget(faces) {
+    const node = $("#model-budget");
+    const note = $("#model-budget-note");
+    if (!node) return;
+    try {
+      const payload = await api(`/api/model/plan?path=${encodeURIComponent(rel)}&w=460&h=345`
+        + (faces ? `&faces=${faces}` : ""));
+      const plan = payload.plan;
+      node.innerHTML = `${humanBytes(plan.total_bytes)} estimés sur `
+        + `${humanBytes(plan.budget_bytes)} (${Math.round(plan.fill * 100)} %)`;
+      note.textContent = plan.notes.length ? plan.notes.join(" · ")
+        : "Le modèle tient dans le budget sans dégradation.";
+    } catch (error) {
+      node.textContent = "indisponible";
+      note.textContent = error.message;
+    }
+  }
+
+  $("#btn-turntable").onclick = () => {
+    $("#model-shot").src = `/api/model/preview?path=${encodeURIComponent(rel)}&w=460&h=345&views=4`;
+  };
+  $("#btn-blender").onclick = () => exportModel(rel);
+  $("#btn-translate-model").onclick = () => {
+    showView("blender");
+    const select = $("#blend-target");
+    if (select) select.value = rel;
+  };
+  $("#model-quality").onchange = (event) => {
+    const chosen = qualities.find((q) => q.id === event.target.value) || qualities[0];
+    $("#model-shot").src = shot(chosen.faces);
+    refreshBudget(chosen.faces);
+  };
+  refreshBudget(null);
+  if (options.inspect === false) return;
 }
 
 /* ------------------------------------------------------------------ textures */
 async function renderTextures() {
   const grid = $("#texture-grid");
-  const textures = (state.project?.assets || []).filter((a) => a.kind === "texture" && matches(a));
+  const textures = (state.project?.assets || [])
+    .filter((asset) => asset.kind === "texture" && matches(asset));
+  state.textures = textures;
+  const count = $("#texture-count");
+  if (count) count.textContent = `${textures.length} texture(s)`
+    + (state.filter ? ` pour « ${state.filter} »` : "");
   if (!textures.length) {
-    grid.innerHTML = `<p class="muted">Aucune texture dans ce projet.</p>`;
+    grid.innerHTML = `<p class="muted">Aucune texture repérée dans ce dossier.</p>`;
     return;
   }
   grid.innerHTML = textures.map((asset) => `
@@ -103,36 +370,46 @@ async function renderTextures() {
       <div class="thumb"><img loading="lazy" alt=""
         src="/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=0"></div>
       <div class="meta">
-        <strong>${esc(asset.name)}</strong>
+        <strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
         <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}</small>
       </div>
     </article>`).join("");
 }
 
 async function openTexture(rel) {
-  const info = await api(`/api/texture/info?path=${encodeURIComponent(rel)}`);
+  let info;
+  try {
+    info = await api(`/api/texture/info?path=${encodeURIComponent(rel)}`);
+  } catch (error) { toast(error.message, "error"); return; }
   const texture = info.textures[0];
-  const editable = info.textures.filter((t) => t.editable).length;
-  const body = `
+  const editable = info.textures.filter((item) => item.editable).length;
+  showInspector("Texture", `
     <h3>${esc(texture.name)}</h3>
     <div class="sub">${esc(rel)}</div>
-    <img class="preview" alt="" src="/api/texture/png?path=${encodeURIComponent(rel)}&index=0">
+    <img class="preview" alt=""
+      src="/api/texture/png?path=${encodeURIComponent(rel)}&index=0">
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}${info.orin ? " · Orin" : ""}</dd>
       <dt>Format</dt><dd>${esc(texture.format)} ${texture.editable
-        ? `<span class="badge">modifiable</span>` : `<span class="badge warn">non encodable</span>`}</dd>
+        ? `<span class="badge">modifiable</span>`
+        : `<span class="badge warn">non encodable</span>`}</dd>
       <dt>Taille</dt><dd>${texture.width} × ${texture.height}</dd>
       <dt>Mips</dt><dd>${texture.mips}</dd>
       <dt>Textures</dt><dd>${info.count} (${editable} modifiable(s))</dd>
     </dl>
-    ${texture.editable ? "" : `<p class="muted">${esc(texture.hint)} — ce format ne peut pas
-      être réencodé pour l'instant&nbsp;; l'import est refusé plutôt que de produire un fichier faux.</p>`}
+    ${texture.editable ? "" : `<p class="hint">${esc(texture.hint)} — l'import est refusé
+      plutôt que de produire un fichier faux.</p>`}
     <div class="actions">
-      <button class="primary" id="btn-import" ${texture.editable ? "" : "disabled"}>Remplacer par une image…</button>
-      <button class="ghost" id="btn-export-png">Exporter en PNG</button>
+      <button class="btn primary" id="btn-import" ${texture.editable ? "" : "disabled"}>
+        Remplacer par une image…</button>
+      <button class="btn ghost" id="btn-export-png">Exporter en PNG</button>
       <input type="file" id="file-import" accept="image/*" hidden>
-    </div>`;
-  showDetail(body);
+    </div>`);
+
+  ensureTab({ id: `texture:${rel}`, kind: "texture", label: texture.name, doc: { type: "texture", rel } });
+  state.tab = `texture:${rel}`;
+  renderTabs();
+  markTile("texture", rel);
 
   $("#btn-export-png").onclick = async () => {
     try {
@@ -158,110 +435,219 @@ async function openTexture(rel) {
       });
       toast(`Texture remplacée (${result.texture}) → ${result.wrote}`);
       await refresh();
+      openTexture(rel);
     } catch (error) { toast(error.message, "error"); }
   };
 }
 
-/* ------------------------------------------------------------------ modèles */
-async function renderModels() {
-  const grid = $("#model-grid");
-  const models = (state.project?.assets || []).filter((a) => a.kind === "model" && matches(a));
-  if (!models.length) {
-    grid.innerHTML = `<p class="muted">Aucun modèle dans ce projet.</p>`;
-    return;
+/* ------------------------------------------------------------------ mobs */
+function fillMobSelects() {
+  const models = (state.project?.assets || []).filter((asset) => asset.kind === "model");
+  const textures = (state.project?.assets || []).filter((asset) => asset.kind === "texture");
+  const modelSelect = $("#mob-model");
+  if (modelSelect) {
+    modelSelect.innerHTML = models.length
+      ? models.map((asset) => `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("")
+      : `<option value="">(aucun modèle)</option>`;
   }
-  grid.innerHTML = models.map((asset) => `
-    <article class="tile" data-kind="model" data-rel="${esc(asset.rel)}">
-      <div class="thumb"><img loading="lazy" alt=""
-        src="/api/model/preview?path=${encodeURIComponent(asset.rel)}&w=420&h=320"></div>
-      <div class="meta">
-        <strong>${esc(asset.name)}</strong>
-        <small>${humanSize(asset.size)}</small>
-      </div>
-    </article>`).join("");
+  const textureSelect = $("#mob-textures");
+  if (textureSelect) {
+    textureSelect.innerHTML = textures
+      .map((asset) => `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
+  }
+  const target = $("#blend-target");
+  if (target) {
+    target.innerHTML = models.length
+      ? models.map((asset) => `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("")
+      : `<option value="">(aucun modèle)</option>`;
+  }
 }
 
-async function openModel(rel) {
-  let info;
+async function renderMobs() {
+  fillMobSelects();
+  const mobs = state.project?.mobs || [];
+  $("#mob-grid").innerHTML = mobs.map((mob) => `
+    <article class="tile" data-kind="mob" data-slug="${esc(mob.slug)}">
+      <div class="meta">
+        <strong>${esc(mob.name)}</strong>
+        <small>parent : ${esc(mob.parent)}</small>
+        <small>${mob.files.length} fichier(s) prêt(s)</small>
+      </div>
+    </article>`).join("") || `<p class="muted">Aucune fiche pour l'instant.</p>`;
+}
+
+function openMob(slug) {
+  const mob = (state.project?.mobs || []).find((item) => item.slug === slug);
+  if (!mob) return;
+  showInspector("Mob", `
+    <h3>${esc(mob.name)}</h3>
+    <div class="sub">${esc(mob.slug)} · parent ${esc(mob.parent)}</div>
+    <dl class="kv">
+      <dt>Modèle source</dt><dd>${esc(mob.model_source || "—")}</dd>
+      <dt>Textures</dt><dd>${mob.texture_sources.map(esc).join(", ") || "—"}</dd>
+      <dt>Fichiers</dt><dd>${mob.files.map((file) => esc(file.to)).join(", ") || "—"}</dd>
+    </dl>
+    <strong>Reste à faire côté jeu</strong>
+    <ul class="todo">${mob.todo.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`);
+  ensureTab({ id: `mob:${slug}`, kind: "mob", label: mob.name, doc: { type: "mob", slug } });
+  state.tab = `mob:${slug}`;
+  renderTabs();
+}
+
+function openDoc(doc) {
+  if (doc.type === "model") return openModel(doc.rel);
+  if (doc.type === "texture") return openTexture(doc.rel);
+  if (doc.type === "mob") return openMob(doc.slug);
+  if (doc.type === "blend") return selectBlend(doc.ref, { tab: true });
+}
+
+/* ------------------------------------------------------------------ blender */
+async function renderBlends() {
+  fillMobSelects();
   try {
-    info = await api(`/api/model/info?path=${encodeURIComponent(rel)}`);
+    const payload = await api("/api/blend/list");
+    state.blends = payload.blends || [];
   } catch (error) {
     toast(error.message, "error");
-    return;
+    state.blends = [];
   }
+  const list = $("#blend-list");
+  if (list) {
+    list.innerHTML = state.blends.length
+      ? state.blends.map((entry) => `
+          <option value="${esc(entry.ref)}" ${entry.ref === state.blend.ref ? "selected" : ""}>
+            ${esc(entry.name)} — ${humanSize(entry.size)} (${esc(entry.origin)})
+          </option>`).join("")
+      : `<option value="">(aucun .blend : dépose un fichier)</option>`;
+  }
+  if (!state.blend.ref && state.blends.length) {
+    selectBlend(state.blends[0].ref);
+  }
+}
 
-  const qualities = [
-    { id: "auto", label: "Auto (budget)", faces: null },
-    { id: "smooth", label: "Détaillé", faces: 400000 },
-    { id: "fast", label: "Rapide", faces: 30000 },
-  ];
-  const shot = (faces) => `/api/model/preview?path=${encodeURIComponent(rel)}&w=440&h=340`
-    + (faces ? `&faces=${faces}` : "");
+async function selectBlend(ref, options = {}) {
+  state.blend.ref = ref;
+  const list = $("#blend-list");
+  if (list) list.value = ref;
+  if (options.tab && ref) {
+    const entry = state.blends.find((item) => item.ref === ref);
+    ensureTab({ id: `blend:${ref}`, kind: "blend", label: entry?.name || ref,
+                doc: { type: "blend", ref } });
+    state.tab = `blend:${ref}`;
+    renderTabs();
+  }
+  await inspectBlend();
+}
 
-  showDetail(`
-    <h3>${esc(info.models[0] || rel.split("/").pop())}</h3>
-    <div class="sub">${esc(rel)}</div>
-    <img class="preview" id="model-shot" alt="" src="${shot(null)}">
-    <dl class="kv">
-      <dt>Version</dt><dd>${esc(info.version)}</dd>
-      <dt>Maillages</dt><dd>${info.meshes}</dd>
-      <dt>Faces</dt><dd>${info.faces.toLocaleString("fr-FR")}</dd>
-      <dt>Sommets</dt><dd>${info.vertices.toLocaleString("fr-FR")}</dd>
-      <dt>Dimensions</dt><dd>${info.bounds.map((v) => v.toFixed(3)).join(" × ")}</dd>
-      <dt>Matériaux</dt><dd>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
-      <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
-    </dl>
-    ${info.warnings.length ? `<ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-    <div class="actions">
-      <button class="primary" id="btn-blender">Exporter pour Blender</button>
-      <button class="ghost" id="btn-turntable">Planche de rotations</button>
-    </div>
-    <div class="field" style="margin-top:16px">
-      <label for="model-quality">Qualité de l'aperçu</label>
-      <select id="model-quality">
-        ${qualities.map((q) => `<option value="${q.id}">${esc(q.label)}</option>`).join("")}
-      </select>
-      <p class="hint" id="model-budget-note">Le budget mémoire et le culling se règlent
-         dans <b>Réglages</b>.</p>
-    </div>`);
+function blendOptions() {
+  return {
+    axis: $("#blend-axis")?.value || "y_up",
+    scale: Number($("#blend-scale")?.value || 1),
+    only: $("#blend-only")?.value?.trim() || null,
+  };
+}
 
-  async function refreshBudget(faces) {
-    const node = $("#model-budget");
-    const note = $("#model-budget-note");
-    try {
-      const payload = await api(`/api/model/plan?path=${encodeURIComponent(rel)}&w=440&h=340`
-        + (faces ? `&faces=${faces}` : ""));
-      const plan = payload.plan;
-      const percent = Math.round(plan.fill * 100);
-      node.innerHTML = `${humanBytes(plan.total_bytes)} estimés sur `
-        + `${humanBytes(plan.budget_bytes)} (${percent}&nbsp;%)`;
-      note.textContent = plan.notes.length
-        ? plan.notes.join(" · ")
-        : "Le modèle tient dans le budget sans dégradation.";
-    } catch (error) {
-      node.textContent = "indisponible";
-      note.textContent = error.message;
+async function inspectBlend() {
+  const ref = state.blend.ref || $("#blend-list")?.value;
+  if (!ref) return;
+  state.blend.ref = ref;
+  const info = $("#blend-info");
+  if (info) info.innerHTML = `<dt class="muted">analyse…</dt><dd></dd>`;
+  try {
+    const payload = await api("/api/blend/inspect", {
+      method: "POST",
+      body: JSON.stringify({ ref, ...blendOptions() }),
+    });
+    state.blend.objects = payload.objects || [];
+    const objects = payload.objects || [];
+    if (info) {
+      info.innerHTML = `
+        <dt>Fichier</dt><dd>${esc(payload.file)}</dd>
+        <dt>Version Blender</dt><dd>${esc(payload.version)}</dd>
+        <dt>Objets</dt><dd>${objects.length}</dd>
+        <dt>Maillages</dt><dd>${payload.meshes}</dd>
+        <dt>Faces</dt><dd>${payload.faces.toLocaleString("fr-FR")}</dd>
+        <dt>Sommets</dt><dd>${payload.vertices.toLocaleString("fr-FR")}</dd>
+        <dt>Matériaux</dt><dd>${payload.materials.length ? payload.materials.map(esc).join(", ") : "—"}</dd>`;
     }
-  }
-
-  $("#btn-turntable").onclick = () => {
-    $("#model-shot").src = `/api/model/preview?path=${encodeURIComponent(rel)}&w=440&h=340&views=4`;
-  };
-  $("#btn-blender").onclick = async () => {
-    try {
-      const result = await api("/api/model/export", {
-        method: "POST",
-        body: JSON.stringify({ path: rel, textures: true }),
+    const report = $("#blend-report");
+    if (report) {
+      const rows = [];
+      objects.forEach((object) => {
+        rows.push(`<li><span class="badge">${object.faces} f.</span>
+          <span><b>${esc(object.name)}</b>
+          ${object.materials.length ? `<small class="muted"> · ${object.materials.map(esc).join(", ")}</small>` : ""}
+          ${object.reason ? `<small class="muted"> — ${esc(object.reason)}</small>` : ""}</span></li>`);
       });
-      toast(`Export Blender : ${result.folder} (${result.faces} faces, ${result.textures} texture(s))`);
-    } catch (error) { toast(error.message, "error"); }
-  };
-  $("#model-quality").onchange = (event) => {
-    const chosen = qualities.find((q) => q.id === event.target.value) || qualities[0];
-    $("#model-shot").src = shot(chosen.faces);
-    refreshBudget(chosen.faces);
-  };
-  refreshBudget(null);
+      (payload.warnings || []).forEach((warning) => {
+        rows.push(`<li><span class="badge warn">note</span><span>${esc(warning)}</span></li>`);
+      });
+      report.innerHTML = rows.join("") || `<li class="muted">Aucune remarque.</li>`;
+    }
+    log("ok", `${payload.file} : ${payload.faces} face(s) lues`);
+  } catch (error) {
+    if (info) info.innerHTML = `<dt class="muted">erreur</dt><dd>${esc(error.message)}</dd>`;
+    toast(error.message, "error");
+  }
+}
+
+function previewBlend() {
+  const ref = state.blend.ref || $("#blend-list")?.value;
+  if (!ref) { toast("Choisis d'abord un fichier .blend", "error"); return; }
+  const { axis, scale, only } = blendOptions();
+  const url = `/api/blend/preview?ref=${encodeURIComponent(ref)}&w=560&h=420&axis=${axis}`
+    + `&scale=${encodeURIComponent(scale)}` + (only ? `&only=${encodeURIComponent(only)}` : "");
+  const image = $("#blend-preview");
+  if (image) image.src = `${url}&t=${Date.now()}`;
+}
+
+async function uploadBlend(file) {
+  if (!file) return;
+  if (!/\.blend$/i.test(file.name)) { toast("Il faut un fichier .blend", "error"); return; }
+  try {
+    const response = await fetch("/api/blend/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "X-Hooky-Filename": file.name },
+      body: file,
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    toast(`${payload.name} envoyé (${humanSize(payload.size)})`);
+    await renderBlends();
+    await selectBlend(payload.ref, { tab: true });
+    previewBlend();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function translateBlend() {
+  const ref = state.blend.ref || $("#blend-list")?.value;
+  const target = $("#blend-target")?.value;
+  if (!ref) { toast("Choisis un fichier .blend", "error"); return; }
+  if (!target) { toast("Choisis le modèle du jeu à modifier", "error"); return; }
+  const { axis, scale, only } = blendOptions();
+  try {
+    const result = await api("/api/blend/translate", {
+      method: "POST",
+      body: JSON.stringify({
+        ref, target, axis, scale, only,
+        fit: $("#blend-fit")?.checked !== false,
+      }),
+    });
+    const shot = $("#blend-result-shot");
+    if (shot && result.preview) shot.src = result.preview;
+    const report = $("#blend-report");
+    if (report) {
+      report.innerHTML = [
+        `<li><span class="badge">écrit</span><span><code>${esc(result.wrote)}</code></span></li>`,
+        `<li><span class="badge">${result.faces} f.</span><span>${result.vertices} sommet(s)
+          sur ${result.capacity_vertices} disponibles</span></li>`,
+        ...result.report.map((line) => `<li><span class="badge">détail</span><span>${esc(line)}</span></li>`),
+        ...(result.notes || []).map((note) => `<li><span class="badge warn">note</span><span>${esc(note)}</span></li>`),
+      ].join("");
+    }
+    toast(`${target} modifié : ${result.wrote}`);
+    await refresh();
+  } catch (error) { toast(error.message, "error"); }
 }
 
 /* ------------------------------------------------------------------ réglages */
@@ -269,19 +655,28 @@ function settingsOrDefault() {
   return state.settings || {
     vram_gb: 6, vram_max_gb: 25, vram_min_gb: 1, supersample: 2,
     cull: true, frustum: true, adaptive: true, max_faces: null, lod: 0,
+    accent: "menthe", density: "confort", export_textures: true, thumb_faces: null,
+    accents: ["menthe", "azur", "ambre", "framboise"], densities: ["confort", "compact"],
   };
+}
+
+function applyUiSettings(settings = settingsOrDefault()) {
+  document.documentElement.dataset.accent = settings.accent || "menthe";
+  document.documentElement.dataset.density = settings.density || "confort";
 }
 
 function renderSettings() {
   const settings = settingsOrDefault();
   state.settings = settings;
+  applyUiSettings(settings);
   const vram = $("#set-vram");
-  vram.min = settings.vram_min_gb;
-  vram.max = settings.vram_max_gb;
+  if (!vram) return;
+  vram.min = settings.vram_min_gb ?? 1;
+  vram.max = settings.vram_max_gb ?? 25;
   vram.value = settings.vram_gb;
   $("#set-vram-out").textContent = `${settings.vram_gb} Go`;
   $("#set-vram-fill").style.width =
-    `${((settings.vram_gb - settings.vram_min_gb) / (settings.vram_max_gb - settings.vram_min_gb)) * 100}%`;
+    `${((settings.vram_gb - (settings.vram_min_gb ?? 1)) / ((settings.vram_max_gb ?? 25) - (settings.vram_min_gb ?? 1))) * 100}%`;
   $("#set-ss").value = settings.supersample;
   $("#set-ss-out").textContent = `×${settings.supersample}`;
   $("#set-cull").checked = settings.cull;
@@ -290,26 +685,39 @@ function renderSettings() {
   $("#set-faces").value = settings.max_faces || 0;
   $("#set-faces-out").textContent = settings.max_faces
     ? `${settings.max_faces.toLocaleString("fr-FR")} faces` : "auto";
+
+  const accents = $("#set-accent");
+  accents.innerHTML = (settings.accents || ["menthe"]).map((accent) =>
+    `<option value="${accent}" ${accent === settings.accent ? "selected" : ""}>${accent}</option>`).join("");
+  const densities = $("#set-density");
+  densities.innerHTML = (settings.densities || ["confort"]).map((density) =>
+    `<option value="${density}" ${density === settings.density ? "selected" : ""}>${density}</option>`).join("");
+  $("#set-thumb-faces").value = String(settings.thumb_faces || 0);
+  $("#set-export-textures").checked = settings.export_textures !== false;
+
   $("#settings-summary").innerHTML = [
-    `<li><span class="k">Budget</span>${humanBytes(settings.budget_bytes ||
-      settings.vram_gb * 1024 ** 3)} (${settings.vram_gb} Go)</li>`,
+    `<li><span class="k">Budget</span>${humanBytes(settings.budget_bytes
+      || settings.vram_gb * 1024 ** 3)} (${settings.vram_gb} Go)</li>`,
     `<li><span class="k">Anticrénelage</span>×${settings.supersample}</li>`,
     `<li><span class="k">Culling</span>${[
       settings.cull ? "faces arrière" : null,
       settings.frustum ? "hors écran" : null,
     ].filter(Boolean).join(" + ") || "désactivé"}</li>`,
     `<li><span class="k">Adaptation</span>${settings.adaptive
-      ? "active (qualité baissée avant de refuser)" : "désactivée (refus net)"}</li>`,
+      ? "active" : "désactivée (refus net)"}</li>`,
     `<li><span class="k">Faces</span>${settings.max_faces
-      ? `${settings.max_faces.toLocaleString("fr-FR")} maximum`
-      : "automatique selon le budget"}</li>`,
+      ? `${settings.max_faces.toLocaleString("fr-FR")} maximum` : "automatique"}</li>`,
+    `<li><span class="k">Vignettes</span>${settings.thumb_faces
+      ? `${settings.thumb_faces.toLocaleString("fr-FR")} faces` : "selon le budget"}</li>`,
+    `<li><span class="k">Export Blender</span>${settings.export_textures !== false
+      ? "avec les PNG" : "géométrie seule"}</li>`,
   ].join("");
 }
 
 let settingsTimer = null;
-async function saveSettings(patch, { quiet = true } = {}) {
-  const merged = { ...settingsOrDefault(), ...patch };
-  state.settings = merged;
+async function saveSettings(patch, options = {}) {
+  state.settings = { ...settingsOrDefault(), ...patch };
+  applyUiSettings(state.settings);
   renderSettings();
   clearTimeout(settingsTimer);
   settingsTimer = setTimeout(async () => {
@@ -320,75 +728,75 @@ async function saveSettings(patch, { quiet = true } = {}) {
       });
       state.settings = payload.settings;
       renderSettings();
-      renderStats();
+      renderStatus();
       if (state.view === "models") await renderModels();
-      if (!quiet) toast("Réglages enregistrés");
+      if (!options.quiet) toast("Réglages enregistrés");
     } catch (error) { toast(error.message, "error"); }
   }, 180);
 }
 
 function wireSettings() {
-  $("#set-vram").oninput = (event) =>
-    saveSettings({ vram_gb: Number(event.target.value) });
-  $("#set-ss").oninput = (event) =>
-    saveSettings({ supersample: Number(event.target.value) });
-  $("#set-cull").onchange = (event) => saveSettings({ cull: event.target.checked });
-  $("#set-frustum").onchange = (event) => saveSettings({ frustum: event.target.checked });
-  $("#set-adaptive").onchange = (event) =>
-    saveSettings({ adaptive: event.target.checked });
-  $("#set-faces").oninput = (event) => {
+  const on = (selector, event, handler) => {
+    const node = $(selector);
+    if (node) node[event] = handler;
+  };
+  on("#set-vram", "oninput", (event) => saveSettings({ vram_gb: Number(event.target.value) }));
+  on("#set-ss", "oninput", (event) => saveSettings({ supersample: Number(event.target.value) }));
+  on("#set-faces", "oninput", (event) => {
     const value = Number(event.target.value);
     saveSettings({ max_faces: value > 0 ? value : null });
-  };
-  $("#set-reset").onclick = () => saveSettings({
-    vram_gb: 6, supersample: 2, cull: true, frustum: true,
-    adaptive: true, max_faces: null, lod: 0,
-  }, { quiet: false });
+  });
+  on("#set-cull", "onchange", (event) => saveSettings({ cull: event.target.checked }));
+  on("#set-frustum", "onchange", (event) => saveSettings({ frustum: event.target.checked }));
+  on("#set-adaptive", "onchange", (event) => saveSettings({ adaptive: event.target.checked }));
+  on("#set-accent", "onchange", (event) => saveSettings({ accent: event.target.value }));
+  on("#set-density", "onchange", (event) => saveSettings({ density: event.target.value }));
+  on("#set-thumb-faces", "onchange", (event) => {
+    const value = Number(event.target.value);
+    saveSettings({ thumb_faces: value > 0 ? value : null });
+  });
+  on("#set-export-textures", "onchange", (event) =>
+    saveSettings({ export_textures: event.target.checked }));
+  on("#set-reset", "onclick", () => saveSettings({
+    vram_gb: 6, supersample: 2, cull: true, frustum: true, adaptive: true,
+    max_faces: null, lod: 0, accent: "menthe", density: "confort",
+    export_textures: true, thumb_faces: null,
+  }, { quiet: false }));
 }
 
-/* ------------------------------------------------------------------ mobs */
-function fillSelects() {
-  const models = (state.project?.assets || []).filter((a) => a.kind === "model");
-  const textures = (state.project?.assets || []).filter((a) => a.kind === "texture");
-  $("#mob-model").innerHTML = models.length
-    ? models.map((a) => `<option value="${esc(a.rel)}">${esc(a.name)}</option>`).join("")
-    : `<option value="">(aucun modèle)</option>`;
-  $("#mob-textures").innerHTML = textures
-    .map((a) => `<option value="${esc(a.rel)}">${esc(a.name)}</option>`).join("");
+/* ------------------------------------------------------------------ inspecteur */
+function showInspector(title, html) {
+  $("#inspector-title").textContent = title;
+  $("#inspector-body").innerHTML = html;
+  $("#inspector").hidden = false;
+  $(".workspace").classList.add("with-inspector");
 }
 
-async function renderMobs() {
-  fillSelects();
-  const mobs = state.project?.mobs || [];
-  $("#mob-grid").innerHTML = mobs.map((mob) => `
-    <article class="tile" data-kind="mob" data-slug="${esc(mob.slug)}">
-      <div class="meta" style="padding:14px 14px 12px">
-        <strong>${esc(mob.name)}</strong>
-        <small>parent : ${esc(mob.parent)}</small>
-        <small>${mob.files.length} fichier(s) préparé(s)</small>
-      </div>
-    </article>`).join("") || `<p class="muted">Aucun mob pour l'instant.</p>`;
+function hideInspector() {
+  $("#inspector").hidden = true;
+  $(".workspace").classList.remove("with-inspector");
 }
 
-function openMob(slug) {
-  const mob = (state.project?.mobs || []).find((m) => m.slug === slug);
-  if (!mob) return;
-  showDetail(`
-    <h3>${esc(mob.name)}</h3>
-    <div class="sub">${esc(mob.slug)} · parent ${esc(mob.parent)}</div>
-    <dl class="kv">
-      <dt>Modèle source</dt><dd>${esc(mob.model_source || "—")}</dd>
-      <dt>Textures</dt><dd>${mob.texture_sources.map(esc).join(", ") || "—"}</dd>
-      <dt>Fichiers</dt><dd>${mob.files.map((f) => esc(f.to)).join(", ") || "—"}</dd>
-    </dl>
-    <strong>Reste à faire côté jeu</strong>
-    <ul class="todo">${mob.todo.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`);
+function markTile(kind, rel) {
+  $$(`.tile[data-kind="${kind}"]`).forEach((node) => {
+    node.classList.toggle("selected", node.dataset.rel === rel);
+  });
 }
 
-/* ------------------------------------------------------------------ export global */
+/* ------------------------------------------------------------------ actions */
+async function exportModel(rel) {
+  try {
+    const result = await api("/api/model/export", {
+      method: "POST",
+      body: JSON.stringify({ path: rel, textures: state.settings?.export_textures !== false }),
+    });
+    toast(`Export Blender : ${result.folder} (${result.faces} faces, ${result.textures} texture(s))`);
+  } catch (error) { toast(error.message, "error"); }
+}
+
 async function startBulk() {
   const kinds = ["texture", "model"];
-  if ($("#bulk-anim").checked) kinds.push("animation");
+  if ($("#bulk-anim")?.checked) kinds.push("animation");
   try {
     await api("/api/bulk/start", { method: "POST", body: JSON.stringify({ kinds }) });
   } catch (error) { toast(error.message, "error"); return; }
@@ -402,7 +810,11 @@ async function pollBulk() {
   let job;
   try {
     job = await api("/api/bulk/status");
-  } catch (error) { toast(error.message, "error"); $("#bulk-start").disabled = false; return; }
+  } catch (error) {
+    toast(error.message, "error");
+    $("#bulk-start").disabled = false;
+    return;
+  }
   const total = job.total || 0;
   const done = job.done || 0;
   $("#bulk-fill").style.width = total ? `${Math.min(100, (done / total) * 100)}%` : "6%";
@@ -418,25 +830,21 @@ async function pollBulk() {
   if (!report) return;
   $("#bulk-fill").style.width = "100%";
   $("#bulk-label").textContent =
-    `${report.ok} réussi(s) · ${report.skip} ignoré(s) · ${report.error} erreur(s) — ` +
-    `${report.textures} PNG, ${report.models} modèle(s)`;
-  $("#bulk-report").innerHTML = report.items.map((item) => {
+    `${report.ok} réussi(s) · ${report.skip} ignoré(s) · ${report.error} erreur(s) — `
+    + `${report.textures} PNG, ${report.models} modèle(s)`;
+  $("#bulk-report").innerHTML = report.items.slice(0, 60).map((item) => {
     const flavor = item.status === "ok"
       ? `<span class="badge">ok</span>`
-      : item.status === "skip"
-        ? `<span class="badge warn">ignoré</span>`
-        : `<span class="badge warn">erreur</span>`;
+      : `<span class="badge warn">${item.status === "skip" ? "ignoré" : "erreur"}</span>`;
     const detail = item.status === "ok"
       ? (item.kind === "model" ? `${item.faces} faces · v${item.version}` : item.format)
       : (item.reason || "");
-    return `<li>${flavor}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">
-      <code>${esc(item.label)}</code><br><small class="muted">${esc(detail)}</small></span></li>`;
+    return `<li>${flavor}<span>${esc(item.label)}<br><small class="muted">${esc(detail)}</small></span></li>`;
   }).join("");
-  toast(`Export complet : ${report.ok} élément(s) exploité(s)`);
+  toast(`Export complet : ${report.ok} élément(s)`);
   await refresh();
 }
 
-/* ------------------------------------------------------------------ mod */
 async function buildMod(event) {
   event.preventDefault();
   const name = new FormData(event.target).get("name");
@@ -446,84 +854,365 @@ async function buildMod(event) {
       body: JSON.stringify({ name }),
     });
     $("#mod-log").innerHTML = `
-      <li><span class="k">Mod</span>${esc(result.mod)}</li>
+      <li><span class="k">Mod</span><span>${esc(result.mod)}</span></li>
       <li><span class="k">Dossier</span><code>${esc(result.path)}</code></li>
-      <li><span class="k">Fichiers</span>${result.files}</li>
-      <li><span class="k">Mobs</span>${result.mobs}</li>`;
+      <li><span class="k">Fichiers</span><span>${result.files}</span></li>
+      <li><span class="k">Mobs</span><span>${result.mobs}</span></li>`;
     toast(`Mod assemblé : ${result.path} (${result.files} fichier(s))`);
   } catch (error) { toast(error.message, "error"); }
 }
 
-/* ------------------------------------------------------------------ détail */
-function showDetail(html) {
-  $("#detail-body").innerHTML = html;
-  $("#detail").hidden = false;
+async function createMob(event) {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const textures = [...($("#mob-textures")?.selectedOptions || [])].map((option) => option.value);
+  try {
+    const mob = await api("/api/mobs", {
+      method: "POST",
+      body: JSON.stringify({
+        name: form.get("name"),
+        parent: form.get("parent") || "",
+        model: form.get("model"),
+        textures,
+      }),
+    });
+    toast(`Fiche créée : ${mob.name}`);
+    await refresh();
+    renderMobs();
+  } catch (error) { toast(error.message, "error"); }
 }
-function hideDetail() { $("#detail").hidden = true; }
 
-/* ------------------------------------------------------------------ init */
-async function refresh() {
+/* ------------------------------------------------------------------ menus */
+const MENUS = {
+  fichier: [
+    { label: "Rafraîchir le projet", hint: "F5", run: () => refresh({ quiet: false }) },
+    { label: "Exporter tout le projet", run: () => { showView("home"); startBulk(); } },
+    { label: "Assembler le mod", run: () => { showView("home"); $("#mod-form")?.requestSubmit(); } },
+    { sep: true },
+    { label: "Ouvrir le dossier de travail", run: () => toast(`Dossier : ${state.project?.work || "—"}`) },
+  ],
+  edition: [
+    { label: "Palette de commandes", hint: "Ctrl+K", run: openPalette },
+    { label: "Chercher dans la vue", hint: "Ctrl+F", run: () => $("#search")?.focus() },
+    { sep: true },
+    { label: "Vider le journal", run: () => { state.logs = []; renderLogs(); } },
+  ],
+  modele: [
+    { label: "Vue des modèles", hint: "Ctrl+2", run: () => showView("models") },
+    { label: "Exporter le modèle sélectionné pour Blender", run: () => {
+      const rel = state.tabs.find((tab) => tab.doc?.type === "model")?.doc?.rel;
+      if (rel) exportModel(rel); else toast("Ouvre d'abord un modèle", "error");
+    } },
+    { label: "Injecter un .blend…", hint: "Ctrl+5", run: () => showView("blender") },
+  ],
+  texture: [
+    { label: "Vue des textures", hint: "Ctrl+3", run: () => showView("textures") },
+    { label: "Exporter la texture sélectionnée en PNG", run: () => {
+      const rel = state.tabs.find((tab) => tab.doc?.type === "texture")?.doc?.rel;
+      if (!rel) { toast("Ouvre d'abord une texture", "error"); return; }
+      api(`/api/texture/export?path=${encodeURIComponent(rel)}&index=0`)
+        .then((result) => toast(`PNG écrit : ${result.file}`))
+        .catch((error) => toast(error.message, "error"));
+    } },
+  ],
+  blender: [
+    { label: "Vue Blender", hint: "Ctrl+5", run: () => showView("blender") },
+    { label: "Analyser le .blend sélectionné", run: () => inspectBlend() },
+    { label: "Aperçu du .blend", run: () => previewBlend() },
+    { sep: true },
+    { label: "Injecter dans le modèle cible", run: () => translateBlend() },
+  ],
+  affichage: [
+    { label: "Accueil", hint: "Ctrl+1", run: () => showView("home") },
+    { label: "Réglages", hint: "Ctrl+6", run: () => showView("settings") },
+    { sep: true },
+    { label: "Journal", hint: "Ctrl+J", run: toggleConsole },
+    { label: "Masquer l'inspecteur", hint: "Échap", run: hideInspector },
+    { sep: true },
+    { label: "Densité compacte", run: () => saveSettings({
+      density: state.settings?.density === "compact" ? "confort" : "compact" }) },
+  ],
+  aide: [
+    { label: "Raccourcis clavier", run: () => toast(
+      "Ctrl+K palette · Ctrl+J journal · Ctrl+1…6 vues · Ctrl+F filtrer · F5 rafraîchir · Échap fermer") },
+    { label: "À propos", run: () => toast(
+      "HookyCreator 1.1 — traduction BFRES/BNTX et .blend faite maison, sans bibliothèque tierce.") },
+  ],
+};
+
+function buildMenu(menu) {
+  const node = $("#menus");
+  if (!node) return;
+  const anchor = $(`.menu-btn[data-menu="${menu}"]`).getBoundingClientRect();
+  node.innerHTML = `<div class="menu-panel" style="left:${anchor.left}px;top:${anchor.bottom + 6}px">
+    ${MENUS[menu].map((item) => item.sep
+      ? `<div class="menu-sep"></div>`
+      : `<button class="menu-item" data-cmd="${esc(item.label)}">
+           <span>${esc(item.label)}</span>${item.hint ? `<kbd>${esc(item.hint)}</kbd>` : ""}
+         </button>`).join("")}
+  </div>`;
+  node.hidden = false;
+  $$(".menu-btn").forEach((btn) => btn.setAttribute("aria-expanded", String(btn.dataset.menu === menu)));
+  $$(".menu-item", node).forEach((button) => {
+    button.onclick = () => {
+      const item = MENUS[menu].find((entry) => entry.label === button.dataset.cmd);
+      closeMenus();
+      item?.run();
+    };
+  });
+}
+
+function closeMenus() {
+  const node = $("#menus");
+  if (node) { node.hidden = true; node.innerHTML = ""; }
+  $$(".menu-btn").forEach((btn) => btn.removeAttribute("aria-expanded"));
+}
+
+/* ------------------------------------------------------------------ palette */
+function paletteCommands() {
+  const commands = [
+    { label: "Aller à l'accueil", group: "vue", run: () => showView("home") },
+    { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
+    { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
+    { label: "Aller aux mobs", group: "vue", run: () => showView("mobs") },
+    { label: "Aller à Blender → jeu", group: "vue", run: () => showView("blender") },
+    { label: "Aller aux réglages", group: "vue", run: () => showView("settings") },
+    { label: "Rafraîchir le projet", group: "action", run: () => refresh({ quiet: false }) },
+    { label: "Exporter tout le projet", group: "action", run: () => { showView("home"); startBulk(); } },
+    { label: "Assembler le mod", group: "action", run: () => { showView("home"); $("#mod-form")?.requestSubmit(); } },
+    { label: "Analyser le .blend sélectionné", group: "blender", run: () => inspectBlend() },
+    { label: "Injecter le .blend dans le modèle cible", group: "blender", run: () => translateBlend() },
+    { label: "Basculer le journal", group: "affichage", run: toggleConsole },
+    { label: "Densité compacte", group: "affichage", run: () => saveSettings({
+      density: state.settings?.density === "compact" ? "confort" : "compact" }) },
+    { label: "Réinitialiser les réglages", group: "affichage", run: () => $("#set-reset")?.click() },
+  ];
+  (state.project?.assets || []).filter((asset) => asset.kind === "model").slice(0, 400)
+    .forEach((asset) => commands.push({
+      label: `Ouvrir le modèle ${asset.name}`, group: "modèle", hint: asset.rel,
+      run: () => { showView("models"); openModel(asset.rel); },
+    }));
+  (state.project?.assets || []).filter((asset) => asset.kind === "texture").slice(0, 400)
+    .forEach((asset) => commands.push({
+      label: `Ouvrir la texture ${asset.name}`, group: "texture", hint: asset.rel,
+      run: () => { showView("textures"); openTexture(asset.rel); },
+    }));
+  (state.blends || []).forEach((entry) => commands.push({
+    label: `Charger le .blend ${entry.name}`, group: "blender", hint: entry.ref,
+    run: () => { showView("blender"); selectBlend(entry.ref, { tab: true }); },
+  }));
+  return commands;
+}
+
+let paletteItems = [];
+let paletteIndex = 0;
+
+function openPalette() {
+  const node = $("#palette");
+  if (!node) return;
+  node.hidden = false;
+  const input = $("#palette-input");
+  input.value = "";
+  paletteIndex = 0;
+  filterPalette("");
+  input.focus();
+}
+
+function closePalette() {
+  const node = $("#palette");
+  if (node) node.hidden = true;
+}
+
+function filterPalette(query) {
+  const text = String(query || "").toLowerCase().trim();
+  const all = paletteCommands();
+  paletteItems = (text
+    ? all.filter((item) => `${item.label} ${item.hint || ""}`.toLowerCase().includes(text))
+    : all
+  ).slice(0, 60);
+  paletteIndex = Math.min(paletteIndex, Math.max(0, paletteItems.length - 1));
+  const list = $("#palette-list");
+  list.innerHTML = paletteItems.length
+    ? paletteItems.map((item, index) => `
+        <li data-index="${index}" aria-selected="${index === paletteIndex}">
+          <span>${esc(item.label)}</span>
+          ${item.hint ? `<small>${esc(item.hint)}</small>` : ""}
+          <span class="group">${esc(item.group || "")}</span>
+        </li>`).join("")
+    : `<li class="empty">aucun résultat</li>`;
+  const active = list.querySelector(`li[data-index="${paletteIndex}"]`);
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+function runPalette(index) {
+  const item = paletteItems[index];
+  if (!item) return;
+  closePalette();
+  item.run();
+}
+
+/* ------------------------------------------------------------------ journal */
+function toggleConsole(force) {
+  const node = $("#console");
+  if (!node) return;
+  const show = force === undefined ? node.hidden : Boolean(force);
+  node.hidden = !show;
+  $(".editor").classList.toggle("console-open", show);
+  $("#rail-console")?.setAttribute("aria-current", show ? "page" : "false");
+  if (!show) $("#rail-console")?.removeAttribute("aria-current");
+}
+
+/* ------------------------------------------------------------------ état */
+async function refresh(options = {}) {
   const payload = await api("/api/state");
   state.project = payload.project;
   state.settings = payload.project.settings || state.settings;
-  renderStats();
-  if (state.view === "home") renderActivity();
-  if (state.view === "textures") await renderTextures();
+  applyUiSettings(state.settings);
+  renderStatus();
+  if (state.view === "home") renderHome();
   if (state.view === "models") await renderModels();
+  if (state.view === "textures") await renderTextures();
   if (state.view === "mobs") await renderMobs();
+  if (state.view === "blender") await renderBlends();
   if (state.view === "settings") renderSettings();
+  if (options.quiet === false) {
+    const counts = payload.project.assets.length;
+    toast(`Projet rafraîchi : ${counts} fichier(s)`);
+  }
 }
 
+/* ------------------------------------------------------------------ câblage */
 function wire() {
-  document.querySelectorAll(".nav").forEach((node) => {
+  $$(".rail-btn[data-view]").forEach((node) => {
     node.onclick = () => showView(node.dataset.view);
   });
-  document.querySelectorAll("[data-goto]").forEach((node) => {
+  $$("[data-goto]").forEach((node) => {
     node.onclick = () => showView(node.dataset.goto);
   });
+  $$(".menu-btn").forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      const menu = button.dataset.menu;
+      const open = button.getAttribute("aria-expanded") === "true";
+      closeMenus();
+      if (!open) buildMenu(menu);
+    };
+  });
+  $("#menus").onclick = (event) => { if (event.target.id === "menus") closeMenus(); };
+  $("#palette-btn").onclick = openPalette;
+
   $("#search").oninput = (event) => {
     state.filter = event.target.value.trim().toLowerCase();
-    if (state.view === "textures") renderTextures();
-    if (state.view === "models") renderModels();
+    renderModels();
   };
+  $("#search-tex").oninput = (event) => {
+    state.filter = event.target.value.trim().toLowerCase();
+    renderTextures();
+  };
+  $("#model-shots").onchange = renderModels;
+  $("#inspector-close").onclick = hideInspector;
+  $("#rail-console").onclick = () => toggleConsole();
+  $("#console-clear").onclick = () => { state.logs = []; renderLogs(); };
+  $("#console-close").onclick = () => toggleConsole(false);
+
   document.body.addEventListener("click", (event) => {
+    const close = event.target.closest("[data-close]");
+    if (close) { event.stopPropagation(); closeTab(close.dataset.close); return; }
+    const tab = event.target.closest(".tab");
+    if (tab) { activateTab(tab.dataset.tab); return; }
     const tile = event.target.closest(".tile");
-    if (!tile) return;
-    if (tile.dataset.kind === "texture") openTexture(tile.dataset.rel);
-    if (tile.dataset.kind === "model") openModel(tile.dataset.rel);
-    if (tile.dataset.kind === "mob") openMob(tile.dataset.slug);
+    if (tile) {
+      if (tile.dataset.kind === "model") openModel(tile.dataset.rel);
+      if (tile.dataset.kind === "texture") openTexture(tile.dataset.rel);
+      if (tile.dataset.kind === "mob") openMob(tile.dataset.slug);
+    }
   });
-  $("#detail-close").onclick = hideDetail;
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") hideDetail();
-  });
-  $("#mob-form").onsubmit = async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.target);
-    const textures = [...$("#mob-textures").selectedOptions].map((o) => o.value);
-    try {
-      const mob = await api("/api/mobs", {
-        method: "POST",
-        body: JSON.stringify({
-          name: form.get("name"),
-          model: form.get("model"),
-          textures,
-        }),
-      });
-      toast(`Fiche créée : ${mob.name}`);
-      await refresh();
-    } catch (error) { toast(error.message, "error"); }
-  };
+
+  $("#mob-form").onsubmit = createMob;
   $("#mod-form").onsubmit = buildMod;
   $("#bulk-start").onclick = startBulk;
+
+  // blender
+  $("#blend-list").onchange = (event) => selectBlend(event.target.value, { tab: true });
+  $("#blend-inspect").onclick = inspectBlend;
+  $("#blend-preview-btn").onclick = previewBlend;
+  $("#blend-translate").onclick = translateBlend;
+  $("#blend-file").onchange = (event) => uploadBlend(event.target.files[0]);
+  const drop = $("#blend-drop");
+  if (drop) {
+    drop.ondragover = (event) => { event.preventDefault(); drop.classList.add("over"); };
+    drop.ondragleave = () => drop.classList.remove("over");
+    drop.ondrop = (event) => {
+      event.preventDefault();
+      drop.classList.remove("over");
+      uploadBlend(event.dataTransfer.files[0]);
+    };
+  }
+
+  // palette
+  const input = $("#palette-input");
+  input.oninput = () => filterPalette(input.value);
+  input.onkeydown = (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      paletteIndex = Math.min(paletteIndex + 1, paletteItems.length - 1);
+      filterPalette(input.value);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      paletteIndex = Math.max(0, paletteIndex - 1);
+      filterPalette(input.value);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      runPalette(paletteIndex);
+    }
+  };
+  $("#palette-list").onclick = (event) => {
+    const item = event.target.closest("li[data-index]");
+    if (item) runPalette(Number(item.dataset.index));
+  };
+  $("#palette").onclick = (event) => { if (event.target.id === "palette") closePalette(); };
+
+  document.addEventListener("keydown", (event) => {
+    const meta = event.ctrlKey || event.metaKey;
+    if (meta && event.key.toLowerCase() === "k") { event.preventDefault(); openPalette(); return; }
+    if (meta && event.key.toLowerCase() === "j") { event.preventDefault(); toggleConsole(); return; }
+    if (meta && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      (state.view === "textures" ? $("#search-tex") : $("#search"))?.focus();
+      return;
+    }
+    if (meta && "123456".includes(event.key)) {
+      event.preventDefault();
+      const views = ["home", "models", "textures", "mobs", "blender", "settings"];
+      showView(views[Number(event.key) - 1]);
+      return;
+    }
+    if (event.key === "F5") { event.preventDefault(); refresh({ quiet: false }); return; }
+    if (event.key === "Escape") {
+      closeMenus();
+      closePalette();
+      hideInspector();
+    }
+  });
+
   wireSettings();
+  setInterval(() => {
+    const clock = $("#status-clock");
+    if (clock) clock.textContent = now();
+  }, 1000);
 }
 
 async function boot() {
+  applyUiSettings();
+  ensureViewTab("home", "Accueil");
+  state.tabs[0].closable = false;
   wire();
+  renderTabs();
+  showView("home");
   try {
     await refresh();
-    showView("home");
+    log("ok", `Projet ouvert : ${state.project.root}`);
+    status("prêt");
   } catch (error) {
     toast(error.message, "error");
   }

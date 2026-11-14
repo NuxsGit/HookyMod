@@ -317,6 +317,10 @@ class Project:
             self._cache[key] = bfres_mod.meshes_from_file(file)
         return self._cache[key]
 
+    def model_meshes(self, rel: str) -> list[MeshData]:
+        """Maillages d'un modèle (public : l'import .blend s'en sert pour l'échelle)."""
+        return self._model_meshes(rel)
+
     def preview_plan(self, rel: str, width: int = 640, height: int = 480,
                      face_limit: int | None = None) -> dict:
         """Chiffre ce que coûterait l'aperçu avant de le rendre."""

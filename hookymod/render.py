@@ -142,7 +142,7 @@ def render_png(meshes, width: int = 800, height: int = 600,
                cull: bool = True, max_faces: int | None = None,
                supersample: int = 1, frustum: bool = True) -> bytes:
     """Comme :func:`render_rgba`, mais renvoie directement les octets PNG."""
-    w, h, rgba = render_rgba(meshes, width, height, yaw, pitch, zoom,
+    w, h, rgba = render_rgba(meshes, width, height, yaw, pitch, zoom, cull,
                              max_faces, supersample=supersample, frustum=frustum)
     return png_bytes(w, h, rgba)
 
