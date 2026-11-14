@@ -351,6 +351,14 @@ def _coherence(positions: list[tuple[float, float, float]],
     return local / far if far > 0 else 1.0
 
 
+#: cohérence maximale d'un bloc d'indices pour être retenu (0 = parfait)
+COHERENCE_MAX = 0.33
+#: rapport arête médiane / diagonale au-delà duquel un bloc est refusé
+EDGE_RATIO_MAX = 0.15
+#: rapport arête / diagonale au-delà duquel un triangle est écarté
+OVERSIZED_RATIO = 0.15
+
+
 def _diagonal(positions) -> float:
     if not positions:
         return 0.0
@@ -385,7 +393,7 @@ def _edge_ratio(positions, triangles, diagonal: float) -> float:
 
 
 def _drop_oversized(positions, triangles, diagonal: float,
-                    limit: float = 0.15) -> list[tuple[int, int, int]]:
+                    limit: float = OVERSIZED_RATIO) -> list[tuple[int, int, int]]:
     """Retire les triangles dont une arête traverse tout le modèle.
 
     Ces triangles viennent d'indices appartenant à une autre forme (ou à un
@@ -728,10 +736,10 @@ def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
                 if len(triangles) < 4:
                     continue
                 score = _coherence(positions[index], triangles)
-                if score > 0.2:
+                if score > COHERENCE_MAX:
                     continue
                 diagonal = diagonals.get(index, 0.0)
-                if _edge_ratio(positions[index], triangles, diagonal) > 0.15:
+                if _edge_ratio(positions[index], triangles, diagonal) > EDGE_RATIO_MAX:
                     continue                    # arêtes qui traversent tout le modèle
                 cleaned = _drop_oversized(positions[index], triangles, diagonal)
                 if len(cleaned) < max(4, len(triangles) // 2):
@@ -739,7 +747,7 @@ def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
                 score = _coherence(positions[index], cleaned)
                 if best is None or score < best[0]:
                     best = (score, index, cleaned)
-            if best is not None and best[0] <= 0.2:
+            if best is not None and best[0] <= COHERENCE_MAX:
                 assigned.setdefault(best[1], []).append(best[2])
             else:
                 refused += 1

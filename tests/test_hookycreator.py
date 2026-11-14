@@ -222,3 +222,27 @@ class ServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class BulkClassificationTests(unittest.TestCase):
+    """Le classement décide de ce que la grille montre : il doit être explicite."""
+
+    def _classify(self, data: bytes, name: str) -> str:
+        from hookycreator.bulk import _classify
+
+        return _classify(data, name)
+
+    def test_texture_is_recognised_by_magic(self) -> None:
+        self.assertEqual(self._classify(b"BNTX" + bytes(8), "peu_importe.bin"), "texture")
+
+    def test_animation_names_are_never_models(self) -> None:
+        for name in ("Enemy_Spike.anim.bfres.zs", "Enemy_Stalfos_Animation.anim.bfres.zs",
+                     "Enemy_Stalfos_Animation.Skeleton.bfres.zs", "Dm_Zora_0000.camera.bfres.zs"):
+            self.assertEqual(self._classify(b"FRES" + bytes(64), name), "animation", name)
+
+    def test_bfres_without_animation_name_is_a_model(self) -> None:
+        self.assertEqual(self._classify(b"FRES" + bytes(64), "Enemy_Wolfos.bfres.zs"), "model")
+
+    def test_unknown_content_falls_back_on_extension(self) -> None:
+        self.assertEqual(self._classify(b"????", "Modele.bfres"), "model")
+        self.assertEqual(self._classify(b"????", "lecture.txt"), "other")
