@@ -12,8 +12,11 @@ le jeu attend (layeredFS).
 
 from __future__ import annotations
 
+import bisect
 import json
+import os
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -74,6 +77,99 @@ def _animation_key(name: str) -> str:
         if base.endswith(suffix):
             return base[: -len(suffix)]
     return base
+
+
+#: préfixes d'espace de noms qu'un dump ajoute devant les noms
+NAMESPACE_TOKENS = ("mt", "tex", "mtx", "texture")
+
+_TOKEN_SPLIT = __import__("re").compile(r"[_\-.\s]+")
+
+
+def _tokens(text: str) -> list[str]:
+    """Découpe un nom en jetons minuscules (``Mt_Armor_Alb.0`` → armor, alb)."""
+    return [token for token in _TOKEN_SPLIT.split(text.lower()) if token]
+
+
+def _texture_base(name: str) -> str:
+    """Nom d'une texture **sans** son espace de noms ni son suffixe de rôle.
+
+    ``Mt_Weapon_Sword_Biggoron_Alb`` → ``weapon_sword_biggoron`` : c'est la clé
+    qui doit rencontrer le nom du modèle, et elle se calcule une seule fois par
+    fichier au lieu d'être recalculée pour chaque modèle.
+    """
+    tokens = _tokens(_png_stem(name))
+    while tokens and tokens[0] in NAMESPACE_TOKENS:
+        tokens.pop(0)
+    if len(tokens) > 1 and texture_maps.classify(name) != "autre":
+        tokens.pop()                     # le dernier jeton est le rôle (Alb, Nrm…)
+    return "_".join(tokens)
+
+
+def _subsample(width: int, height: int, rgba: bytes, limit: int) -> tuple[int, int, bytes]:
+    """Réduit une image RGBA par pas entier, sans rééchantillonnage lourd.
+
+    On garde un pixel sur ``n`` : pour une vignette, c'est invisible, et c'est
+    mille fois moins coûteux qu'une moyenne en Python pur. Les rangées sont
+    copiées par tranches, donc le travail se fait côté C.
+    """
+    step = max(1, -(-max(width, height) // limit))     # division entière, au-dessus
+    new_w = max(1, width // step)
+    new_h = max(1, height // step)
+    if step == 1:
+        return width, height, rgba
+    stride = width * 4
+    rows: list[bytes] = []
+    for y in range(0, height, step):
+        row = rgba[y * stride:(y + 1) * stride]
+        if step > 1:
+            # un pixel sur n, quatre octets par pixel
+            row = b"".join(row[x * 4:x * 4 + 4] for x in range(0, width, step))
+        rows.append(row)
+    return new_w, new_h, b"".join(rows)
+
+
+class _PrefixIndex:
+    """Table « nom → assets » avec recherche par préfixe, sans parcours complet.
+
+    Deux dictionnaires suffisaient avant, mais chaque recherche parcourait
+    **toutes** les textures du projet : 600 modèles × 3 600 fichiers coûtaient
+    4 s pour afficher la vue Ensembles, et un vrai dump ne s'affichait plus.
+    Ici on paie une passe à l'ouverture, puis chaque modèle coûte un
+    ``bisect`` — et la table est triée une fois, donc les préfixes se trouvent
+    par intervalle et non par comparaison.
+    """
+
+    def __init__(self) -> None:
+        self.exact: dict[str, list] = {}
+        self.keys: list[str] = []
+        self._sorted = False
+
+    def add(self, key: str, asset) -> None:
+        if not key:
+            return
+        self.exact.setdefault(key, []).append(asset)
+        self._sorted = False
+
+    def build(self) -> None:
+        self.keys = sorted(self.exact)
+        self._sorted = True
+
+    def get(self, key: str) -> list:
+        return self.exact.get(key, [])
+
+    def starting_with(self, prefix: str) -> list:
+        """Tous les assets dont la clé commence par ``prefix`` **suivi** d'un ``_``."""
+        if not self._sorted:
+            self.build()
+        if not prefix:
+            return []
+        start = prefix + "_"
+        index = bisect.bisect_left(self.keys, start)
+        found: list = []
+        while index < len(self.keys) and self.keys[index].startswith(start):
+            found.extend(self.exact[self.keys[index]])
+            index += 1
+        return found
 
 
 def _png_stem(stem: str) -> str:
@@ -174,7 +270,22 @@ class Project:
         self._reports: dict[str, dict] = {}
         self._texture_index: dict[str, list] = {}
         self._map_index: dict[str, dict] = {}
-        self._animation_index: list | None = None
+        self._animation_cache: dict[str, list] = {}
+        # index « nom → assets » construits à l'ouverture : sans eux, chaque
+        # modèle relisait tout le projet (4 s pour 600 modèles, des minutes
+        # sur un vrai dump)
+        self._by_kind: dict[str, list[Asset]] = {}
+        self._texture_names = _PrefixIndex()
+        self._animation_names = _PrefixIndex()
+        self._ensembles: list[dict] | None = None
+        # état sérialisé : l'interface le demande à chaque chargement, et
+        # re-sérialiser 40 000 assets à chaque fois ne sert à rien
+        self._generation = 0
+        self._state_json: tuple[tuple, bytes] | None = None
+        self._state_lock = __import__("threading").Lock()
+        self._edited_cache: tuple[float, list[str]] | None = None
+        self._json_cache: dict[str, tuple[tuple, bytes]] = {}
+        self._stats_cache: tuple[float, dict] | None = None
         # géométrie aplatie pour l'affichage : reconstruite à chaque aperçu,
         # elle coûtait ~1 s sur un modèle de 170 000 faces
         self._render_data: dict[str, tuple] = {}
@@ -205,6 +316,7 @@ class Project:
         self._reports.clear()
         self._render_data.clear()
         self._samplers.clear()
+        self.bump()
         return self.settings.as_json()
 
     # ------------------------------------------------------------------ fichiers
@@ -296,44 +408,76 @@ class Project:
 
     # ------------------------------------------------------------------ scan
     def scan(self) -> dict:
+        """Parcourt le projet **une fois** et indexe ce qui est affichable.
+
+        ``rglob`` construisait un objet ``Path`` par fichier puis rappelait
+        ``is_file()`` et ``stat()`` : trois appels système par entrée. Un dump
+        complet en contient des centaines de milliers. ``scandir`` donne le nom,
+        le type et la taille d'un coup, et le tri final (une seule fois) remplace
+        le tri d'avance. Sur un dossier de 200 000 entrées, c'est l'ouverture de
+        l'application qui passe de plusieurs secondes à un claquement de doigts.
+        """
         started = cache_mod.now_iso()
         started_clock = __import__("time").perf_counter()
         assets: list[Asset] = []
         truncated = False
-        for path in sorted(self.root.rglob("*")):
-            if len(assets) >= MAX_SCAN_FILES:
-                truncated = True
-                break
-            if not path.is_file():
+        root = str(self.root)
+        stack = [(root, "")]
+        while stack and not truncated:
+            folder, prefix = stack.pop()
+            try:
+                entries = list(os.scandir(folder))
+            except OSError:
                 continue
-            rel = path.relative_to(self.root).as_posix()
-            if rel.startswith(("hookycreator_work/", "mods/")):
-                continue
-            low = path.name.lower()
-            if ".anim." in low:
-                # Les animations sont des BFRES sans maillage : les afficher
-                # comme « modèle » promet une géométrie qui n'existe pas.
-                kind = "animation"
-            elif low.endswith(MODEL_SUFFIXES):
-                kind = "model"
-            elif low.endswith(TEXTURE_SUFFIXES):
-                kind = "texture"
-            elif low.endswith((".byml", ".bgyml", ".bcett.byml")):
-                kind = "bytecode"
-            elif low.endswith((".pack.zs", ".pack", ".sarc", ".szs", ".sarc.zs")):
-                kind = "archive"
-            else:
-                continue
-            stat = path.stat()
-            assets.append(Asset(rel=rel, kind=kind, size=stat.st_size,
-                                compressed=low.endswith(".zs"),
-                                mtime=int(stat.st_mtime),
-                                # un `.bntx` est une carte précise (albédo,
-                                # normale, rugosité…) : le dire une fois pour
-                                # toutes évite de le redécouvrir à chaque écran
-                                role=texture_maps.classify(path.name)
-                                if kind == "texture" else ""))
+            for entry in entries:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        name = entry.name
+                        # dossier de travail et mods assemblés : pas des assets
+                        if not prefix and name in ("hookycreator_work", "mods"):
+                            continue
+                        stack.append((entry.path, f"{prefix}{name}/"))
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                name = entry.name
+                low = name.lower()
+                if ".anim." in low:
+                    # Les animations sont des BFRES sans maillage : les afficher
+                    # comme « modèle » promet une géométrie qui n'existe pas.
+                    kind = "animation"
+                elif low.endswith(MODEL_SUFFIXES):
+                    kind = "model"
+                elif low.endswith(TEXTURE_SUFFIXES):
+                    kind = "texture"
+                elif low.endswith((".byml", ".bgyml", ".bcett.byml")):
+                    kind = "bytecode"
+                elif low.endswith((".pack.zs", ".pack", ".sarc", ".szs", ".sarc.zs")):
+                    kind = "archive"
+                else:
+                    continue
+                try:
+                    stat = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                assets.append(Asset(rel=f"{prefix}{name}", kind=kind,
+                                    size=stat.st_size,
+                                    compressed=low.endswith(".zs"),
+                                    mtime=int(stat.st_mtime),
+                                    # un `.bntx` est une carte précise (albédo,
+                                    # normale, rugosité…) : le dire une fois pour
+                                    # toutes évite de le redécouvrir à chaque écran
+                                    role=texture_maps.classify(name)
+                                    if kind == "texture" else ""))
+                if len(assets) >= MAX_SCAN_FILES:
+                    truncated = True
+                    break
+        assets.sort(key=lambda asset: asset.rel)
         self.assets = assets
+        self._build_indexes()
+        self.bump()
         self.scanned_at = started
         self.scan_seconds = round(__import__("time").perf_counter() - started_clock, 3)
         return {
@@ -350,6 +494,43 @@ class Project:
             "scan_seconds": self.scan_seconds,
         }
 
+    # ------------------------------------------------------------------ index
+    def _build_indexes(self) -> None:
+        """Une passe sur les assets, puis toutes les recherches sont indexées.
+
+        C'est le correctif de lenteur principal : les vignettes et les fiches
+        cherchaient les textures d'un modèle en reparcourant la liste complète
+        des fichiers. Le coût était donc **modèles × fichiers** (4 s pour 600
+        modèles et 3 600 fichiers, soit des minutes sur un vrai dump). Ici on
+        paie une passe une fois, et chaque recherche devient un ``bisect``.
+        """
+        by_kind: dict[str, list[Asset]] = {}
+        for asset in self.assets:
+            by_kind.setdefault(asset.kind, []).append(asset)
+        self._by_kind = by_kind
+        textures = _PrefixIndex()
+        animations = _PrefixIndex()
+        for asset in by_kind.get("texture", ()):
+            textures.add(_texture_base(asset.stem), asset)
+        for asset in by_kind.get("animation", ()):
+            animations.add(_animation_key(Path(asset.rel).name), asset)
+        textures.build()
+        animations.build()
+        self._texture_names = textures
+        self._animation_names = animations
+        self._texture_index.clear()
+        self._map_index.clear()
+        self._animation_cache.clear()
+        self._ensembles = None
+
+    def by_kind(self, kind: str) -> list[Asset]:
+        found = self._by_kind.get(kind)
+        if found is None:
+            # avant le premier scan (tests, import partiel) : liste vide plutôt
+            # qu'une exception, l'interface appelle cette méthode très tôt
+            return []
+        return found
+
     def shown_path(self, path: Path) -> str:
         """Chemin lisible : relatif au projet si possible, absolu sinon.
 
@@ -361,9 +542,6 @@ class Project:
             return path.relative_to(self.root).as_posix()
         except ValueError:
             return str(path)
-
-    def by_kind(self, kind: str) -> list[Asset]:
-        return [a for a in self.assets if a.kind == kind]
 
     # ------------------------------------------------------------------ cache
     def _version(self, rel: str) -> tuple[int, int]:
@@ -498,7 +676,19 @@ class Project:
         return {"entries": files, "bytes": size, "folder": str(self.geo_folder),
                 "hits": self.geo_hits, "misses": self.geo_misses}
 
-    def cache_stats(self) -> dict:
+    def cache_stats(self, max_age: float = 0.0) -> dict:
+        """Statistiques de cache ; ``max_age`` évite de relire le disque sans arrêt.
+
+        L'interface les demande avec chaque état : sans mémo, chaque réponse
+        relisait le dossier de géométrie (des milliers de fichiers).
+        """
+        if max_age and self._stats_cache and time.monotonic() - self._stats_cache[0] < max_age:
+            return self._stats_cache[1]
+        stats = self._cache_stats()
+        self._stats_cache = (time.monotonic(), stats)
+        return stats
+
+    def _cache_stats(self) -> dict:
         meshes = [k for k in self._cache if k[0] == "meshes"]
         return {
             "thumbs": self.thumbs.stats(),
@@ -556,8 +746,17 @@ class Project:
         return {"rel": rel, "version": file.version_label, "orin": file.orin,
                 "count": len(entries), "textures": entries}
 
-    def texture_png(self, rel: str, index: int = 0, mip: int = 0) -> bytes:
-        key = cache_mod.digest(("texture", rel, self._version(rel), index, mip))
+    def texture_png(self, rel: str, index: int = 0, mip: int = 0,
+                    max_size: int | None = None) -> bytes:
+        """PNG d'une texture, éventuellement réduit pour une vignette.
+
+        Une texture de 1024² pèse plusieurs centaines de kilo-octets : la
+        grille en affiche 48 dans des tuiles de 160 px. Servir la taille pleine
+        coûtait des dizaines de mégaoctets et autant de décodages dans le
+        navigateur, pour des pixels invisibles.
+        """
+        limit = None if not max_size else max(16, min(2048, int(max_size)))
+        key = cache_mod.digest(("texture", rel, self._version(rel), index, mip, limit))
         cached = self.thumbs.get(key)
         if cached:
             return cached
@@ -565,7 +764,15 @@ class Project:
         texture = file.textures[index] if 0 <= index < len(file.textures) else None
         if texture is None:
             raise ProjectError(f"Texture {index} absente de {rel}.")
-        return self.thumbs.put(key, texture.to_png(mip))
+        if not limit:
+            return self.thumbs.put(key, texture.to_png(mip))
+        # le mip le plus proche d'abord (gratuit), puis réduction par pas
+        width, height, rgba = texture.decode(mip, max_size=limit)
+        if max(width, height) > limit:
+            width, height, rgba = _subsample(width, height, rgba, limit)
+        from hookymod.util import png_bytes
+
+        return self.thumbs.put(key, png_bytes(width, height, rgba))
 
     def import_texture(self, rel: str, index: int, image: bytes) -> dict:
         """Remplace les pixels d'une texture (même format, mêmes mips)."""
@@ -594,6 +801,7 @@ class Project:
                 raise ProjectError(str(exc)) from exc
         target.write_bytes(payload)
         self._cache.pop(("png", rel, index), None)
+        self.bump()
         return {"rel": rel, "texture": name, "wrote": self.shown_path(target),
                 "size": len(payload), "mips": getattr(report, "mip_count", None),
                 "format": self.texture_info(rel)["textures"][index]["format"]}
@@ -644,6 +852,8 @@ class Project:
         ``*.anim.bfres``. On les réunit ici sans rien décoder (le nom suffit),
         pour que la liste s'affiche instantanément même sur un gros dump.
         """
+        if self._ensembles is not None:
+            return self._ensembles
         rows = []
         for asset in self.by_kind("model"):
             textures = self.texture_assets_for(asset.rel)
@@ -658,6 +868,7 @@ class Project:
                 "textured": bool(textures),
                 "complete": bool(textures and animations),
             })
+        self._ensembles = rows
         return rows
 
     def _version_label(self, rel: str) -> str:
@@ -777,6 +988,43 @@ class Project:
         self._render_data[key] = (size, mtime, data)
         return data
 
+    def _ranked_names(self, index: "_PrefixIndex", rel: str):
+        """Assets qui portent le nom du modèle, du plus sûr au plus large.
+
+        Trois rangs, comme avant : le nom complet (``Weapon_Sword_Biggoron``),
+        la famille (``Weapon_Sword``), puis le préfixe (``Weapon``). Le premier
+        rang non vide gagne — jamais de mélange entre deux rangs.
+
+        Générateur : un appelant qui trouve son compte au rang 0 ne paie pas les
+        deux autres. Sur un projet de 3 600 fichiers, construire le rang « préfixe »
+        (qui contient presque tout) coûtait à lui seul une seconde.
+        """
+        stem = Path(rel).name.split(".")[0].lower()
+        parts = [part for part in _tokens(stem) if part]
+        family = "_".join(parts[:2]) if len(parts) > 1 else stem
+        for key in (stem, family, parts[0] if parts else ""):
+            if not key:
+                continue
+            found: list = []
+            seen: set[str] = set()
+
+            def take(items) -> None:
+                for item in items:
+                    if item.rel not in seen:
+                        seen.add(item.rel)
+                        found.append(item)
+
+            # la texture porte le nom du modèle…
+            take(index.get(key))
+            # …ou le prolonge (Modèle_Broken → Modèle)…
+            take(index.starting_with(key))
+            # …ou le modèle est une variante d'un nom plus court
+            tokens = key.split("_")
+            for depth in range(2, len(tokens)):
+                take(index.get("_".join(tokens[:depth])))
+            if found:
+                yield found
+
     def texture_assets_for(self, rel: str) -> list:
         """Textures d'albédo les plus proches d'un modèle, de la plus sûre à la moins sûre.
 
@@ -788,22 +1036,12 @@ class Project:
         entry = self._texture_index.get(rel)
         if entry is not None:
             return entry
-        stem = Path(rel).name.split(".")[0].lower()
-        parts = stem.split("_")
-        family = "_".join(parts[:2]) if len(parts) > 1 else stem
-        ranked: dict[int, list] = {0: [], 1: [], 2: []}
-        for asset in self.by_kind("texture"):
-            low = asset.rel.lower()
-            name = Path(asset.rel).name.lower()
-            if not any(tag in name for tag in ("_alb", "albedo", "basecolor", "_dif")):
-                continue
-            if stem and stem in low:
-                ranked[0].append(asset)
-            elif family and family in low:
-                ranked[1].append(asset)
-            elif parts and parts[0] and parts[0] in low:
-                ranked[2].append(asset)
-        found = next((ranked[rank] for rank in (0, 1, 2) if ranked[rank]), [])
+        found: list = []
+        for bucket in self._ranked_names(self._texture_names, rel):
+            albedos = [asset for asset in bucket if asset.role == "albedo"]
+            if albedos:
+                found = albedos
+                break
         self._texture_index[rel] = found
         return found
 
@@ -817,15 +1055,12 @@ class Project:
         pour ``Animal_Dog``) : c'est le seul appariement possible sans ouvrir
         chaque fichier, et il reste instantané.
         """
-        if self._animation_index is None:
-            self._animation_index = [
-                (_animation_key(Path(asset.rel).name), asset)
-                for asset in self.by_kind("animation")]
-        base = _animation_key(Path(rel).name)
-        found = []
-        for key, asset in self._animation_index:
-            if key == base or base.startswith(key + "_") or key.startswith(base + "_"):
-                found.append(asset)
+        cached = self._animation_cache.get(rel)
+        if cached is not None:
+            return cached
+        found = next(iter(self._ranked_names(self._animation_names, rel)), [])
+        found = sorted(found, key=lambda asset: asset.rel)
+        self._animation_cache[rel] = found
         return found
 
     def texture_maps_for(self, rel: str) -> dict[str, list]:
@@ -839,19 +1074,7 @@ class Project:
         cached = self._map_index.get(rel)
         if cached is not None:
             return cached
-        stem = Path(rel).name.split(".")[0].lower()
-        parts = stem.split("_")
-        family = "_".join(parts[:2]) if len(parts) > 1 else stem
-        ranks: dict[int, list] = {0: [], 1: [], 2: []}
-        for asset in self.by_kind("texture"):
-            low = Path(asset.rel).name.lower()
-            if stem and stem in low:
-                ranks[0].append(asset)
-            elif family and family in low:
-                ranks[1].append(asset)
-            elif parts and parts[0] and parts[0] in low:
-                ranks[2].append(asset)
-        chosen = next((ranks[rank] for rank in (0, 1, 2) if ranks[rank]), [])
+        chosen = next(iter(self._ranked_names(self._texture_names, rel)), [])
         buckets: dict[str, list] = {}
         for asset in chosen:
             role = asset.role or texture_maps.classify(asset.rel)
@@ -1166,6 +1389,7 @@ class Project:
         mobs.append(entry)
         self._mobs_file().write_text(json.dumps(mobs, indent=2, ensure_ascii=False),
                                      encoding="utf-8")
+        self.bump()
         return entry
 
     # ------------------------------------------------------------------ export
@@ -1317,6 +1541,42 @@ class Project:
                 "files": len(written), "mobs": manifest["mobs"]}
 
     # ------------------------------------------------------------------ état
+    def edited_files(self, max_age: float = 2.0) -> list[str]:
+        """Assets déjà modifiés dans le dossier de travail (liste courte, mémorisée)."""
+        if self._edited_cache and time.monotonic() - self._edited_cache[0] < max_age:
+            return self._edited_cache[1]
+        folder = self.work / "assets"
+        found = sorted(str(path.relative_to(folder))
+                       for path in folder.rglob("*") if path.is_file()) \
+            if folder.is_dir() else []
+        self._edited_cache = (time.monotonic(), found)
+        return found
+
+    def bump(self) -> None:
+        """Invalide ce qui dépend du contenu du projet (après une écriture)."""
+        self._generation += 1
+        self._state_json = None
+        self._edited_cache = None
+        self._ensembles = None
+        self._json_cache.clear()
+
+    def cached_json(self, name: str, builder) -> bytes:
+        """JSON d'une vue, sérialisé une fois par version du projet.
+
+        La liste des ensembles ou des textures ne change qu'après un scan, un
+        import ou un réglage : la reconstruire à chaque changement d'onglet
+        revenait à payer le même travail en boucle.
+        """
+        key = (self._generation, name)
+        entry = self._json_cache.get(name)
+        if entry and entry[0] == key:
+            return entry[1]
+        body = json.dumps(builder(), ensure_ascii=False).encode("utf-8")
+        self._json_cache[name] = (key, body)
+        if len(self._json_cache) > 8:
+            self._json_cache = {name: (key, body)}
+        return body
+
     def state(self) -> dict:
         return {
             "root": str(self.root),
@@ -1326,14 +1586,26 @@ class Project:
             "dicts": len(self._load_dicts()),
             "zstd": zs.zstd_available(),
             "settings": self.settings.as_json(),
-            "cache": self.cache_stats(),
+            "cache": self.cache_stats(max_age=3.0),
             "scanned_at": self.scanned_at,
             "scan_seconds": self.scan_seconds,
-            "edited": sorted(
-                str(p.relative_to(self.work / "assets"))
-                for p in (self.work / "assets").rglob("*") if p.is_file()
-            ) if (self.work / "assets").is_dir() else [],
+            "edited": self.edited_files(),
         }
+
+    def state_payload(self) -> bytes:
+        """``{"project": ...}`` en JSON, sérialisé une fois par version du projet."""
+        key = (self._generation, json.dumps(self.settings.as_json(), sort_keys=True))
+        cached = self._state_json
+        if cached and cached[0] == key:
+            return cached[1]
+        with self._state_lock:
+            cached = self._state_json
+            if cached and cached[0] == key:
+                return cached[1]
+            body = json.dumps({"project": self.state()},
+                              ensure_ascii=False).encode("utf-8")
+            self._state_json = (key, body)
+            return body
 
 
 def open_project(root, work=None) -> Project:

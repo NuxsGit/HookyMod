@@ -268,8 +268,11 @@ function modelThumb(asset) {
     + (asset.mtime ? `&v=${asset.mtime}` : "");
 }
 
-function textureThumb(asset) {
+// 320 px : la tuile en fait 160, et une texture de 1024² pèse 20 fois plus
+// lourd pour des pixels que l'écran ne montre jamais
+function textureThumb(asset, size = 320) {
   return `/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=0`
+    + `&max=${size}`
     + (asset.mtime ? `&v=${asset.mtime}` : "");
 }
 
@@ -410,6 +413,19 @@ async function renderModels() {
   updateSelectionBar();
 }
 
+/* Une frappe = un rendu différé : sans ça, chaque lettre relançait la
+   construction de 48 tuiles et le navigateur passait son temps à repeindre. */
+function onInputDebounced(selector, handler, delay = 120) {
+  const node = $(selector);
+  if (!node) return;
+  let timer = 0;
+  node.oninput = (event) => {
+    const value = event.target.value;
+    clearTimeout(timer);
+    timer = setTimeout(() => handler(value), delay);
+  };
+}
+
 function matches(asset) {
   return !state.filter || asset.rel.toLowerCase().includes(state.filter);
 }
@@ -451,7 +467,8 @@ async function openModel(rel, options = {}) {
       <h4>Cartes du modèle (${info.textures.length})</h4>
       <div class="strip">${info.textures.map((t) => `
         <button class="strip-item" data-open-texture="${esc(t.rel)}" title="${esc(t.rel)}">
-          <img loading="lazy" alt="" src="/api/texture/png?path=${encodeURIComponent(t.rel)}&index=0${t.mtime ? `&v=${t.mtime}` : ""}">
+          <img loading="lazy" decoding="async" alt=""
+               src="/api/texture/png?path=${encodeURIComponent(t.rel)}&index=0&max=192${t.mtime ? `&v=${t.mtime}` : ""}">
           <span>${esc(t.name)}</span>
           <span class="strip-role">${ROLE_BADGE(t.role)}</span>
         </button>`).join("")}</div>
@@ -1693,16 +1710,18 @@ function wire() {
   $("#menus").onclick = (event) => { if (event.target.id === "menus") closeMenus(); };
   $("#palette-btn").onclick = openPalette;
 
-  $("#search").oninput = (event) => {
-    state.filter = event.target.value.trim().toLowerCase();
+  // taper dans la recherche ne doit pas reconstruire la grille à chaque touche :
+  // sur un dump de 12 000 fichiers, l'affichage attend 120 ms de calme
+  onInputDebounced("#search", (value) => {
+    state.filter = value.trim().toLowerCase();
     state.shown.models = 48;
     renderModels();
-  };
-  $("#search-tex").oninput = (event) => {
-    state.filter = event.target.value.trim().toLowerCase();
+  });
+  onInputDebounced("#search-tex", (value) => {
+    state.filter = value.trim().toLowerCase();
     state.shown.textures = 48;
     renderTextures();
-  };
+  });
   $("#model-shots").onchange = renderModels;
   const ensMore = $("#ensemble-more-btn");
   if (ensMore) ensMore.onclick = () => {

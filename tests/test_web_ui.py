@@ -96,6 +96,19 @@ class WebContractTests(unittest.TestCase):
             self.assertIn(route, self.js)
         self.assertIn("/api/blend/upload", self.js)
 
+    def test_recherche_est_differee(self) -> None:
+        """Taper ne doit pas reconstruire la grille à chaque touche."""
+        self.assertIn("function onInputDebounced", self.js)
+        self.assertIn('onInputDebounced("#search"', self.js)
+        self.assertIn('onInputDebounced("#search-tex"', self.js)
+        # l'ancien câblage direct relançait un rendu par frappe
+        self.assertNotIn('$("#search-tex").oninput = (event) => {', self.js)
+
+    def test_vignettes_de_texture_demandent_une_taille_reduite(self) -> None:
+        """Une texture de 1024 px ne part pas entière pour une tuile de 160 px."""
+        self.assertIn("&max=", self.js)
+        self.assertIn("max=192", self.js)
+
     @unittest.skipUnless(shutil.which("node"), "node absent")
     def test_javascript_parses(self) -> None:
         result = subprocess.run(["node", "--check", str(WEB / "app.js")],

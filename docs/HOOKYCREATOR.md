@@ -439,3 +439,83 @@ de cartes pour lui. Gardez `Roughness ≈ 0.5`, `Metallic = 0`.
 Tests : `tests/test_texture_maps.py` (20 cas) — classification par suffixe,
 `Mt_` non métallique, composition de la MR, export multi-cartes, câblage glTF
 et MTL.
+
+## Le site était devenu lent : ce qui coûtait, et ce que ça coûte maintenant
+
+Trois causes, mesurées avant de toucher au code. Aucune n'était « le navigateur
+est lent » : c'étaient des parcours complets de la liste des fichiers, répétés
+pour chaque modèle, et un état de projet renvoyé en clair à chaque chargement.
+
+| Ce qui se passait | Avant | Après |
+| --- | --- | --- |
+| Ouvrir la vue **Ensembles** (600 modèles, 3 600 fichiers) | **4,27 s** | **12 ms** |
+| La même chose, deuxième affichage | 4,27 s | 0 ms (mémorisé) |
+| Chercher les cartes de 600 modèles | 3,0 s | 5 ms |
+| `GET /api/state` (même projet) | 615 Ko, 20 ms | **21 Ko** compressé, 5 ms |
+| `GET /api/state` (12 000 assets) | 2,1 Mo | **71 Ko**, 16 ms |
+| Scan de 18 000 fichiers | — | **178 ms** |
+| Afficher une vignette de texture (1024²) | 18,5 Ko | **1,2 Ko** (256 px) |
+| Recherche : une frappe | 1 rendu de grille | 1 rendu après 120 ms de calme |
+
+### 1. Chaque modèle relisait tout le projet
+
+`texture_assets_for`, `texture_maps_for` et `animations_for` parcouraient la
+liste **complète** des assets à chaque appel : le coût était
+`modèles × fichiers`. À 600 modèles et 3 600 fichiers, 4 secondes pour afficher
+une liste ; sur un vrai dump, la vue ne s'affichait plus.
+
+Désormais `scan()` construit une fois pour toutes :
+
+* `by_kind` — les assets déjà triés par famille (plus de `by_kind()` linéaire) ;
+* un index **nom → assets** pour les textures, dont la clé est le nom sans son
+  espace de noms ni son suffixe de rôle (`Mt_Weapon_Sword_Biggoron_Alb` →
+  `weapon_sword_biggoron`) ;
+* un index équivalent pour les animations (`Animal_Cat_Animation` →
+  `animal_cat`), avec recherche par intervalle trié (`bisect`) pour les
+  variantes préfixées.
+
+Le classement par précision ne change pas (nom exact, puis famille, puis
+préfixe) — il est simplement indexé, et **paresseux** : un modèle qui trouve ses
+textures au rang 0 ne paie pas les deux rangs suivants.
+
+### 2. L'état du projet était reconstruit à chaque demande
+
+`state()` re-sérialisait tous les assets, relisait le dossier de géométrie pour
+ses statistiques, et reparcourait les fichiers modifiés. Trois correctifs :
+
+* le JSON est sérialisé **une fois par version** du projet (`state_payload`) ;
+* les statistiques de cache et la liste des fichiers modifiés sont mémorisées
+  quelques secondes (`bump()` invalide après chaque écriture) ;
+* les réponses JSON partent en **gzip** quand le navigateur l'accepte : 2,1 Mo
+  d'état deviennent 71 Ko, soit un rapport de 30.
+
+Les listes de la vue (textures, modèles, ensembles) passent par le même cache
+`cached_json`, invalidé au scan, à l'import et au changement de réglages.
+
+### 3. Les vignettes servaient la taille pleine
+
+Une texture de 1024² dans une tuile de 160 px, c'est 20 fois trop de pixels à
+transmettre **et** à décoder côté navigateur. `GET /api/texture/png` accepte
+`max=` : les tuiles demandent 320 px (192 px dans la fiche du modèle), le mip le
+plus proche sert quand il existe, sinon l'image est réduite par pas entier — une
+copie de pixels, pas un rééchantillonnage coûteux.
+
+La vignette pleine taille reste disponible (éditeur de texture, export).
+
+### Ce qui a aussi été fait, plus discrètement
+
+* `scan()` utilise `os.scandir` : un appel système par entrée au lieu de trois
+  (`Path`, `is_file`, `stat`), et le tri se fait une fois à la fin ;
+* les fichiers statiques (`app.js`, `style.css`) portent un **ETag** : un
+  rechargement coûte un 304 de quelques octets, pas 78 Ko ;
+* `find_blender()` ne relit plus le `PATH` et « Program Files » à chaque
+  affichage de la vue Ensembles (mémo de 30 s) ;
+* taper dans la recherche attend 120 ms de calme avant de reconstruire la grille.
+
+### Comment vérifier soi-même
+
+`tests/test_performance.py` (17 cas) mesure ce qui doit le rester : liste des
+ensembles, recherche des cartes de chaque modèle, mémoïsation de l'état, gzip
+négocié par-dessus HTTP, ETag des fichiers statiques, vignettes réduites. Les
+bornes sont larges (facteur ~10) : le but est de détecter un retour au coût
+`modèles × fichiers`, pas de chronométrer la machine.
