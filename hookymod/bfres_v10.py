@@ -351,18 +351,88 @@ def _coherence(positions: list[tuple[float, float, float]],
     return local / far if far > 0 else 1.0
 
 
+def _diagonal(positions) -> float:
+    if not positions:
+        return 0.0
+    xs = [p[0] for p in positions]
+    ys = [p[1] for p in positions]
+    zs = [p[2] for p in positions]
+    return math.dist((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+
+
+def _edge_ratio(positions, triangles, diagonal: float) -> float:
+    """Longueur médiane des arêtes rapportée à la diagonale du modèle.
+
+    Un triangle juste est petit devant le modèle ; des arêtes qui traversent
+    tout le volume trahissent des indices appartenant à une autre forme ou à
+    un autre niveau de détail (rendu en « spaghettis »).
+    """
+    if not positions or not triangles or diagonal <= 0:
+        return 1.0
+    step = max(1, len(triangles) // 200)
+    lengths = []
+    for index in range(0, len(triangles), step):
+        a, b, c = triangles[index]
+        try:
+            lengths.append(math.dist(positions[a], positions[b]))
+            lengths.append(math.dist(positions[b], positions[c]))
+        except IndexError:
+            return 1.0
+    if not lengths:
+        return 1.0
+    lengths.sort()
+    return lengths[len(lengths) // 2] / diagonal
+
+
+def _drop_oversized(positions, triangles, diagonal: float,
+                    limit: float = 0.15) -> list[tuple[int, int, int]]:
+    """Retire les triangles dont une arête traverse tout le modèle.
+
+    Ces triangles viennent d'indices appartenant à une autre forme (ou à un
+    autre tampon) : ils dessinent de longues pointes au lieu d'une surface.
+    On garde les triangles dont la plus grande arête reste sous 15 % de la
+    diagonale du modèle.
+    """
+    if not positions or diagonal <= 0:
+        return triangles
+    threshold = diagonal * limit
+    kept: list[tuple[int, int, int]] = []
+    for a, b, c in triangles:
+        try:
+            pa, pb, pc = positions[a], positions[b], positions[c]
+        except IndexError:
+            continue
+        if (math.dist(pa, pb) > threshold or math.dist(pb, pc) > threshold
+                or math.dist(pa, pc) > threshold):
+            continue
+        kept.append((a, b, c))
+    return kept
+
+
 def _decode_positions(data: bytes, start: int, count: int, stride: int,
                       offset: int = 0, fmt: int = 0x1505):
-    """Positions d'un tampon, selon le format déclaré par la table d'attributs."""
+    """Positions d'un tampon, selon le format déclaré par la table d'attributs.
+
+    Le compte demandé vient de l'écart entre tampons : quand celui-ci est
+    anormal (plusieurs mégaoctets), le tampon déborde sur autre chose. On
+    s'arrête donc au premier enregistrement incohérent, l'échelle de référence
+    étant prise sur le début du tampon (les 128 premiers sommets).
+    """
     unpack = "<3f" if fmt == 0x1805 else "<3e"
-    positions = []
+    positions: list[tuple[float, float, float]] = []
+    reference = 0.0
     for index in range(count):
         try:
             x, y, z = struct.unpack_from(unpack, data, start + index * stride + offset)
         except struct.error:
-            return []
+            break
         if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
-            return []
+            break
+        scale = max(abs(x), abs(y), abs(z))
+        if index < 128:
+            reference = max(reference, scale)
+        elif scale > max(reference * 50.0, 1e-4):
+            break
         positions.append((x, y, z))
     return positions
 
@@ -643,6 +713,7 @@ def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
         positions[index] = _decode_positions_of(data, shape) if shape.vertex_count >= 3 else []
 
     # un sous-maillage par bloc aligné : on l'attribue à la forme qui « colle »
+    diagonals = {index: _diagonal(values) for index, values in positions.items()}
     assigned: dict[int, list[list[tuple[int, int, int]]]] = {}
     refused = 0
     if first_vertex > base:
@@ -657,9 +728,18 @@ def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
                 if len(triangles) < 4:
                     continue
                 score = _coherence(positions[index], triangles)
+                if score > 0.2:
+                    continue
+                diagonal = diagonals.get(index, 0.0)
+                if _edge_ratio(positions[index], triangles, diagonal) > 0.15:
+                    continue                    # arêtes qui traversent tout le modèle
+                cleaned = _drop_oversized(positions[index], triangles, diagonal)
+                if len(cleaned) < max(4, len(triangles) // 2):
+                    continue
+                score = _coherence(positions[index], cleaned)
                 if best is None or score < best[0]:
-                    best = (score, index, triangles)
-            if best is not None and best[0] <= 0.35:
+                    best = (score, index, cleaned)
+            if best is not None and best[0] <= 0.2:
                 assigned.setdefault(best[1], []).append(best[2])
             else:
                 refused += 1

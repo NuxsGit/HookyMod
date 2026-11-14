@@ -118,3 +118,27 @@ Chaque bloc est attribué à la forme dont les positions donnent la meilleure
    triangles par bloc) : c'est ce qui distingue une vraie structure d'une
    coïncidence ;
 5. écrire le test synthétique d'abord, puis brancher le lecteur.
+
+## État des contrôles visuels (11/11)
+
+| modèle | formes | sous-maillages | faces | verdict |
+| --- | --- | --- | --- | --- |
+| papillon (référence) | 1 | 6 blocs de LOD | ≥ 682 | conforme |
+| `Enemy_TorchSlug` | 5 | 15 | 4 393 | **conforme** : limace + coquille + pédoncule oculaire |
+| `Enemy_Wolfos` | 8 | 152 | 63 607 | **incomplet** : morceaux justes mais espacés, surface trouée |
+
+Trois garde-fous ont été ajoutés après avoir vu le rendu Wolfos partir en
+« spaghettis » (arêtes traversant tout le modèle) :
+
+1. `_decode_positions` s'arrête au premier sommet aberrant — l'écart entre
+   tampons donnait 274 441 sommets pour une forme qui en compte 944 ;
+2. un bloc d'indices est refusé si ses arêtes médianes dépassent 15 % de la
+   diagonale de la forme ;
+3. les triangles dont une arête traverse le modèle sont retirés à l'unité, et
+   un bloc qui en perd la moitié est rejeté.
+
+Reste à faire sur Wolfos : les morceaux acceptés sont à la bonne échelle mais
+la surface n'est pas continue. Hypothèses à trancher à la prochaine passe —
+soit des blocs d'indices valides encore refusés, soit des formes en espace
+local qu'il faut replacer avec le squelette (`FSKL`, lu mais pas encore
+exploité).
