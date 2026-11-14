@@ -42,6 +42,7 @@
   <div class="selection-bar" id="selection-bar" hidden>
     <span id="selection-count">0 sélectionné</span>
     <button class="btn primary tiny" id="selection-export">Exporter en ZIP</button>
+    <button class="btn ghost tiny" id="selection-blend">Exporter en .blend</button>
     <button class="btn ghost tiny" id="selection-all">Tout</button>
     <button class="btn ghost tiny" id="selection-invert">Inverser</button>
     <button class="btn ghost tiny" id="selection-clear">Vider</button>
@@ -57,6 +58,10 @@
       <button class="rail-btn" data-view="models" title="Modèles (Ctrl+2)">
         <svg viewBox="0 0 24 24"><path d="M12 3 21 8v8l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
         <span>Modèles</span>
+      </button>
+      <button class="rail-btn" data-view="ensembles" title="Ensembles : modèle + textures + animations">
+        <svg viewBox="0 0 24 24"><path d="M12 3 21 8l-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg>
+        <span>Ensembles</span>
       </button>
       <button class="rail-btn" data-view="textures" title="Textures (Ctrl+3)">
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-4 4 3 4-4 5 5"/></svg>
@@ -171,6 +176,26 @@
           </div>
         </section>
 
+        <!-- ---------------------------------------------------------- ensembles -->
+        <section class="view" id="view-ensembles" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Ensembles</h2>
+              <p class="muted" id="ensemble-count">Modèle, textures et animations réunis :
+                c'est ce qu'il faut regarder pour voir un mob ou un objet en entier.</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search-ens" placeholder="Filtrer…">
+              <label class="check"><input type="checkbox" id="ens-textures" checked>
+                couleurs des textures</label>
+            </div>
+          </div>
+          <div class="grid" id="ensemble-grid"></div>
+          <div class="more" id="ensemble-more" hidden>
+            <button class="btn ghost" id="ensemble-more-btn">Afficher plus</button>
+          </div>
+        </section>
+
         <!-- ---------------------------------------------------------- textures -->
         <section class="view" id="view-textures" hidden>
           <div class="view-head">
@@ -180,6 +205,18 @@
             </div>
             <div class="toolbar">
               <input type="search" class="search" id="search-tex" placeholder="Filtrer…">
+              <select id="tex-role" title="Ne montrer qu'un type de carte">
+                <option value="">Toutes les cartes</option>
+                <option value="albedo">Albédo (Alb)</option>
+                <option value="normal">Normale (Nrm)</option>
+                <option value="roughness">Rugosité (Rgh)</option>
+                <option value="metallic">Métal (Mtl)</option>
+                <option value="occlusion">Occlusion (AO)</option>
+                <option value="emissive">Émission (Emi)</option>
+                <option value="specular">Spéculaire (Spc)</option>
+                <option value="mask">Masque (Msk)</option>
+                <option value="autre">Inconnu (?)</option>
+              </select>
             </div>
           </div>
           <div class="grid" id="texture-grid"></div>
@@ -344,6 +381,13 @@
                     <option value="150000">150 000 faces</option>
                     <option value="400000">400 000 faces</option>
                   </select></label>
+                <label class="check"><input type="checkbox" id="set-textured">
+                  colorer les aperçus avec les textures du modèle</label>
+                <label class="field"><span>Chemin de Blender (facultatif)</span>
+                  <input type="text" id="set-blender-path"
+                         placeholder="C:\\Program Files\\Blender Foundation\\Blender 4.2\\blender.exe">
+                </label>
+                <p class="hint" data-blender-state>recherche…</p>
                 <label class="check"><input type="checkbox" id="set-export-textures">
                   joindre les PNG à l'export Blender</label>
               </div>

@@ -41,9 +41,34 @@ OBJ (plus simple, mêmes PNG à côté) :
   Fichier ▸ Importer ▸ Wavefront (.obj) → choisir {obj}
   puis, si Blender demande : Forward = -Z, Up = Y (réglage par défaut).
 
-Les textures sont les PNG de ce dossier, déjà branchées sur les matériaux
-(base color pour l'albedo). Les noms de matériaux viennent du modèle, ce qui
-permet de retrouver à quoi correspond chaque partie.
+Toutes les cartes du modèle sont dans ce dossier, en PNG, une par rôle :
+  _Alb  → Base Color          (sRGB)
+  _Nrm  → Normal Map          (Non-Color, nœud Normal Map)
+  _Rgh  → Roughness           (Non-Color)
+  _Mtl  → Metallic            (Non-Color)
+  _AO   → Occlusion / facteur (Non-Color)
+  _Emi  → Emission            (sRGB)
+  _Spc, _Msk → pas d'équivalent glTF, à régler à la main
+  *_MetalRough.png → emballage glTF : G = rugosité, B = métal
+
+Le .gltf porte baseColor, normal, metallicRoughness, occlusion et emissive :
+c'est le format à préférer. L'OBJ ne connaît que la couleur (map_Kd) et la
+normale (norm) ; pour le reste, lance assembler_shaders.py (onglet Scripting ▸
+Open ▸ Run Script) : il branche chaque carte sur le bon nœud du Principled BSDF.
+TEXTURES.md, dans ce dossier, donne le tableau complet fichier → entrée.
+
+Les noms de matériaux viennent du modèle, ce qui permet de retrouver à quoi
+correspond chaque partie.
+
+Orientation des UV (V) : chaque format suit sa spécification, donc les deux
+fichiers ne portent pas le même V — c'est normal, ne « corrige » pas l'un avec
+l'autre :
+  * .gltf : V d'origine (0 = haut de l'image, comme le jeu) ;
+  * .obj  : V retourné (0 = bas de l'image, convention OpenGL).
+
+Si une texture semble à l'envers dans Blender : ouvre « Vérifier les UV » dans
+HookyCreator (le maillage tracé sur l'atlas montre tout de suite l'orientation),
+plutôt que de retourner l'image dans un éditeur.
 
 Rien n'est trié ni fusionné : un objet Blender par maillage, comme dans le
 fichier d'origine.
@@ -131,8 +156,15 @@ class _Buffer:
 
 def _write_gltf(meshes: list[MeshData], path: Path,
                 textures: dict[str, str] | None = None,
-                scale: float = 1.0) -> Path:
+                scale: float = 1.0,
+                maps: dict[str, str] | None = None) -> Path:
+    """``textures`` : albédo par matériau ; ``maps`` : {rôle: fichier} du modèle.
+
+    Les rôles reconnus par glTF : ``albedo`` (baseColor), ``normal``,
+    ``metalrough`` (G = rugosité, B = métal), ``occlusion``, ``emissive``.
+    """
     textures = textures or {}
+    maps = {role: Path(name).name for role, name in (maps or {}).items() if name}
     binary = _Buffer()
     accessors: list[dict] = []
     images: list[dict] = []
@@ -162,6 +194,28 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         images.append({"uri": name})
         gl_textures.append({"source": len(images) - 1, "sampler": 0})
 
+    # cartes du modèle (normale, metallicRoughness, occlusion, émission…) :
+    # elles sont communes aux matériaux, contrairement à l'albédo qui peut
+    # changer d'un matériau à l'autre
+    map_index: dict[str, int] = {}
+    for role in ("normal", "metalrough", "occlusion", "emissive"):
+        name = maps.get(role)
+        if not name:
+            continue
+        source = path.parent / name
+        if not source.is_file():
+            continue
+        if name not in copied:
+            try:
+                if source.resolve() != (path.parent / name).resolve():
+                    shutil.copyfile(source, path.parent / name)
+            except OSError:
+                pass
+            copied[name] = name
+            images.append({"uri": name})
+            gl_textures.append({"source": len(images) - 1, "sampler": 0})
+        map_index[role] = [image["uri"] for image in images].index(name)
+
     single_albedo = None
     if len({str(path) for path in textures.values()}) == 1:
         single_albedo = next(iter(textures.values()))
@@ -188,6 +242,20 @@ def _write_gltf(meshes: list[MeshData], path: Path,
                 if image["uri"] == texture_name:
                     entry["pbrMetallicRoughness"]["baseColorTexture"] = {"index": index}
                     break
+        if "metalrough" in map_index:
+            # les facteurs multiplient la texture : 1.0 = « c'est la carte qui
+            # décide », sinon Blender assombrit ou rend mat malgré l'image
+            entry["pbrMetallicRoughness"]["metallicRoughnessTexture"] = {
+                "index": map_index["metalrough"]}
+            entry["pbrMetallicRoughness"]["metallicFactor"] = 1.0
+            entry["pbrMetallicRoughness"]["roughnessFactor"] = 1.0
+        if "normal" in map_index:
+            entry["normalTexture"] = {"index": map_index["normal"], "scale": 1.0}
+        if "occlusion" in map_index:
+            entry["occlusionTexture"] = {"index": map_index["occlusion"], "strength": 1.0}
+        if "emissive" in map_index:
+            entry["emissiveTexture"] = {"index": map_index["emissive"]}
+            entry["emissiveFactor"] = [1.0, 1.0, 1.0]
         materials.append(entry)
         material_index[key] = len(materials) - 1
         return material_index[key]
@@ -220,11 +288,15 @@ def _write_gltf(meshes: list[MeshData], path: Path,
             attributes["NORMAL"] = len(accessors) - 1
 
         if mesh.uvs:
-            # glTF : V vers le haut (BFRES compte à l'envers)
+            # glTF : l'origine (0,0) est le **coin supérieur gauche** de l'image
+            # (spécification glTF 2.0, §3.8.3), exactement comme les UV du jeu.
+            # Retourner V ici produisait une texture à l'envers dans Blender :
+            # l'importeur glTF de Blender applique déjà la conversion vers son
+            # propre repère (V vers le haut).
             flat = array("f")
             for u, v in mesh.uvs:
                 flat.append(u)
-                flat.append(1.0 - v)
+                flat.append(v)
             view = binary.add(flat.tobytes(), 34962)
             accessors.append({"bufferView": view, "componentType": 5126,
                               "count": len(mesh.uvs), "type": "VEC2"})
@@ -291,12 +363,15 @@ def gltf_bin_path(path) -> Path:
 # --------------------------------------------------------------------------- API
 def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
                   textures: dict[str, str] | None = None,
-                  scale: float = 1.0, formats: tuple[str, ...] = ("gltf", "obj")) -> dict[str, Path]:
+                  scale: float = 1.0, formats: tuple[str, ...] = ("gltf", "obj"),
+                  maps: dict[str, str] | None = None) -> dict[str, Path]:
     """Écrit un dossier prêt pour Blender et renvoie les fichiers créés.
 
     :param meshes: maillages à exporter (positions, faces, UV, normales).
     :param textures: ``{matériau: chemin du PNG}`` de l'albédo.
     :param scale: facteur appliqué à la géométrie (1.0 = unités du jeu).
+    :param maps: ``{rôle: nom du PNG}`` pour les autres cartes (normale,
+        metallicRoughness, occlusion, émission) — branchées sur les matériaux.
     """
     meshes = _finish_meshes(list(meshes))
     folder = Path(directory)
@@ -304,14 +379,19 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
     written: dict[str, Path] = {}
 
     if "gltf" in formats:
-        gltf = _write_gltf(meshes, folder / f"{name}.gltf", textures, scale)
+        gltf = _write_gltf(meshes, folder / f"{name}.gltf", textures, scale,
+                           maps=maps)
         written["gltf"] = gltf
         binary = gltf_bin_path(gltf)
         if binary.is_file():
             written["bin"] = binary
 
     if "obj" in formats:
-        written["obj"] = export_obj(meshes, folder / f"{name}.obj", scale=scale)
+        written["obj"] = export_obj(
+            meshes, folder / f"{name}.obj", scale=scale,
+            albedo_map={material: Path(source).name
+                        for material, source in (textures or {}).items() if source},
+            normal_map=(maps or {}).get("normal", ""))
 
     for material_name, source in (textures or {}).items():
         if source and Path(source).is_file():

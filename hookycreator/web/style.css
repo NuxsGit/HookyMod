@@ -255,6 +255,9 @@ kbd {
   flex-direction: column;
   gap: 3px;
   padding: 8px 6px;
+  /* sept entrées : sur une fenêtre basse, le rail défile au lieu de rogner */
+  overflow-y: auto;
+  scrollbar-width: thin;
   background: linear-gradient(180deg, #0a101a, #070c13);
   border-right: 1px solid var(--line);
 }
@@ -697,12 +700,20 @@ input[type="range"]::-moz-range-thumb {
 .badge {
   display: inline-block;
   border-radius: 999px;
-  padding: 1px 7px;
+  padding: 2px 7px;
   font-size: 10px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
+  white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
 }
-.badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.badge.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.badge.off {
+  border-color: color-mix(in srgb, var(--faint) 45%, transparent);
+  background: transparent;
+  color: var(--faint);
+}
 
 /* ------------------------------------------------------------------ inspecteur */
 .inspector {
@@ -996,3 +1007,89 @@ details.warns summary {
 details.warns summary::before { content: "▸ "; }
 details.warns[open] summary::before { content: "▾ "; }
 details.warns ul.todo { margin: 2px 0 0 12px; }
+
+/* ------------------------------------------------------ ensembles (modèle entier) */
+/* Une carte d'ensemble montre le modèle assemblé, puis ce qui l'habille :
+   deux pastilles disent d'un coup d'œil s'il manque des textures ou des
+   animations. */
+.tile.ensemble .meta { gap: 4px; }
+.tile.ensemble .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+/* bande de textures dans la fiche d'un modèle */
+.ensemble-strip { margin-top: 12px; }
+.ensemble-strip h4 { font-size: 11.5px; color: var(--muted); font-weight: 560; margin-bottom: 6px; }
+.strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.strip-item {
+  flex: 0 0 auto; width: 76px; display: flex; flex-direction: column; gap: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 5px; cursor: pointer; color: var(--text);
+}
+.strip-item:hover { border-color: var(--accent); }
+.strip-item img {
+  width: 100%; height: 56px; object-fit: cover; border-radius: 4px;
+  background: repeating-conic-gradient(#182130 0% 25%, #101823 0% 50%) 50% / 12px 12px;
+}
+.strip-item span {
+  font-size: 9.5px; color: var(--faint); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* commande à copier quand Blender n'est pas installé */
+pre.command {
+  font-family: var(--mono, ui-monospace, monospace); font-size: 11px;
+  background: var(--sunken, #0d141d); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 8px 10px; margin: 8px 0;
+  overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+}
+details.anims p.hint { margin-top: 6px; }
+
+/* ------------------------------------------------------ vérificateur d'UV */
+.uv-shot {
+  width: 100%; border-radius: var(--radius); border: 1px solid var(--line);
+  background: repeating-conic-gradient(#182130 0% 25%, #101823 0% 50%) 50% / 16px 16px;
+  image-rendering: pixelated;
+}
+.uv-shot + .toolbar { margin-top: 8px; }
+.toolbar .btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+ul.facts { list-style: none; margin: 10px 0 6px; padding: 0; display: grid; gap: 4px; }
+ul.facts li { font-size: 11.5px; color: var(--text); display: flex; justify-content: space-between; gap: 10px; }
+ul.facts .k { color: var(--muted); }
+
+/* les textures transparentes se lisent sur un damier, pas sur du noir */
+.thumb.checker {
+  background: repeating-conic-gradient(#1a2432 0% 25%, #0e1620 0% 50%) 50% / 14px 14px;
+}
+
+/* une image cassée ne laisse pas une icône « fichier manquant » dans la grille */
+.thumb.broken, .strip-item.broken { position: relative; }
+.thumb.broken::after {
+  content: "aperçu indisponible"; position: absolute; inset: auto; color: var(--faint);
+  font-size: 11px;
+}
+.thumb.broken img { opacity: 0.15; }
+.strip-item.broken img { opacity: 0.15; }
+.toolbar .btn[aria-pressed="false"] { opacity: 0.75; }
+
+/* ------------------------------------------------------ rôle des cartes de texture */
+/* Le nom d'une texture est long (« Mt_Weapon_Sword_Biggoron_Alb ») et se fait
+   tronquer : la pastille dit le rôle sans dépendre de ce qui reste visible. */
+.badge.role {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.badge.role-albedo { border-color: #4f8cff; color: #9dc0ff; }
+.badge.role-normal { border-color: #7a6cff; color: #b3a8ff; }
+.badge.role-roughness { border-color: #d6a55a; color: #f0cc93; }
+.badge.role-metallic { border-color: #9fa8b8; color: #d4dae4; }
+.badge.role-occlusion { border-color: #5aa6a0; color: #93d6d0; }
+.badge.role-emissive { border-color: #d1735a; color: #f0a48d; }
+.badge.role-autre { border-color: color-mix(in srgb, var(--faint) 60%, transparent);
+  color: var(--faint); }
+#tex-role { min-width: 150px; }

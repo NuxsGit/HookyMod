@@ -120,6 +120,13 @@ class HookyCreatorServer:
             target.write_bytes(data)
             return _json({"file": project.shown_path(target)})
 
+        if route == "/api/ensembles":
+            return _json({"ensembles": project.ensembles(),
+                          "blender": _blender_state(project)})
+
+        if route == "/api/blender":
+            return _json(_blender_state(project))
+
         if route == "/api/model/info":
             return _json(project.model_info(query["path"][0]))
 
@@ -130,9 +137,29 @@ class HookyCreatorServer:
             pitch = float(query.get("pitch", ["-0.35"])[0])
             views = max(1, min(8, int(query.get("views", ["1"])[0])))
             faces = query.get("faces", [None])[0]
+            textured = query.get("tex", ["1" if project.settings.textured_previews
+                                         else "0"])[0] not in ("0", "false", "")
             return project.model_preview(query["path"][0], width, height, yaw, pitch,
                                          views,
-                                         int(faces) if faces else None), "image/png"
+                                         int(faces) if faces else None,
+                                         textured=textured), "image/png"
+
+        if route == "/api/model/uv":
+            if "path" not in query:
+                raise ProjectError("Paramètre « path » manquant.")
+            size = _size(query, "size", 640)
+            flip = query.get("flip", ["0"])[0] not in ("0", "false", "")
+            return project.uv_overlay(query["path"][0], size=size, flip=flip), \
+                "image/png"
+
+        if route == "/api/model/uv/info":
+            if "path" not in query:
+                raise ProjectError("Paramètre « path » manquant.")
+            return _json(project.uv_info(query["path"][0]))
+
+        if route == "/api/model/blend":
+            return _json(project.export_blend(body["path"],
+                                              textures=bool(body.get("textures", True))))
 
         if route == "/api/model/export":
             return _json(project.export_model(body["path"], textures=bool(body.get("textures", True))))
@@ -202,6 +229,9 @@ class HookyCreatorServer:
             return _json({"scan": summary, "project": project.state()})
 
         if route == "/api/export/selection":
+            if body.get("blend"):
+                return project.export_selection_blend(body.get("items") or []), \
+                    "application/zip"
             return project.export_selection(body.get("items") or []), "application/zip"
 
         if route == "/api/shutdown":
@@ -252,6 +282,19 @@ class HookyCreatorServer:
             return None
         kind = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         return candidate.read_bytes(), kind
+
+
+def _blender_state(project) -> dict:
+    """Où est Blender, et que faire s'il n'est pas là (affiché dans l'atelier)."""
+    from hookymod import blendfile
+
+    executable = blendfile.find_blender(project.settings.blender_path)
+    return {
+        "found": bool(executable),
+        "path": str(executable) if executable else "",
+        "configured": project.settings.blender_path,
+        "note": blendfile.platform_note(),
+    }
 
 
 def _size(query: dict, name: str, default: int) -> int:

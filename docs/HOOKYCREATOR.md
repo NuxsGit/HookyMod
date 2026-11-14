@@ -258,3 +258,184 @@ Ce qui est **refusé** reste affiché : la fiche du modèle liste les sous-maill
 ignorés et leurs raisons (« 39 suite(s) d'indices ignorée(s) faute de
 validation »), l'export renvoie les mêmes remarques, et l'atelier écrit
 explicitement « aucune texture trouvée » plutôt que de produire un glTF muet.
+
+# Vue « Ensembles » : voir un objet en entier
+
+Un modèle du jeu n'est jamais seul. `Animal_Cat.Animal_Cat.bfres` a ses textures
+dans un autre dossier et son animation dans `Animal_Cat_Animation.anim.bfres`.
+L'onglet **Ensembles** réunit les trois pour chaque modèle :
+
+* la vignette est le **modèle assemblé**, coloré par son albédo (une couleur par
+  face, prise au centre des UV) — c'est la vue « en entier » ;
+* deux pastilles disent ce qui est là : `1 texture(s)` / `1 anim(s)` ; grisées
+  quand il manque quelque chose (`complet` = les deux) ;
+* un appariement par nom relie les fichiers sans en décoder aucun, donc la liste
+  s'affiche instantanément même sur un dump complet (150 modèles : < 0,5 s).
+
+L'appariement des animations enlève le suffixe que le jeu ajoute
+(`_Animation`, `_Player_Animation`) avant de comparer, sinon rien ne
+correspondrait : `Animal_Cat_Animation` → `animal_cat`. Les albédos sont classés
+par précision du nom (nom du modèle → famille `Weapon_Sword` → préfixe
+`Weapon`), et les cartes de normale ou de métallique sont écartées : elles ne
+doivent jamais colorer le modèle.
+
+Sans texture, la couleur vient du **matériau** (et non du sous-maillage) : un mob
+découpé en dix-huit morceaux qui partagent `Mt_Body` apparaît d'une seule teinte
+au lieu d'une mosaïque de confettis. C'était le défaut qui empêchait de lire un
+animal « en entier ».
+
+La fiche d'un modèle affiche désormais ses **textures** (bande de vignettes
+cliquables) et ses **animations** liées. Les animations restent des fichiers
+séparés du jeu : elles ne sont pas encore injectées dans le modèle exporté, et
+la fiche le dit.
+
+Réglages ▸ Interface ▸ « colorer les aperçus avec les textures du modèle »
+permet de revenir à la géométrie nue (utile pour lire une silhouette).
+
+# Export `.blend`
+
+Un `.blend` est le format interne de Blender. Le produire à la main suppose de
+réimplémenter son format (SDNA, blocs, images embarquées) et le moindre écart
+donne un fichier que Blender refuse. HookyCreator fait donc ce que fait un
+utilisateur : **il pilote Blender**.
+
+1. Le modèle est exporté comme d'habitude (glTF + `.bin` + OBJ + PNG).
+2. `creer_blend.py` est écrit à côté.
+3. Si Blender est trouvé — chemin réglé dans **Réglages**, sinon `blender` du
+   `PATH`, sinon les dossiers d'installation Windows (`C:\Program Files\Blender
+   Foundation\Blender 4.x`) — il est lancé en tâche de fond :
+   `blender --background --factory-startup --python creer_blend.py -- mon.gltf mon.blend`.
+   Le script importe le glTF, **emballe les textures** dans le fichier
+   (`pack_all`), puis enregistre le `.blend`.
+4. Le fichier est **vérifié** avant d'être annoncé : présent, non vide, plus
+   récent que l'export. Un `.blend` périmé est supprimé avant l'essai pour ne
+   jamais passer pour un résultat.
+
+Si Blender est absent ou échoue, l'atelier ne prétend rien : il affiche la
+commande exacte à lancer, la propose à la copie, et laisse le script utilisable.
+Le bouton **Exporter en .blend** de la barre de sélection produit un seul ZIP
+(`hookycreator-blender.zip`) avec un dossier par modèle — glTF, `.bin`, PNG,
+`creer_blend.py` et, quand Blender est là, le `.blend` — plus un `LIRE-MOI.txt`
+qui donne la commande de chaque modèle restant. Le ZIP reste donc utilisable sur
+une machine sans Blender.
+
+# Orientation des textures (V) et vérificateur d'UV
+
+## Le bug
+
+Une épée (Biggoron) exportée pour Blender arrivait avec sa texture **à l'envers** :
+il fallait retourner l'image dans Paint pour que ça marche. Cause : l'export
+retournait V **deux fois** pour le glTF. Chaque format a sa convention, et elles
+ne sont pas les mêmes :
+
+| Format | Origine de (0, 0) | Ce que fait l'importeur Blender | Ce qu'il faut écrire |
+| --- | --- | --- | --- |
+| `.gltf` | coin **haut**-gauche (spec glTF 2.0, §3.8.3) | retourne V vers son repère (bas-gauche) | `v` **tel quel** |
+| `.obj` | coin **bas**-gauche (OpenGL) | ne retourne rien | `1 - v` |
+
+Les UV lues dans le BFRES sont déjà dans le repère du jeu (V = 0 en haut de
+l'image), comme le glTF. Écrire `1 - v` dans le glTF annulait la conversion de
+Blender : texture à l'envers. L'OBJ, lui, avait raison depuis le début — les deux
+fichiers ne doivent donc **pas** porter le même V, et c'est documenté dans
+`IMPORT_BLENDER.txt` pour éviter qu'on « corrige » l'un avec l'autre.
+
+## Le vérificateur
+
+Ouvrir un modèle ▸ **Vérifier les UV**. L'écran montre l'atlas du modèle avec les
+**triangles UV tracés dessus** (translucides, une couleur par matériau) :
+
+* si le contour du maillage épouse les zones utiles de la texture (la lame sur la
+  lame, la garde sur la garde), la texture tombe juste ;
+* le bouton **V retourné** rejoue le tracé avec `1 - v` : quand les deux se
+  ressemblent, c'est en comparant qu'on tranche, pas en devinant.
+
+Sous l'image, les chiffres qui trahissent un vrai défaut :
+
+* **bornes U / V** — un modèle dont toutes les UV sortent de [0, 1] se répète ;
+* **hors [0, 1]** — nombre de sommets concernés (tiling voulu sur un tissu,
+  suspect ailleurs) ;
+* **triangles plats en UV** — aire nulle : la texture y est réduite à un point ;
+* **étirement** — 95ᵉ centile de la densité de texels rapporté à la médiane
+  (le maximum servait de faux positif à cause d'un unique triangle minuscule).
+
+Un modèle sans coordonnées de texture le dit explicitement au lieu d'afficher un
+atlas vide.
+
+## Bugs visuels corrigés au passage
+
+* les textures transparentes se lisent sur un **damier** (elles s'affichaient sur
+  un fond noir, indistinguables d'une image noire) ;
+* une vignette qui ne se charge pas marque sa tuile « aperçu indisponible » au
+  lieu de laisser l'icône « fichier manquant » du navigateur ;
+* le rail a maintenant sept entrées : il **défile** sur une fenêtre basse au lieu
+  de rogner les dernières ;
+* `.badge` était défini deux fois (styles partiellement écrasés) : une seule
+  définition, avec les deux variantes `warn` et `off` ;
+* la barre d'état compte aussi les **animations**, et un bouton d'export
+  sélectionné indique son état (`aria-pressed`) au lieu de rester neutre.
+
+## Toutes les cartes de texture, pas seulement la couleur
+
+L'export d'origine ne sortait que l'**albédo** : dans Blender, l'épée de
+Biggoron arrivait avec sa couleur, mais sans normale (surface lisse et fausse),
+sans rugosité (tout brillant) et sans métal (tout plastique). La cause était un
+filtre sur le nom : `texture_assets_for` ne gardait que `_Alb`, `_Dif`,
+`albedo`, `basecolor`.
+
+Désormais un modèle exporte **toutes** ses cartes. Le suffixe du fichier suffit
+à connaître le rôle — et c'est toujours le **dernier** jeton qui décide, sinon
+le préfixe `Mt_` (pour *material*) serait lu comme du métal :
+
+| Suffixes rencontrés | Rôle | Entrée Principled BSDF |
+| --- | --- | --- |
+| `_Alb` `_Albedo` `_BC` `_BaseColor` `_Dif` `_Col` | albédo | Base Color (sRGB) |
+| `_Nrm` `_Normal` | normale | Normal ← nœud Normal Map (Non-Color) |
+| `_Rgh` `_Rough` | rugosité | Roughness (Non-Color) |
+| `_Mtl` `_Met` `_Metal` | métal | Metallic (Non-Color) |
+| `_AO` `_Occ` | occlusion | facteur AO (Non-Color) |
+| `_Emi` `_Emit` | émission | Emission, force 1.0 |
+| `_Spc` `_Spec` | spéculaire | pas d'équivalent glTF → à la main |
+| `_Msk` `_Mask` `_Op` `_Alpha` | masque / opacité | Alpha, à la main |
+| autre | `autre` | **exporté quand même**, signalé à part |
+
+Un suffixe inconnu n'est jamais jeté : une carte qu'on cache est une carte
+qu'on croit absente. Elle part dans l'export, classée « autre », et
+`TEXTURES.md` dit qu'il faut l'ouvrir pour décider.
+
+### Ce que produit un export
+
+* un PNG par carte, nommé comme dans le jeu (`Mt_..._Alb.png`, `..._Nrm.png`…) ;
+* un `*_MetalRough.png` **composé** : **G = rugosité, B = métal** — c'est
+  l'emballage que glTF et Unity attendent, et il évite les deux images ;
+* `TEXTURES.md` : le tableau fichier → rôle → entrée Blender, plus les pièges ;
+* `assembler_shaders.py` : un script `bpy` qui recrée les nœuds tout seul
+  (Base Color, Normal Map, Separate Color sur la MR, émission) ;
+* le `.gltf` porte `baseColorTexture`, `normalTexture`,
+  `metallicRoughnessTexture`, `occlusionTexture` et `emissiveTexture`, avec
+  `metallicFactor`/`roughnessFactor` à 1.0 pour que ce soit **l'image** qui
+  décide (sinon Blender assombrit malgré la carte) ;
+* le `.mtl` de l'OBJ porte `map_Kd` et `norm` (Wavefront n'a rien d'autre).
+
+### Le piège n°1 : l'espace colorimétrique
+
+Une normale lue en sRGB paraît bombée de travers, une rugosité en sRGB donne un
+métal trop brillant. Une seule règle : **albédo et émission en sRGB**, tout le
+reste (normale, rugosité, métal, AO, masque) en **Non-Color**. Le script le fait
+pour vous ; à la main, c'est le menu déroulant au-dessus de l'aperçu de l'image.
+
+Quand un modèle n'a **que** l'albédo, ce n'est pas un bug : le jeu n'a pas plus
+de cartes pour lui. Gardez `Roughness ≈ 0.5`, `Metallic = 0`.
+
+### Dans l'interface
+
+* chaque vignette de texture porte une **pastille de rôle** (`Alb`, `Nrm`,
+  `Rgh`, `Mtl`, `AO`, `Emi`, `Spc`, `Msk`, `?`) — le nom complet est tronqué
+  dans la grille, la pastille non ;
+* le menu **« Toutes les cartes »** de l'écran Textures ne montre qu'un rôle ;
+* la fiche d'un modèle liste **toutes** ses cartes, groupées par rôle ;
+* la **coche verte** sur une vignette est le bouton de sélection (Ctrl+clic
+  pour en prendre plusieurs) : ce n'est pas un état de texture.
+
+Tests : `tests/test_texture_maps.py` (20 cas) — classification par suffixe,
+`Mt_` non métallique, composition de la MR, export multi-cartes, câblage glTF
+et MTL.

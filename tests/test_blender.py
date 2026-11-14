@@ -88,7 +88,12 @@ class GltfTests(unittest.TestCase):
         first = struct.unpack("<3f", chunk[:12])
         self.assertEqual(first, (0.0, 0.0, 0.0))
 
-    def test_uv_are_flipped_for_gltf(self):
+    def test_uv_are_written_as_is_for_gltf(self):
+        """glTF place (0,0) en **haut** à gauche : les UV du jeu s'écrivent tel quel.
+
+        Les retourner ici donnait une texture à l'envers dans Blender (l'importeur
+        glTF de Blender applique déjà sa propre conversion).
+        """
         written = blender.export_bundle([_quad()], self.folder, "papillon",
                                         formats=("gltf",))
         document = json.loads(Path(written["gltf"]).read_text())
@@ -97,10 +102,9 @@ class GltfTests(unittest.TestCase):
         binary = (self.folder / "papillon.bin").read_bytes()
         chunk = binary[view["byteOffset"]:view["byteOffset"] + view["byteLength"]]
         uvs = struct.unpack("<8f", chunk)
-        # (0,0) → (0,1) · (0,1) → (0,0) : glTF compte le V vers le haut
-        self.assertEqual(uvs[0:2], (0.0, 1.0))
-        self.assertEqual(uvs[4:6], (0.0, 0.0))
-        self.assertEqual(uvs[6:8], (1.0, 0.0))
+        self.assertEqual(uvs[0:2], (0.0, 0.0))
+        self.assertEqual(uvs[4:6], (0.0, 1.0))
+        self.assertEqual(uvs[6:8], (1.0, 1.0))
 
     def test_wide_mesh_uses_32_bit_indices(self):
         mesh = MeshData(positions=[(float(i), 0.0, 0.0) for i in range(70000)],
