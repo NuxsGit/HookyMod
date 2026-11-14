@@ -985,3 +985,14 @@ input[type="range"]::-moz-range-thumb {
 }
 .session-over h2 { font-size: 20px; }
 .session-over p { color: var(--muted); margin-top: 8px; max-width: 46ch; }
+
+/* remarques de décodage : visibles, mais pas au premier plan */
+.warn { color: var(--warn); font-size: 11px; }
+details.warns { margin: 8px 0 4px; }
+details.warns summary {
+  cursor: pointer; color: var(--muted); font-size: 11.5px;
+  padding: 4px 0; list-style: none;
+}
+details.warns summary::before { content: "▸ "; }
+details.warns[open] summary::before { content: "▾ "; }
+details.warns ul.todo { margin: 2px 0 0 12px; }

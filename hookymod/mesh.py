@@ -130,73 +130,93 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
                scale: float = 1.0, up_axis: str = "y") -> Path:
     """Écrit un fichier OBJ (+ MTL) lisible par Blender, Maya, etc.
 
-    Blender importe l'OBJ avec ``bpy.ops.wm.obj_import`` : c'est la voie la plus
+    Blender importe l'OBJ avec ``bpy.wm.obj_import`` : c'est la voie la plus
     fiable pour convertir un BFRES en .blend sans add-on.
+
+    La version précédente appelait un formateur **trois fois par sommet** :
+    15 millions d'appels pour une armure, 13,7 s d'écriture. Ici un sommet
+    coûte une seule chaîne formatée, et les faces sont formatées en bloc.
     """
     path = Path(path)
-    lines: list[str] = ["# Exporté par HookyMod / Asset Explorer", ""]
+    chunks: list[str] = ["# Exporté par HookyMod / Asset Explorer", ""]
     mtl_lines: list[str] = ["# Matériaux générés par HookyMod", ""]
     use_mtl = mtl and path.suffix.lower() == ".obj"
     if use_mtl:
-        lines.append(f"mtllib {path.with_suffix('.mtl').name}")
-        lines.append("")
+        chunks.append(f"mtllib {path.with_suffix('.mtl').name}")
+        chunks.append("")
 
     vertex_offset = 0
     uv_offset = 0
     normal_offset = 0
     palette = [(0.82, 0.82, 0.85), (0.85, 0.72, 0.45), (0.55, 0.75, 0.55),
                (0.72, 0.55, 0.75), (0.55, 0.7, 0.85), (0.9, 0.6, 0.55)]
+    z_up = up_axis == "z"
 
     for index, mesh in enumerate(meshes):
         if not mesh.positions:
             continue
         name = (mesh.name or f"mesh_{index}").replace(" ", "_")
-        lines.append(f"g {name}")
+        chunks.append(f"g {name}")
         material = mesh.material or f"mat_{index}"
+        color = palette[index % len(palette)]
         if use_mtl:
-            lines.append(f"usemtl {material}")
-            color = palette[index % len(palette)]
+            chunks.append(f"usemtl {material}")
             mtl_lines += [f"newmtl {material}",
                           f"Kd {color[0]:.3f} {color[1]:.3f} {color[2]:.3f}",
-                          "Ka 0.1 0.1 0.1", "Ks 0.0 0.0 0.0", "d 1.0", "illum 2", ""]
+                          "Ka 0.1 0.1 0.1", "Ks 0.0 0.0 0.0", "d 1.0",
+                          "illum 2", ""]
+
+        if z_up:
+            for x, y, z in mesh.positions:
+                chunks.append(f"v {x * scale:.6g} {-z * scale:.6g} {y * scale:.6g}")
         else:
-            color = palette[index % len(palette)]
-
-        for x, y, z in mesh.positions:
-            if up_axis == "z":
-                lines.append(f"v {_fmt(x * scale)} {_fmt(-z * scale)} {_fmt(y * scale)}")
-            else:
-                lines.append(f"v {_fmt(x * scale)} {_fmt(y * scale)} {_fmt(z * scale)}")
-        if mesh.uvs:
-            lines += [f"vt {_fmt(u)} {_fmt(1.0 - v)}" for u, v in mesh.uvs]
-        if mesh.normals:
-            for nx, ny, nz in mesh.normals:
-                if up_axis == "z":
-                    lines.append(f"vn {_fmt(nx)} {_fmt(-nz)} {_fmt(ny)}")
-                else:
-                    lines.append(f"vn {_fmt(nx)} {_fmt(ny)} {_fmt(nz)}")
-
+            for x, y, z in mesh.positions:
+                chunks.append(f"v {x * scale:.6g} {y * scale:.6g} {z * scale:.6g}")
         has_uv = bool(mesh.uvs) and len(mesh.uvs) == len(mesh.positions)
         has_n = bool(mesh.normals) and len(mesh.normals) == len(mesh.positions)
-        for face in mesh.faces:
-            parts = []
-            for idx in face:
-                v = idx + vertex_offset + 1
-                if has_uv and has_n:
-                    parts.append(f"{v}/{idx + uv_offset + 1}/{idx + normal_offset + 1}")
-                elif has_uv:
-                    parts.append(f"{v}/{idx + uv_offset + 1}")
-                elif has_n:
-                    parts.append(f"{v}//{idx + normal_offset + 1}")
-                else:
-                    parts.append(str(v))
-            lines.append("f " + " ".join(parts))
-        lines.append("")
+        if has_uv:
+            chunks += [f"vt {u:.6g} {1.0 - v:.6g}" for u, v in mesh.uvs]
+        if has_n:
+            if z_up:
+                chunks += [f"vn {nx:.6g} {-nz:.6g} {ny:.6g}"
+                           for nx, ny, nz in mesh.normals]
+            else:
+                chunks += [f"vn {nx:.6g} {ny:.6g} {nz:.6g}"
+                           for nx, ny, nz in mesh.normals]
+
+        vbase = vertex_offset + 1
+        ubase = uv_offset + 1
+        nbase = normal_offset + 1
+        if has_uv and has_n:
+            for face in mesh.faces:
+                f0, f1, f2 = face
+                chunks.append(
+                    "f %d/%d/%d %d/%d/%d %d/%d/%d" % (
+                        f0 + vbase, f0 + ubase, f0 + nbase,
+                        f1 + vbase, f1 + ubase, f1 + nbase,
+                        f2 + vbase, f2 + ubase, f2 + nbase))
+        elif has_uv:
+            for face in mesh.faces:
+                f0, f1, f2 = face
+                chunks.append("f %d/%d %d/%d %d/%d" % (
+                    f0 + vbase, f0 + ubase, f1 + vbase, f1 + ubase,
+                    f2 + vbase, f2 + ubase))
+        elif has_n:
+            for face in mesh.faces:
+                f0, f1, f2 = face
+                chunks.append("f %d//%d %d//%d %d//%d" % (
+                    f0 + vbase, f0 + nbase, f1 + vbase, f1 + nbase,
+                    f2 + vbase, f2 + nbase))
+        else:
+            for face in mesh.faces:
+                chunks.append("f %d %d %d" % (face[0] + vbase, face[1] + vbase,
+                                              face[2] + vbase))
+        chunks.append("")
         vertex_offset += len(mesh.positions)
         uv_offset += len(mesh.uvs) if has_uv else 0
         normal_offset += len(mesh.normals) if has_n else 0
 
-    write_atomic(path, ("\n".join(lines) + "\n").encode("utf-8"))
+    write_atomic(path, ("\n".join(chunks) + "\n").encode("utf-8"))
     if use_mtl:
         write_atomic(path.with_suffix(".mtl"), ("\n".join(mtl_lines) + "\n").encode("utf-8"))
     return path

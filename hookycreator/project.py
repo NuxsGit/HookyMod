@@ -20,10 +20,12 @@ from pathlib import Path
 from hookymod import bfres as bfres_mod
 from hookymod import bntx as bntx_mod
 from hookymod import bntx_encode, blender, render, util, zs
+from hookymod.blender import _base_name
 from hookymod.mesh import MeshData
 
 from .settings import Settings, SettingsError
 from . import cache as cache_mod
+from . import geo as geo_mod
 from . import vram
 
 MODEL_SUFFIXES = (".bfres.zs", ".bfres")
@@ -81,6 +83,14 @@ class Project:
         self.scanned_at = ""
         self.scan_seconds = 0.0
         self._mesh_bytes = 0
+        # géométrie décodée : rouvrir un modèle ne doit pas repayer le décodage
+        self.geo_folder = self.work / "cache" / "geo"
+        self.geo_hits = 0
+        self.geo_misses = 0
+        self._reports: dict[str, dict] = {}
+        # géométrie aplatie pour l'affichage : reconstruite à chaque aperçu,
+        # elle coûtait ~1 s sur un modèle de 170 000 faces
+        self._render_data: dict[str, tuple] = {}
         self.warm: dict = {"running": False, "done": 0, "total": 0, "error": None}
         self._warm_thread = None
         self._dicts_lock = __import__("threading").Lock()
@@ -336,10 +346,25 @@ class Project:
         self._warm_thread.start()
         return self.warm
 
+    def geo_stats(self) -> dict:
+        """Ce que le cache de géométrie occupe (utile pour vider sans se tromper)."""
+        files = 0
+        size = 0
+        if self.geo_folder.is_dir():
+            for path in self.geo_folder.glob("*.geo"):
+                files += 1
+                try:
+                    size += path.stat().st_size
+                except OSError:
+                    pass
+        return {"entries": files, "bytes": size, "folder": str(self.geo_folder),
+                "hits": self.geo_hits, "misses": self.geo_misses}
+
     def cache_stats(self) -> dict:
         meshes = [k for k in self._cache if k[0] == "meshes"]
         return {
             "thumbs": self.thumbs.stats(),
+            "geo": self.geo_stats(),
             "meshes": {"entries": len(meshes), "bytes": self._mesh_bytes,
                        "budget_bytes": max(64 * 1024 * 1024,
                                            self.settings.budget_bytes // 2)},
@@ -351,10 +376,22 @@ class Project:
         }
 
     def clear_cache(self) -> dict:
-        """Vide les vignettes du disque et les maillages gardés en mémoire."""
+        """Vide vignettes, géométrie et maillages en mémoire."""
         self._cache.clear()
         self._mesh_bytes = 0
-        return self.thumbs.clear()
+        self._reports.clear()
+        self._render_data.clear()
+        removed = 0
+        if self.geo_folder.is_dir():
+            for path in self.geo_folder.glob("*.geo"):
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        result = self.thumbs.clear()
+        result["geo_removed"] = removed
+        return result
 
     # ------------------------------------------------------------------ textures
     def texture_file(self, rel: str) -> bntx_mod.BntxFile:
@@ -425,33 +462,75 @@ class Project:
 
     # ------------------------------------------------------------------ modèles
     def model_info(self, rel: str) -> dict:
-        data = self.read_asset(rel)
-        if data[:4] != b"FRES":
-            raise ProjectError("Ce fichier n'est pas un BFRES.")
-        file = bfres_mod.BfresFile.parse(data)
-        meshes = bfres_mod.meshes_from_file(file)
-        lo, hi = meshes[0].bounds()
-        total = sum(len(m.faces) for m in meshes)
+        """Fiche d'un modèle.
+
+        La géométrie vient du même chemin que l'aperçu (mémoire ou cache
+        disque) : auparavant cette fiche **redécodait** tout le BFRES, ce qui
+        doublait le temps d'un simple clic (4,97 s sur une armure).
+        """
+        meshes = self._model_meshes(rel)
+        meta = self._reports.get(rel, {})
+        points = [point for mesh in meshes for point in mesh.positions]
+        lowest = [min(point[i] for point in points) for i in range(3)]
+        highest = [max(point[i] for point in points) for i in range(3)]
         return {
             "rel": rel,
-            "version": f"{file.version >> 16}.{(file.version >> 8) & 0xFF}.{file.version & 0xFF}",
-            "models": [m.name for m in file.models],
+            "version": meta.get("version") or self._version_label(rel),
+            "models": [meta["model"]] if meta.get("model") else [Path(rel).stem],
             "meshes": len(meshes),
-            "faces": total,
+            "submeshes": meta.get("submeshes", len(meshes)),
+            "dropped": meta.get("dropped", 0),
+            "faces": sum(len(m.faces) for m in meshes),
             "vertices": sum(len(m.positions) for m in meshes),
-            "materials": [mat.name for m in file.models for mat in m.materials],
-            "bounds": [round(hi[i] - lo[i], 4) for i in range(3)],
-            "warnings": file.warnings[:6],
+            "materials": meta.get("materials") or sorted({m.material for m in meshes if m.material}),
+            "bounds": [round(highest[i] - lowest[i], 4) for i in range(3)],
+            "warnings": meta.get("warnings", [])[:8],
         }
 
+    def _version_label(self, rel: str) -> str:
+        data = self.read_asset(rel)[:12]
+        if data[:4] != b"FRES" or len(data) < 12:
+            return ""
+        value = int.from_bytes(data[8:12], "little")
+        return f"{value >> 16}.{(value >> 8) & 0xFF}.{value & 0xFF}"
+
+    def _geo_path(self, rel: str):
+        size, mtime = self._version(rel)
+        return self.geo_folder / f"{cache_mod.digest(rel, size, mtime)}.geo"
+
     def _model_meshes(self, rel: str) -> list[MeshData]:
+        """Maillages d'un modèle : mémoire, puis disque, puis décodage."""
         size, mtime = self._version(rel)
         key = ("meshes", rel, size, mtime)
-        if key not in self._cache:
-            data = self.read_asset(rel)
-            file = bfres_mod.BfresFile.parse(data)
-            return self._store_mesh(key, bfres_mod.meshes_from_file(file))
-        return self._cache[key]
+        if key in self._cache:
+            return self._cache[key]
+        path = self._geo_path(rel)
+        cached = geo_mod.read(path) if path.is_file() else None
+        if cached is not None:
+            meshes, meta = cached
+            self.geo_hits += 1
+            if meta:
+                self._reports.setdefault(rel, meta)
+            return self._store_mesh(key, meshes)
+        self.geo_misses += 1
+        data = self.read_asset(rel)
+        file = bfres_mod.BfresFile.parse(data)
+        meshes = bfres_mod.meshes_from_file(file)
+        report = getattr(file, "v10_report", None)
+        meta = {
+            "warnings": list(file.warnings[:12]),
+            "version": f"{file.version >> 16}.{(file.version >> 8) & 0xFF}.{file.version & 0xFF}",
+            "model": (file.models[0].name if file.models else ""),
+            "materials": [m.name for m in file.models[0].materials] if file.models else [],
+            "dropped": getattr(report, "dropped", 0) if report else 0,
+            "submeshes": getattr(report, "submeshes", len(meshes)) if report else len(meshes),
+        }
+        self._reports[rel] = meta
+        try:
+            geo_mod.write(path, meshes, meta)
+        except (OSError, AttributeError):
+            pass
+        return self._store_mesh(key, meshes)
 
     def model_meshes(self, rel: str) -> list[MeshData]:
         """Maillages d'un modèle (public : l'import .blend s'en sert pour l'échelle)."""
@@ -476,42 +555,99 @@ class Project:
         if cached:
             return cached
         meshes = self._model_meshes(rel)
+        limit = face_limit
+        if limit is None:
+            # Un plafond fixe troue les modèles denses (20 000 faces sur 165 000
+            # laissent des trous) : on suit la densité du modèle, sans jamais
+            # dépasser le plafond de l'aperçu détaillé.
+            total = sum(len(mesh.faces) for mesh in meshes)
+            thumb = self.settings.thumb_faces or 20_000
+            limit = min(total, max(thumb, total // 2))
+            if self.settings.preview_faces:
+                limit = min(limit, self.settings.preview_faces)
+            if width >= 480 and limit < total and self.settings.preview_faces:
+                limit = min(total, max(limit, self.settings.preview_faces))
         try:
-            planned = vram.plan(self.settings, meshes, width, height, face_limit)
+            planned = vram.plan(self.settings, meshes, width, height, limit)
         except vram.BudgetError as error:
             raise ProjectError(str(error)) from None
-        drawn = vram.trim(meshes, planned.face_limit)
+        data = self._flatten(rel, meshes)
         options = dict(zoom=1.0, cull=self.settings.cull,
                        frustum=self.settings.frustum,
-                       supersample=planned.supersample)
+                       supersample=planned.supersample,
+                       max_faces=planned.face_limit)
         if views and views > 1:
-            png = render.turntable_png(drawn, views=views, width=width,
-                                       height=height, **options)
+            png = render.turntable_png(meshes, views=views, width=width,
+                                       height=height, data=data, **options)
         else:
-            png = render.render_png(drawn, width, height, yaw, pitch, **options)
+            png = render.render_png(meshes, width, height, yaw, pitch,
+                                    data=data, **options)
         return self.thumbs.put(key, png)
+
+    def _flatten(self, rel: str, meshes):
+        """Géométrie d'affichage aplatie, gardée pour les aperçus suivants."""
+        from hookymod.viewer import build_render_data
+
+        size, mtime = self._version(rel)
+        entry = self._render_data.get(rel)
+        if entry and entry[0] == size and entry[1] == mtime:
+            return entry[2]
+        data = build_render_data(meshes)
+        if len(self._render_data) > 24:
+            self._render_data.clear()      # borne simple : 24 modèles aplatis
+        self._render_data[rel] = (size, mtime, data)
+        return data
+
+    def export_textures_for(self, rel: str, folder: Path) -> dict[str, str]:
+        """PNG d'albédo du modèle, indexés par nom de matériau **et** par nom de fichier.
+
+        On ne devine pas : on classe les textures candidates par précision de
+        nom (nom exact du modèle, puis famille ``Weapon_Sword``) et on ne garde
+        que les albédos (``_Alb``…). Le nom d'un matériau (``Mt_Blade``) ne
+        contient jamais celui de la texture : l'index contient donc aussi la
+        forme sans suffixe, ce qui permet à Blender de retrouver la bonne image.
+        """
+        stem = Path(rel).name.split(".")[0].lower()
+        parts = stem.split("_")
+        family = "_".join(parts[:2]) if len(parts) > 1 else stem
+        ranked: dict[int, list] = {0: [], 1: [], 2: []}
+        for asset in self.by_kind("texture"):
+            low = asset.rel.lower()
+            name = Path(asset.rel).name.lower()
+            if not any(tag in name for tag in ("_alb", "albedo", "basecolor", "_dif")):
+                continue
+            if stem and stem in low:
+                ranked[0].append(asset)
+            elif family and family in low:
+                ranked[1].append(asset)
+            elif parts and parts[0] and parts[0] in low:
+                ranked[2].append(asset)
+        candidates = next((ranked[rank] for rank in (0, 1, 2) if ranked[rank]), [])
+        found: dict[str, str] = {}
+        folder.mkdir(parents=True, exist_ok=True)
+        for asset in candidates[:24]:
+            try:
+                target = folder / f"{asset.stem}.png"
+                target.write_bytes(self.texture_png(asset.rel, 0))
+            except ProjectError:
+                continue
+            found[_base_name(asset.stem)] = str(target)
+            found[asset.stem] = str(target)
+        return found
 
     def export_model(self, rel: str, textures: bool = True) -> dict:
         meshes = self._model_meshes(rel)
         folder = self.work / "export" / Path(rel).name.split(".")[0]
-        found: dict[str, str] = {}
-        if textures:
-            stem = Path(rel).name.split(".")[0].split("_")[0]
-            for asset in self.by_kind("texture"):
-                if stem.lower() in asset.rel.lower():
-                    try:
-                        target = folder / f"{asset.stem}.png"
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(self.texture_png(asset.rel, 0))
-                        found[asset.stem] = str(target)
-                    except ProjectError:
-                        continue
+        found: dict[str, str] = self.export_textures_for(rel, folder) if textures else {}
         written = blender.export_bundle(meshes, folder, folder.name,
                                         textures=found or None)
+        meta = self._reports.get(rel, {})
         return {"folder": self.shown_path(folder),
-                "files": sorted(p.name for p in written.values()),
-                "textures": len(found),
-                "faces": sum(len(m.faces) for m in meshes)}
+                "files": sorted({path.name for path in written.values()}),
+                "textures": len({path for path in found.values()}),
+                "faces": sum(len(m.faces) for m in meshes),
+                "submeshes": len(meshes),
+                "warnings": meta.get("warnings", [])[:6]}
 
     # ------------------------------------------------------------------ mobs
     def _mobs_file(self) -> Path:
@@ -612,11 +748,17 @@ class Project:
                     continue
                 stem = Path(rel).name.split(".")[0]
                 target = Path(folder) / stem
-                written = blender.export_bundle(self._model_meshes(rel), target, stem)
-                for produced in written.values():
+                found = self.export_textures_for(rel, target)
+                written = blender.export_bundle(self._model_meshes(rel), target,
+                                                stem, textures=found or None)
+                # tout ce que l'export a produit : le .bin du glTF et les PNG
+                # compris (sans le .bin, Blender refuse le glTF)
+                for produced in sorted(target.rglob("*")):
                     if produced.is_file():
-                        archive.write(produced, f"modeles/{stem}/{produced.name}")
-                lines.append(f"[modèle] {rel} ({len(written)} fichier(s))")
+                        relative = produced.relative_to(target)
+                        archive.write(produced, f"modeles/{stem}/{relative.as_posix()}")
+                lines.append(f"[modèle] {rel} ({len(written)} fichier(s) + "
+                             f"{len(set(found.values()))} texture(s))")
                 models += 1
             lines.insert(1, f"{models} modèle(s), {textures} texture(s)")
             archive.writestr("LISEZMOI.txt", "\n".join(lines) + "\n")
