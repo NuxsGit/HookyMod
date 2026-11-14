@@ -30,12 +30,20 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import native
 from .util import FormatError, HookyError, human_size
 
 MAGIC = b"RESTBL"
 HEADER_SIZE = 22          # 6 (magic) + 4 + 4 + 4 + 4
 ENTRY_SIZE = 8
 TABLE_GLOB = "ResourceSizeTable.*"
+
+
+def backend() -> dict:
+    """Chemin de lecture/reconstruction RESTBL et son repli historique."""
+    if native.available():
+        return {"name": "rust", "label": "Rust si compatible, sinon Python"}
+    return {"name": "python", "label": "Python"}
 
 
 def key_for(path: str) -> int:
@@ -57,6 +65,12 @@ class ResourceSizeTable:
     # ------------------------------------------------------------------ lecture
     @classmethod
     def parse(cls, data: bytes) -> "ResourceSizeTable":
+        if cls is ResourceSizeTable and type(data) is bytes and native.available():
+            parsed = native.restbl_parse(data)
+            if parsed is not None:
+                version, name_length, sizes, tail, named = parsed
+                return cls(version=version, name_length=name_length, sizes=sizes,
+                           tail=tail, named_count=named)
         if len(data) < HEADER_SIZE or data[:6] != MAGIC:
             raise FormatError("Ce n'est pas une table RESTBL "
                               f"(magic {data[:6]!r}).")
@@ -77,6 +91,11 @@ class ResourceSizeTable:
 
     # ------------------------------------------------------------------ écriture
     def build(self) -> bytes:
+        if type(self) is ResourceSizeTable and native.available():
+            result = native.restbl_build(self.sizes, self.version, self.name_length,
+                                         self.named_count, self.tail)
+            if result is not None:
+                return result
         entries = b"".join(struct.pack("<II", key, size)
                            for key, size in sorted(self.sizes.items()))
         header = MAGIC + struct.pack("<IIII", self.version, self.name_length,

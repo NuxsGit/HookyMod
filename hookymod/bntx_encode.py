@@ -11,7 +11,8 @@ Deux modes :
   ajoutée par un mod.
 
 Formats encodables : R8, RG8, RGBA8 (et sRGB), BGRA8, RGB565, BGR565, RGBA4,
-BGRA4, RGB5A1, BGR5A1, BC1, BC3, BC4, BC5.
+BGRA4, RGB5A1, BGR5A1, BC1, BC3, BC4, BC5. Le cœur Rust facultatif reproduit
+les mêmes octets pour accélérer l'encodage et la génération des mips.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import struct
 from dataclasses import dataclass
 
 from . import bntx as bntx_mod
+from . import native
 from .util import FormatError, HookyError, align, decode_png, png_bytes, write_atomic
 
 # --------------------------------------------------------------------------- formats
@@ -244,6 +246,10 @@ def encode_pixels(rgba: bytes, width: int, height: int, format_code: int) -> byt
     expected = width * height * 4
     if len(rgba) < expected:
         raise HookyError(f"Pixels RGBA trop courts : {len(rgba)} < {expected}.")
+    if native.available():
+        encoded = native.encode_pixels(kind, rgba, width, height)
+        if encoded is not None:
+            return encoded
     if kind in ("BC1", "BC3", "BC4", "BC5", "RGB565", "BGR565", "RGBA4", "BGRA4",
                 "RGB5A1", "BGR5A1", "R8", "RG8", "RGBA8", "BGRA8"):
         if kind == "BC1":
@@ -263,6 +269,10 @@ def downsample(rgba: bytes, width: int, height: int) -> tuple[int, int, bytes]:
     """Réduit de moitié par moyenne 2×2 (filtre boîte)."""
     new_w = max(1, width // 2)
     new_h = max(1, height // 2)
+    if native.available():
+        result = native.downsample_mip(rgba, width, height)
+        if result is not None:
+            return new_w, new_h, result
     out = bytearray(new_w * new_h * 4)
     for y in range(new_h):
         for x in range(new_w):

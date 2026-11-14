@@ -15,6 +15,7 @@ import io
 import os
 from pathlib import Path
 
+from . import native
 from .sarc import SarcArchive, is_sarc
 from .util import DictMissing, FormatError, HookyError
 
@@ -30,6 +31,18 @@ DEFAULT_LEVEL = 16
 
 def zstd_available() -> bool:
     return zstd is not None
+
+
+def decoder_backend() -> dict:
+    """Diagnostic du chemin ``ZstdDicts``, sans prétendre que toute l'app est Rust."""
+    if zstd is None:
+        return {"name": "missing", "label": "module zstandard absent",
+                "hint": "Le module zstandard reste nécessaire à HookyCreator."}
+    if native.available():
+        return {"name": "rust", "label": "Rust si compatible, sinon zstandard",
+                "hint": "Lecture directe sans dictionnaire et compression : zstandard."}
+    return {"name": "zstandard", "label": "zstandard",
+            "hint": "Décompression et compression par le module zstandard."}
 
 
 def require_zstd() -> None:
@@ -222,6 +235,21 @@ class ZstdDicts:
     @staticmethod
     def _run(raw: bytes, dictionary) -> bytes:
         require_zstd()
+        if native.available():
+            # Forcer le dictionnaire choisi pour les éventuelles trames sans
+            # id, comme le décodeur zstandard C. Un dictionnaire brut (id 0)
+            # ne doit pas être renommé silencieusement si la frame annonce un
+            # id non nul : le décodeur C rejetterait ce couple.
+            did, _ = frame_info(raw)
+            dictionary_id = dictionary.dict_id() if dictionary else 0
+            if not dictionary or not did or dictionary_id:
+                dict_bytes = dictionary.as_bytes() if dictionary else None
+                decoded = native.zstd_decompress(raw, dict_bytes, dictionary_id,
+                                                 force_dictionary=bool(dictionary))
+                if decoded is not None:
+                    return decoded
+        # Une limite native, une fonctionnalité non prise en charge ou un
+        # moteur absent conservent exactement le comportement existant.
         dctx = (zstd.ZstdDecompressor(dict_data=dictionary)
                 if dictionary else zstd.ZstdDecompressor())
         try:

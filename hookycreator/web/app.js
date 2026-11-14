@@ -22,6 +22,7 @@ const state = {
   anchor: null,
   shown: { models: 48, textures: 48, ensembles: 48 },
   system: null,
+  engine: null,
   fullscreen: false,
 };
 
@@ -1552,10 +1553,40 @@ async function refreshSystem() {
   try {
     const payload = await api("/api/system");
     state.system = payload.cache;
+    state.engine = payload.engine;
     renderMemory();
+    renderEngine();
     renderStatus();
   } catch (error) {
     log("error", `mémoire indisponible : ${error.message}`);
+  }
+}
+
+function renderEngine() {
+  const list = $("#engine-list");
+  const hint = $("#engine-hint");
+  if (!list || !state.engine) return;
+  const rust = state.engine.rust || {};
+  const texture = state.engine.texture || {};
+  const zstd = state.engine.zstd || {};
+  const sarc = state.engine.sarc || {};
+  const restbl = state.engine.restbl || {};
+  const renderer = rust.available ? "Rust" : "Python (repli)";
+  const geometry = rust.available ? "Rust si compatible, sinon Python" : "Python (repli)";
+  list.innerHTML = `
+    <li><span class="k">Moteur Rust</span><b>${rust.available ? "actif" : "inactif"}</b></li>
+    <li><span class="k">Rendu des aperçus</span><b>${renderer}</b></li>
+    <li><span class="k">Indices et positions BFRES 10</span><b>${geometry}</b></li>
+    <li><span class="k">Filtre des triangles BFRES 10</span><b>${geometry}</b></li>
+    <li><span class="k">Disposition des textures</span><b>${esc(texture.deswizzle || "Python")}</b></li>
+    <li><span class="k">Encodage BNTX pris en charge</span><b>${renderer}</b></li>
+    <li><span class="k">Décodage BCn</span><b>${esc(texture.label || "inconnu")}</b></li>
+    <li><span class="k">Décompression Zstandard</span><b>${esc(zstd.label || "inconnu")}</b></li>
+    <li><span class="k">Lecture et reconstruction SARC</span><b>${esc(sarc.label || "inconnu")}</b></li>
+    <li><span class="k">Lecture et reconstruction RESTBL</span><b>${esc(restbl.label || "inconnu")}</b></li>`;
+  if (hint) {
+    hint.textContent = [rust.available ? "" : rust.reason, texture.hint, zstd.hint]
+      .filter(Boolean).join(" · ") || "Moteur natif chargé.";
   }
 }
 

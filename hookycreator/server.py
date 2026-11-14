@@ -23,6 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from hookymod import bntx, native, restbl, sarc, zs
+
 from . import blend as blend_mod
 from .project import Project, ProjectError
 
@@ -221,7 +223,12 @@ class HookyCreatorServer:
         # -- cache, mémoire, maintenance
         if route == "/api/system":
             return _json({"cache": project.cache_stats(),
-                          "settings": project.settings.as_json()})
+                          "settings": project.settings.as_json(),
+                          "engine": {"rust": native.status(),
+                                     "texture": bntx.decoder_backend(),
+                                     "zstd": zs.decoder_backend(),
+                                     "sarc": sarc.backend(),
+                                     "restbl": restbl.backend()}})
 
         if route == "/api/thumbs/warm":
             return _json({"warm": project.warm_thumbnails()})

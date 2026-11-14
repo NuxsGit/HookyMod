@@ -29,3 +29,7 @@ previews/
 # HookyCreator (démo locale, dossier de travail)
 demo/
 hookycreator_work/
+
+# Bibliothèques locales compilées par tools/build_rust.py (reproductibles).
+/rust/target/
+/hookymod/_native_lib/

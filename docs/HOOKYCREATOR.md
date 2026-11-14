@@ -15,6 +15,25 @@ Le dossier du projet peut être un `romfs` complet (avec `Pack/ZsDic.pack.zs`)
 ou un simple dossier contenant trois-quatre assets extraits : les dictionnaires
 zstd sont cherchés dans le projet et ses parents.
 
+## Accélération Rust
+
+Ferme l'application, double-clique sur `Compiler_Rust.bat` (Windows), puis
+relance HookyCreator. Avec Rust et Cargo installés, cela compile le moteur sans
+télécharger de crates. **Réglages → Moteur & performances** indique s'il est
+chargé et quel décodeur de textures est utilisé. Sans la bibliothèque compilée,
+l'application continue avec ses implémentations Python existantes.
+
+C'est une **migration progressive**, pas encore une réécriture complète : le
+rendu des pixels, la disposition et l'encodage BNTX, BC1–BC5 en lecture de
+repli, les traitements BFRES compatibles, la lecture/reconstruction SARC et
+RESTBL et une partie de la décompression Zstandard sont natifs quand compatibles.
+Les objets et modifications des tables restent en Python. La compression et
+certaines lectures directes utilisent encore `zstandard` ; le module Python
+reste requis. Serveur, parsing BFRES complet, exports et interface restent dans
+l'architecture actuelle. Détails,
+formats et tests :
+[`RUST.md`](RUST.md).
+
 ## Ce que fait chaque onglet
 
 | Onglet | Actions | État |
@@ -175,8 +194,9 @@ indices) : redessiner une grille de vingt-cinq modèles à chaque ouverture pren
   ou changer l'anticrénelage invalide la vignette tout seul. Servir les mêmes
   vingt-cinq tuiles prend désormais **3 ms** ;
 * **préchauffage** — au démarrage, deux fils remplissent le cache en tâche de
-  fond (le décodage reste mono-thread : c'est du Python pur) ; la barre d'état
-  affiche `vignettes 12/25`. Ce qui est déjà en cache est sauté ;
+  fond ; la barre d'état affiche `vignettes 12/25`. Ce qui est déjà en cache
+  est sauté. Les noyaux Rust libèrent le GIL, mais le parsing et certaines
+  étapes restent en Python ;
 * **ETag** — le navigateur reçoit un `ETag` par image et redemande `304` : une
   vignette déjà vue ne retélécharge aucun octet. L'URL porte `&v=<date>`, donc
   une modification du fichier change l'URL et l'image.

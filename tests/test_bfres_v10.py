@@ -48,7 +48,7 @@ def make_v10(positions, uvs=None, triangles=None):
 
     data[0:4] = b"FRES"
     struct.pack_into("<I", data, 0x08, 0x000A0400)
-    struct.pack_into("<H", data, 0x0C, 0xFFFE)
+    data[0x0C:0x0E] = b"\xff\xfe"                 # BOM Switch little-endian
     struct.pack_into("<Q", data, 0x28, 0xF0)            # FMDL
     struct.pack_into("<Q", data, 0x170, base)           # base des tampons
 
@@ -62,6 +62,13 @@ def make_v10(positions, uvs=None, triangles=None):
     name_ref = put_string(0x2A0, "Modele_Test")
     p0_ref = put_string(0x2B0, "_p0")
     u0_ref = put_string(0x2B8, "_u0")
+
+    # --- dictionnaire de modèles présent, avec une clé ; le lecteur BFRES
+    # classique ne reconnaît pas cette disposition v10 et passe au lecteur
+    # dédié. Le pointeur FMDL reste à 0x28, comme dans les fichiers mesurés.
+    struct.pack_into("<Q", data, 0x30, 0x300)
+    struct.pack_into("<II", data, 0x300, 0, 1)
+    struct.pack_into("<Q", data, 0x320, name_ref)
 
     # --- FMDL
     data[0xF0:0xF4] = b"FMDL"
@@ -153,6 +160,32 @@ class DataDrivenTests(unittest.TestCase):
         self.assertTrue(report.uv)
         self.assertAlmostEqual(meshes[0].uvs[5][0], uvs[5][0], places=3)
 
+    def test_bfres_file_uses_v10_reader_with_a_model_dictionary(self):
+        positions, uvs, triangles = self._grid()
+        data = make_v10(positions, uvs, triangles)
+        file = bfres.BfresFile.parse(data)
+        self.assertIsNotNone(file.v10_report)
+        meshes = bfres.meshes_from_file(file)
+        self.assertEqual(len(meshes), 1)
+        self.assertEqual(meshes[0].faces, triangles)
+        self.assertEqual(len(meshes[0].positions), len(positions))
+
+    def test_absent_or_truncated_model_dictionary_does_not_invent_geometry(self):
+        original = make_v10(*self._grid())
+        for kind in ("absent", "tronqué"):
+            data = bytearray(original)
+            if kind == "absent":
+                struct.pack_into("<Q", data, 0x30, 0)
+            else:
+                struct.pack_into("<Q", data, 0x30, len(data) - 8)
+                struct.pack_into("<II", data, len(data) - 8, 0, 1)
+            with self.subTest(kind=kind):
+                file = bfres.BfresFile.parse(bytes(data))
+                self.assertEqual(file.models, [])
+                self.assertIsNone(file.v10_report)
+                self.assertTrue(any("dictionnaire de modèles" in msg.lower()
+                                    for msg in file.warnings))
+
     def test_garbage_vertex_buffer_is_refused(self):
         data = bytearray(make_v10(*self._grid()))
         base = struct.unpack_from("<Q", data, 0x170)[0]
@@ -160,6 +193,9 @@ class DataDrivenTests(unittest.TestCase):
         for offset in range(start, len(data), 16):
             struct.pack_into("<3f", data, offset, float("nan"), 0.0, 0.0)
         self.assertIsNone(bfres_v10.parse(bytes(data)))
+        file = bfres.BfresFile.parse(bytes(data))
+        self.assertEqual(file.models, [])
+        self.assertTrue(any("géométrie non extraite" in msg for msg in file.warnings))
 
 
 class StrideDetectionTests(unittest.TestCase):

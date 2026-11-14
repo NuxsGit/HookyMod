@@ -1,0 +1,19 @@
+# Manifest minimal pour un build hors ligne. Voir ../README.md.
+[package]
+name = "twox-hash"
+version = "2.1.2"
+edition = "2021"
+rust-version = "1.81"
+license = "MIT"
+
+[features]
+default = ["std", "xxhash64"]
+std = ["alloc"]
+alloc = []
+xxhash64 = []
+# Déclarées pour les cfg du code upstream, non activées par HookyMod.
+xxhash32 = []
+xxhash3_64 = []
+xxhash3_128 = []
+random = []
+serialize = []
