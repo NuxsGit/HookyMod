@@ -92,3 +92,74 @@ format, offset, pas) au lieu de supposer une disposition. Conséquence :
   d'indices ignorés, LOD inférieurs inclus, attributs non décodés.
 
 Détail des mesures et méthode : `docs/trainIA/README.md`.
+
+## Budget mémoire et culling
+
+Un aperçu 3D coûte de la mémoire même sans carte graphique : chaque sommet et
+chaque face est copié dans une structure de rendu, et l'image garde un tampon
+de couleurs plus un tampon de profondeur. Sur un modèle de plusieurs centaines
+de milliers de faces, cela suffit à faire tomber la machine.
+
+L'onglet **Réglages** fixe donc un **budget**, en gigaoctets :
+
+* **6 Go par défaut**, réglable de 1 à **25 Go** ;
+* anticrénelage ×1 à ×4, plafond de faces facultatif ;
+* culling des faces arrière et culling hors écran, activables séparément ;
+* dégradation automatique activable — sinon l'aperçu est refusé net.
+
+La dégradation suit un ordre fixe et **le dit** : d'abord l'anticrénelage
+redescend, ensuite le nombre de faces dessinées est limité au prorata, et si
+même cela ne rentre pas, l'aperçu est refusé avec les chiffres exacts (« il
+faudrait 8,2 Go pour un budget de 6 Go »). Le panneau du modèle affiche
+l'estimation en direct, la part du budget utilisée et les décisions prises.
+
+Côté code : `hookycreator/settings.py` (bornes et persistance dans
+`work/settings.json`), `hookycreator/vram.py` (estimation, plan, découpe des
+maillages), `hookymod/render.py` (`frustum=` pour l'élagage hors écran).
+L'API expose `/api/settings` (GET/POST) et `/api/model/plan`.
+
+## Une fenêtre d'atelier, pas un site
+
+L'interface reprend les codes d'un logiciel de bureau : barre de titre avec
+menus déroulants (Fichier, Édition, Modèle, Texture, Blender, Affichage, Aide),
+rail d'activités à gauche, **onglets de documents** (un modèle, une texture, un
+`.blend` ouvert restent ouverts), inspecteur docké à droite, **journal** en bas
+(Ctrl+J) et barre d'état (projet, compteurs, budget, heure).
+
+| raccourci | effet |
+|---|---|
+| Ctrl+K | palette de commandes (vues, actions, modèles, textures, `.blend`) |
+| Ctrl+J | journal |
+| Ctrl+1 … Ctrl+6 | accueil, modèles, textures, mobs, blender, réglages |
+| Ctrl+F | filtrer la vue courante |
+| F5 | rafraîchir le projet |
+| Échap | fermer menu, palette et inspecteur |
+
+L'accent (menthe, azur, ambre, framboise) et la densité (confort, compact) se
+règlent dans **Réglages → Interface** et sont mémorisés avec le reste.
+
+## Traduire un `.blend` (sans Blender)
+
+Onglet **Blender** : on dépose un `.blend`, l'atelier le lit lui-même.
+
+1. le fichier est décompressé si besoin (Blender 3.0+ enregistre en zstd) ;
+2. son **ADN** (SDNA) est lu pour interpréter ses blocs — aucune disposition de
+   structure n'est codée en dur ;
+3. les objets, leur matrice et leur maillage sont extraits, quelle que soit la
+   génération : `mvert`/`mpoly`/`mloop` (2.5 → 3.6), attributs `CustomData`
+   (3.5+), `face_offset_indices` (4.1+) ;
+4. les faces sont triangulées, les coordonnées ramenées de l'axe Z (Blender) à
+   l'axe Y (jeu), et la géométrie peut être mise à l'échelle du modèle cible ;
+5. un aperçu PNG s'affiche **avant** l'injection, et un second après.
+
+**Où ça s'arrête, et pourquoi.** L'injection réécrit la géométrie *dans* le
+BFRES cible en gardant sa disposition (attributs, strides, matériaux). Cela
+demande de connaître la table des sous-maillages du fichier. Un BFRES 7/8 se
+réécrit ; un **BFRES 10.x se lit mais ne se réécrit pas encore** : sa table de
+sous-maillages n'est pas décodée, donc on ne peut pas promettre que le jeu
+affichera le bon nombre de triangles. Dans ce cas l'atelier refuse avec ce
+message et propose l'export Blender — il ne produit jamais un fichier faux.
+
+Formats acceptés pour le `.blend` : Blender 2.5 à 4.x, compressé ou non.
+Rien n'est écrit dans le dump : le résultat part dans le dossier de travail et
+sera repris par l'assemblage du mod.

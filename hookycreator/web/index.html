@@ -1,129 +1,377 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-accent="menthe" data-density="confort">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HookyCreator — atelier de contenu</title>
+<title>HookyCreator</title>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦋</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23121a29'/><path d='M8 22 L16 8 L24 22 Z' fill='none' stroke='%2338e0c0' stroke-width='2.5'/></svg>">
 </head>
 <body>
-<aside class="rail">
-  <div class="brand">
-    <span class="mark">HC</span>
-    <div>
-      <strong>HookyCreator</strong>
-      <small>atelier de contenu</small>
-    </div>
-  </div>
-  <nav>
-    <button class="nav" data-view="home" aria-current="page"><span>◈</span>Accueil</button>
-    <button class="nav" data-view="textures"><span>▩</span>Textures</button>
-    <button class="nav" data-view="models"><span>◭</span>Modèles</button>
-    <button class="nav" data-view="mobs"><span>✦</span>Mobs</button>
-    <button class="nav" data-view="mod"><span>⤓</span>Mod</button>
-  </nav>
-  <footer>
-    <div id="dict-state" class="pill">dictionnaires…</div>
-    <p class="hint">Aucun code Nintendo : tout est lu et écrit par HookyMod.</p>
-  </footer>
-</aside>
+<div class="app">
 
-<main>
-  <header class="topbar">
-    <div class="path">
-      <span class="dot"></span>
-      <code id="root-path">—</code>
+  <!-- ============================================================ barre de titre -->
+  <header class="titlebar">
+    <div class="win-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="brand"><span class="brand-mark"></span>HookyCreator</div>
+
+    <nav class="menubar" id="menubar">
+      <button class="menu-btn" data-menu="fichier">Fichier</button>
+      <button class="menu-btn" data-menu="edition">Édition</button>
+      <button class="menu-btn" data-menu="modele">Modèle</button>
+      <button class="menu-btn" data-menu="texture">Texture</button>
+      <button class="menu-btn" data-menu="blender">Blender</button>
+      <button class="menu-btn" data-menu="affichage">Affichage</button>
+      <button class="menu-btn" data-menu="aide">Aide</button>
+    </nav>
+
+    <div class="titlebar-right">
+      <button class="palette-btn" id="palette-btn" title="Palette de commandes (Ctrl+K)">
+        <span>⌘K</span> commandes
+      </button>
+      <span class="project-name" id="project-name" title="Projet ouvert">—</span>
     </div>
-    <div class="stats" id="stats"></div>
-    <input id="search" type="search" placeholder="filtrer…" autocomplete="off">
   </header>
+  <div class="menus" id="menus" hidden></div>
 
-  <section class="view" id="view-home">
-    <div class="hero">
-      <h1>Que veux-tu créer&nbsp;?</h1>
-      <p>Un mob, une nouvelle peau, un modèle retouché dans Blender&nbsp;: tout finit dans un
-         dossier <code>mods/</code> prêt à charger.</p>
-      <div class="quick">
-        <button class="card-action" data-goto="textures"><b>Modifier une texture</b><span>remplacer les pixels en gardant format et mips</span></button>
-        <button class="card-action" data-goto="mobs"><b>Créer un mob</b><span>copier un modèle + ses textures sous un nouveau nom</span></button>
-        <button class="card-action" data-goto="models"><b>Ouvrir un modèle</b><span>aperçu 3D, export glTF pour Blender</span></button>
-        <button class="card-action" data-goto="mod"><b>Assembler le mod</b><span>romfs/ + manifeste, prêt pour le jeu</span></button>
+  <!-- ============================================================ espace de travail -->
+  <div class="workspace">
+    <nav class="rail" id="rail">
+      <button class="rail-btn" data-view="home" title="Accueil (Ctrl+1)">
+        <svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>
+        <span>Accueil</span>
+      </button>
+      <button class="rail-btn" data-view="models" title="Modèles (Ctrl+2)">
+        <svg viewBox="0 0 24 24"><path d="M12 3 21 8v8l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
+        <span>Modèles</span>
+      </button>
+      <button class="rail-btn" data-view="textures" title="Textures (Ctrl+3)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-4 4 3 4-4 5 5"/></svg>
+        <span>Textures</span>
+      </button>
+      <button class="rail-btn" data-view="mobs" title="Mobs (Ctrl+4)">
+        <svg viewBox="0 0 24 24"><path d="M5 20v-6a7 7 0 0 1 14 0v6"/><circle cx="9.5" cy="10" r="1.3"/><circle cx="14.5" cy="10" r="1.3"/><path d="M10 14h4"/></svg>
+        <span>Mobs</span>
+      </button>
+      <button class="rail-btn" data-view="blender" title="Blender (Ctrl+5)">
+        <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 12 21 6"/></svg>
+        <span>Blender</span>
+      </button>
+      <button class="rail-btn" data-view="settings" title="Réglages (Ctrl+6)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+        <span>Réglages</span>
+      </button>
+      <div class="rail-gap"></div>
+      <button class="rail-btn" id="rail-console" title="Journal (Ctrl+J)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+        <span>Journal</span>
+      </button>
+    </nav>
+
+    <main class="editor">
+      <div class="tabs" id="tabs"></div>
+
+      <div class="views" id="views">
+
+        <!-- ---------------------------------------------------------- accueil -->
+        <section class="view" id="view-home">
+          <div class="view-head">
+            <div>
+              <h2>Atelier</h2>
+              <p class="muted" id="home-sub">Chargement du projet…</p>
+            </div>
+            <div class="chips" id="stats"></div>
+          </div>
+
+          <div class="quick">
+            <button class="quick-card" data-goto="models">
+              <b>Modèles</b><small>Voir, inspecter, exporter, traduire un .blend</small>
+            </button>
+            <button class="quick-card" data-goto="textures">
+              <b>Textures</b><small>Remplacer une image par la tienne</small>
+            </button>
+            <button class="quick-card" data-goto="mobs">
+              <b>Nouveau mob</b><small>Dupliquer un modèle et changer ses textures</small>
+            </button>
+            <button class="quick-card" data-goto="blender">
+              <b>Traduire un .blend</b><small>Blender → modèle du jeu, sans Blender</small>
+            </button>
+          </div>
+
+          <div class="split">
+            <section class="panel">
+              <header class="panel-head"><h3>Projet</h3></header>
+              <ul class="kv-list" id="activity"></ul>
+            </section>
+            <section class="panel">
+              <header class="panel-head">
+                <h3>Export complet</h3>
+                <label class="check"><input type="checkbox" id="bulk-anim"> animations</label>
+              </header>
+              <div class="panel-body">
+                <p class="hint">Décompresse tout le projet en PNG et OBJ : utile pour
+                  vérifier d'un coup d'œil ce que l'atelier sait lire.</p>
+                <button class="btn primary" id="bulk-start">Lancer l'export complet</button>
+                <div class="progress" id="bulk-bar" hidden>
+                  <div class="progress-fill" id="bulk-fill"></div>
+                  <span class="progress-label" id="bulk-label"></span>
+                </div>
+                <ul class="report" id="bulk-report"></ul>
+              </div>
+            </section>
+            <section class="panel">
+              <header class="panel-head">
+                <h3>Assembler le mod</h3>
+              </header>
+              <form class="panel-body" id="mod-form">
+                <label class="field">
+                  <span>Nom du mod</span>
+                  <input name="name" value="HookyMod" spellcheck="false">
+                </label>
+                <button class="btn" type="submit">Construire <code>mods/</code></button>
+                <ul class="kv-list" id="mod-log"></ul>
+              </form>
+            </section>
+          </div>
+
+          <section class="panel">
+            <header class="panel-head"><h3>Dernières actions</h3></header>
+            <ul class="log" id="home-log"></ul>
+          </section>
+        </section>
+
+        <!-- ---------------------------------------------------------- modèles -->
+        <section class="view" id="view-models" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Modèles</h2>
+              <p class="muted" id="model-count">—</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search" placeholder="Filtrer… (Ctrl+F)">
+              <label class="check"><input type="checkbox" id="model-shots"> vignettes 3D</label>
+            </div>
+          </div>
+          <div class="grid" id="model-grid"></div>
+        </section>
+
+        <!-- ---------------------------------------------------------- textures -->
+        <section class="view" id="view-textures" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Textures</h2>
+              <p class="muted" id="texture-count">—</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search-tex" placeholder="Filtrer…">
+            </div>
+          </div>
+          <div class="grid" id="texture-grid"></div>
+        </section>
+
+        <!-- ---------------------------------------------------------- mobs -->
+        <section class="view" id="view-mobs" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Mobs</h2>
+              <p class="muted">Un mob, c'est un modèle du jeu dupliqué sous un autre nom,
+                avec ses propres textures.</p>
+            </div>
+          </div>
+          <div class="split">
+            <section class="panel">
+              <header class="panel-head"><h3>Nouveau mob</h3></header>
+              <form class="panel-body" id="mob-form">
+                <label class="field"><span>Nom affiché</span>
+                  <input name="name" id="mob-name" placeholder="Cheval de Link" required></label>
+                <label class="field"><span>Parent (facultatif)</span>
+                  <input name="parent" id="mob-parent" placeholder="Animal_Horse"></label>
+                <label class="field"><span>Modèle source</span>
+                  <select id="mob-model" name="model"></select></label>
+                <label class="field"><span>Textures (plusieurs possibles)</span>
+                  <select id="mob-textures" multiple size="6"></select></label>
+                <button class="btn primary" type="submit">Créer la fiche</button>
+              </form>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h3>Fiches existantes</h3></header>
+              <div class="grid small" id="mob-grid"></div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- blender -->
+        <section class="view" id="view-blender" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Blender → jeu</h2>
+              <p class="muted">Le fichier <code>.blend</code> est lu par HookyMod lui-même
+                (aucun Blender installé) : on en sort la géométrie, puis on l'injecte
+                dans un modèle du jeu en gardant ses matériaux.</p>
+            </div>
+          </div>
+
+          <div class="split blend">
+            <section class="panel">
+              <header class="panel-head"><h3>1 · Fichier</h3></header>
+              <div class="panel-body">
+                <div class="drop" id="blend-drop">
+                  <strong>Dépose un .blend ici</strong>
+                  <small>ou</small>
+                  <label class="btn" for="blend-file">Choisir un fichier…</label>
+                  <input type="file" id="blend-file" accept=".blend" hidden>
+                </div>
+                <label class="field"><span>Fichiers disponibles</span>
+                  <select id="blend-list" size="6"></select></label>
+                <div class="row">
+                  <button class="btn" id="blend-inspect">Analyser</button>
+                  <button class="btn ghost" id="blend-preview-btn">Aperçu</button>
+                </div>
+                <dl class="kv" id="blend-info"></dl>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>2 · Réglages de la conversion</h3></header>
+              <div class="panel-body">
+                <label class="field"><span>Axes</span>
+                  <select id="blend-axis">
+                    <option value="y_up">Blender Z-up → jeu Y-up (recommandé)</option>
+                    <option value="keep">Garder les axes du fichier</option>
+                  </select></label>
+                <label class="field"><span>Échelle</span>
+                  <input type="number" id="blend-scale" value="1" step="0.1" min="0.001" max="1000"></label>
+                <label class="field"><span>Seulement l'objet (nom)</span>
+                  <input id="blend-only" placeholder="ex. Corps"></label>
+                <label class="check"><input type="checkbox" id="blend-fit" checked>
+                  adapter à la taille du modèle du jeu</label>
+                <label class="field"><span>Modèle cible</span>
+                  <select id="blend-target"></select></label>
+                <button class="btn primary" id="blend-translate">Injecter dans le modèle</button>
+                <p class="hint">Le modèle d'origine n'est jamais écrasé : le résultat part
+                  dans le dossier de travail et sera repris par l'assemblage du mod.</p>
+              </div>
+            </section>
+
+            <section class="panel wide">
+              <header class="panel-head"><h3>3 · Vérification</h3></header>
+              <div class="panel-body">
+                <div class="shots">
+                  <figure><img id="blend-preview" alt="aperçu du .blend"><figcaption>.blend</figcaption></figure>
+                  <figure><img id="blend-result-shot" alt="aperçu du modèle modifié"><figcaption>modèle injecté</figcaption></figure>
+                </div>
+                <ul class="report" id="blend-report"></ul>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- réglages -->
+        <section class="view" id="view-settings" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Réglages</h2>
+              <p class="muted">Le budget décide de ce que l'aperçu s'autorise. Rien n'est
+                envoyé ailleurs : tout est écrit dans <code>settings.json</code> du dossier
+                de travail.</p>
+            </div>
+            <button class="btn ghost" id="set-reset">Valeurs par défaut</button>
+          </div>
+
+          <div class="split">
+            <section class="panel">
+              <header class="panel-head"><h3>Mémoire</h3></header>
+              <div class="panel-body">
+                <label class="field"><span>Budget des aperçus
+                  <b id="set-vram-out">6 Go</b></span>
+                  <input type="range" id="set-vram" min="1" max="25" step="0.5">
+                </label>
+                <div class="gauge"><div class="gauge-fill" id="set-vram-fill"></div></div>
+                <p class="hint">6 Go évite les plantages sur un poste modeste ; au-delà,
+                  les très gros modèles s'affichent plus finement.</p>
+                <label class="field"><span>Anticrénelage <b id="set-ss-out">×2</b></span>
+                  <input type="range" id="set-ss" min="1" max="4" step="1">
+                </label>
+                <label class="field"><span>Plafond de faces <b id="set-faces-out">auto</b></span>
+                  <input type="range" id="set-faces" min="0" max="500000" step="5000">
+                </label>
+                <label class="check"><input type="checkbox" id="set-cull">
+                  culling des faces vues de dos</label>
+                <label class="check"><input type="checkbox" id="set-frustum">
+                  culling des faces hors écran</label>
+                <label class="check"><input type="checkbox" id="set-adaptive">
+                  dégrader plutôt que refuser</label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>Interface</h3></header>
+              <div class="panel-body">
+                <label class="field"><span>Couleur d'accent</span>
+                  <select id="set-accent"></select></label>
+                <label class="field"><span>Densité</span>
+                  <select id="set-density"></select></label>
+                <label class="field"><span>Plafond des vignettes</span>
+                  <select id="set-thumb-faces">
+                    <option value="0">auto (budget)</option>
+                    <option value="20000">20 000 faces</option>
+                    <option value="80000">80 000 faces</option>
+                    <option value="300000">300 000 faces</option>
+                  </select></label>
+                <label class="check"><input type="checkbox" id="set-export-textures">
+                  joindre les PNG à l'export Blender</label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>Résumé</h3></header>
+              <ul class="kv-list" id="settings-summary"></ul>
+            </section>
+          </div>
+        </section>
       </div>
-    </div>
-    <div class="panel" id="home-bulk">
-      <h2>Tout exploiter</h2>
-      <p class="muted" style="margin:0 0 12px">
-        Décode <b>toutes</b> les textures en PNG et exporte <b>tous</b> les modèles
-        (glTF + OBJ), y compris ceux qui sont dans les packs <code>.pack.zs</code>.
-        Un rapport liste ce qui a réussi et ce qui ne l'a pas été.
-      </p>
-      <div class="actions" style="margin-top:0">
-        <button class="primary" id="bulk-start">Lancer l'export complet</button>
-        <label class="muted" style="display:flex;gap:6px;align-items:center;font-size:12.5px">
-          <input type="checkbox" id="bulk-anim"> inclure les animations (seront ignorées pour l'instant)
-        </label>
-      </div>
-      <div class="bar" id="bulk-bar" hidden><div id="bulk-fill"></div></div>
-      <p class="muted" id="bulk-label" style="font-size:12.5px;margin:8px 0 0"></p>
-      <ul class="list" id="bulk-report" style="margin-top:10px"></ul>
-    </div>
-    <div class="panel" id="home-activity">
-      <h2>État du projet</h2>
-      <ul class="list" id="activity"><li class="muted">chargement…</li></ul>
-    </div>
-  </section>
 
-  <section class="view" id="view-textures" hidden>
-    <div class="section-head">
-      <h2>Textures</h2>
-      <p>Clique une texture pour la prévisualiser et remplacer son contenu.</p>
-    </div>
-    <div class="grid" id="texture-grid"></div>
-  </section>
+      <section class="console" id="console" hidden>
+        <header class="console-head">
+          <h3>Journal</h3>
+          <button class="btn ghost tiny" id="console-clear">vider</button>
+          <button class="btn ghost tiny" id="console-close">fermer</button>
+        </header>
+        <ol class="log lines" id="console-log"></ol>
+      </section>
+    </main>
 
-  <section class="view" id="view-models" hidden>
-    <div class="section-head">
-      <h2>Modèles</h2>
-      <p>Aperçu rendu côté serveur, puis export glTF/OBJ pour Blender.</p>
-    </div>
-    <div class="grid" id="model-grid"></div>
-  </section>
+    <aside class="inspector" id="inspector" hidden>
+      <header class="inspector-head">
+        <h3 id="inspector-title">Détail</h3>
+        <button class="icon-btn" id="inspector-close" title="Fermer (Échap)">✕</button>
+      </header>
+      <div class="inspector-body" id="inspector-body"></div>
+    </aside>
+  </div>
 
-  <section class="view" id="view-mobs" hidden>
-    <div class="section-head">
-      <h2>Mobs</h2>
-      <p>Une fiche par mob&nbsp;: modèle, textures, et ce qu'il reste à faire côté jeu.</p>
-    </div>
-    <form class="creator" id="mob-form">
-      <label>Nom du mob<input name="name" placeholder="PapillonDoré" required></label>
-      <label>Modèle de base<select name="model" id="mob-model"></select></label>
-      <label>Textures<select name="textures" id="mob-textures" multiple size="4"></select></label>
-      <button type="submit" class="primary">Créer la fiche</button>
-    </form>
-    <div class="grid" id="mob-grid"></div>
-  </section>
+  <!-- ============================================================ barre d'état -->
+  <footer class="statusbar">
+    <span class="status-dot" id="status-dot"></span>
+    <span id="status-message">prêt</span>
+    <span class="status-gap"></span>
+    <span id="status-counts"></span>
+    <span id="status-budget"></span>
+    <span id="status-project"></span>
+    <span id="status-clock">—</span>
+  </footer>
+</div>
 
-  <section class="view" id="view-mod" hidden>
-    <div class="section-head">
-      <h2>Assembler le mod</h2>
-      <p>Copie tout ce qui a été modifié dans <code>mods/&lt;nom&gt;/romfs/</code> avec son
-         chemin d'origine, plus un manifeste lisible.</p>
-    </div>
-    <form class="creator" id="mod-form">
-      <label>Nom du mod<input name="name" value="HookyMod" required></label>
-      <button type="submit" class="primary">Assembler</button>
-    </form>
-    <div class="panel"><ul class="list" id="mod-log"><li class="muted">rien pour l'instant.</li></ul></div>
-  </section>
-</main>
-
-<aside class="detail" id="detail" hidden>
-  <button class="close" id="detail-close" aria-label="fermer">✕</button>
-  <div id="detail-body"></div>
-</aside>
-
+<!-- ============================================================ palette -->
+<div class="palette" id="palette" hidden>
+  <div class="palette-box">
+    <input id="palette-input" placeholder="Taper une commande, un modèle, une texture…"
+           autocomplete="off" spellcheck="false">
+    <ul class="palette-list" id="palette-list"></ul>
+  </div>
+</div>
 <div class="toasts" id="toasts"></div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

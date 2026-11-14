@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import blend as blend_mod
 from .project import Project, ProjectError
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -69,6 +70,19 @@ class HookyCreatorServer:
         if route == "/api/state":
             return _json({"project": project.state()})
 
+        if route == "/api/settings":
+            if method == "POST":
+                return _json({"settings": project.update_settings(body or {})})
+            return _json({"settings": project.settings.as_json()})
+
+        if route == "/api/model/plan":
+            width = _size(query, "w", 640)
+            height = _size(query, "h", 480)
+            faces = query.get("faces", [None])[0]
+            plan = project.preview_plan(query["path"][0], width, height,
+                                        int(faces) if faces else None)
+            return _json({"plan": plan, "settings": project.settings.as_json()})
+
         if route == "/api/textures":
             entries = [a.as_json() for a in project.by_kind("texture")]
             return _json({"textures": entries})
@@ -101,13 +115,15 @@ class HookyCreatorServer:
             return _json(project.model_info(query["path"][0]))
 
         if route == "/api/model/preview":
-            width = max(64, min(1600, int(query.get("w", ["640"])[0])))
-            height = max(64, min(1600, int(query.get("h", ["480"])[0])))
+            width = _size(query, "w", 640)
+            height = _size(query, "h", 480)
             yaw = float(query.get("yaw", ["0.7"])[0])
             pitch = float(query.get("pitch", ["-0.35"])[0])
             views = max(1, min(8, int(query.get("views", ["1"])[0])))
+            faces = query.get("faces", [None])[0]
             return project.model_preview(query["path"][0], width, height, yaw, pitch,
-                                         views), "image/png"
+                                         views,
+                                         int(faces) if faces else None), "image/png"
 
         if route == "/api/model/export":
             return _json(project.export_model(body["path"], textures=bool(body.get("textures", True))))
@@ -125,6 +141,34 @@ class HookyCreatorServer:
 
         if route == "/api/bulk/status":
             return _json(self.job)
+
+        # -- traduction .blend → modèle du jeu
+        if route == "/api/blend/list":
+            return _json({"blends": blend_mod.list_blends(project)})
+
+        if route == "/api/blend/inspect":
+            ref = body.get("ref") if method == "POST" else query.get("ref", [""])[0]
+            return _json(blend_mod.inspect(
+                project, ref,
+                axis=str((body or {}).get("axis", "y_up")),
+                scale=_scale(body or {}),
+                only=(body or {}).get("only") or None))
+
+        if route == "/api/blend/preview":
+            return blend_mod.preview_png(
+                project, query.get("ref", [""])[0], _size(query, "w", 640),
+                _size(query, "h", 480),
+                axis=str(query.get("axis", ["y_up"])[0]),
+                scale=_scale(query),
+                only=query.get("only", [None])[0] or None,
+                views=max(1, min(8, int(query.get("views", ["1"])[0])))), "image/png"
+
+        if route == "/api/blend/translate":
+            return _json(blend_mod.translate(
+                project, body.get("ref", ""), body.get("target", ""),
+                model=int(body.get("model", 0) or 0), shape=int(body.get("shape", 0) or 0),
+                axis=str(body.get("axis", "y_up")), scale=_scale(body),
+                only=body.get("only") or None, fit=bool(body.get("fit", True))))
 
         if route == "/api/mod/build":
             return _json(project.build_mod(body.get("name", "HookyMod")))
@@ -171,6 +215,29 @@ class HookyCreatorServer:
         return candidate.read_bytes(), kind
 
 
+def _size(query: dict, name: str, default: int) -> int:
+    """Taille d'aperçu bornée : un PNG de 20 000 px de large n'aide personne."""
+    try:
+        value = int(query.get(name, [str(default)])[0])
+    except (TypeError, ValueError):
+        value = default
+    return max(64, min(1600, value))
+
+
+def _scale(payload: dict) -> float:
+    """Facteur d'échelle borné : 0,001 à 1000 (au-delà, c'est une faute de frappe)."""
+    raw = payload.get("scale", 1.0)
+    if isinstance(raw, list):
+        raw = raw[0] if raw else 1.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 1.0
+    if not 0.001 <= value <= 1000.0:
+        value = 1.0
+    return value
+
+
 def _json(payload: dict) -> tuple[bytes, str]:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json"
 
@@ -213,6 +280,17 @@ def _make_handler(server: HookyCreatorServer):
         def do_POST(self) -> None:               # noqa: N802
             parsed = urlparse(self.path)
             length = int(self.headers.get("Content-Length") or 0)
+            if parsed.path == "/api/blend/upload":
+                # envoi binaire brut : le nom arrive dans l'en-tête, pas dans du JSON
+                data = self.rfile.read(length) if length else b""
+                try:
+                    name = self.headers.get("X-Hooky-Filename") or "modele.blend"
+                    return self._send(*_json(blend_mod.save_upload(
+                        server.project, name, data)))
+                except ProjectError as exc:
+                    return self._error(str(exc))
+                except Exception as exc:         # jamais de trace dans l'UI
+                    return self._error(f"Erreur interne : {exc}", 500)
             raw = self.rfile.read(length) if length else b"{}"
             try:
                 body = json.loads(raw.decode("utf-8") or "{}")

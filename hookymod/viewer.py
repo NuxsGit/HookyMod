@@ -186,13 +186,17 @@ class Projector:
 
 
 def order_visible_faces(faces, projected, budget: int, cull: bool = True,
-                        min_area: float = 0.35) -> list[int]:
+                        min_area: float = 0.35,
+                        screen: tuple[int, int] | None = None) -> list[int]:
     """Faces à dessiner, de l'arrière vers l'avant, limitées à ``budget``.
 
     ``projected`` est soit une liste de points, soit un :class:`Projector`
     (projection paresseuse). Les faces trop petites ou vues de dos sont écartées
     avant le tri ; au-delà de ``8 × budget`` faces, un sous-échantillonnage
-    régulier garde une image fluide sur les très gros modèles.
+    régulier garde une image fluide sur les très gros modèles. ``screen``
+    (largeur, hauteur) active l'élagage des faces entièrement hors du cadre :
+    sur un modèle zoomé, cela évite de projeter et de trier ce qui ne sera
+    jamais dessiné.
     """
     visible: list[tuple[float, int]] = []
     total = len(faces)
@@ -207,6 +211,11 @@ def order_visible_faces(faces, projected, budget: int, cull: bool = True,
             continue
         if abs(cross) * 0.5 < min_area:
             continue
+        if screen is not None:
+            sw, sh = screen
+            if (max(p0[0], p1[0], p2[0]) < 0 or min(p0[0], p1[0], p2[0]) > sw
+                    or max(p0[1], p1[1], p2[1]) < 0 or min(p0[1], p1[1], p2[1]) > sh):
+                continue                    # entièrement hors du cadre
         visible.append(((p0[2] + p1[2] + p2[2]) / 3.0, index))
     if not visible:
         return []

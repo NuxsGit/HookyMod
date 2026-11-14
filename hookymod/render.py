@@ -30,7 +30,7 @@ def render_rgba(meshes, width: int = 800, height: int = 600,
                 yaw: float = 0.6, pitch: float = -0.3, zoom: float = 1.0,
                 cull: bool = True, max_faces: int | None = None,
                 background: tuple[int, int, int, int] = BACKGROUND,
-                supersample: int = 1) -> tuple[int, int, bytes]:
+                supersample: int = 1, frustum: bool = True) -> tuple[int, int, bytes]:
     """Rasterise les maillages et retourne ``(largeur, hauteur, rgba)``.
 
     La projection est orthographique et la profondeur vient d'un tampon ``z`` :
@@ -53,7 +53,8 @@ def render_rgba(meshes, width: int = 800, height: int = 600,
     total = len(data.faces)
     budget = total if max_faces is None else max(1, min(total, int(max_faces)))
     visible = order_visible_faces(data.faces, projector, budget, cull=cull,
-                                  min_area=0.0)
+                                  min_area=0.0,
+                                  screen=(rw, rh) if frustum else None)
     if not visible:
         raise HookyError("Aucune face visible sous cet angle "
                          "(essaie --yaw / --pitch ou désactive le culling).")
@@ -139,16 +140,17 @@ def _downsample(pixels: bytearray, rw: int, rh: int, width: int, height: int,
 def render_png(meshes, width: int = 800, height: int = 600,
                yaw: float = 0.6, pitch: float = -0.3, zoom: float = 1.0,
                cull: bool = True, max_faces: int | None = None,
-               supersample: int = 1) -> bytes:
+               supersample: int = 1, frustum: bool = True) -> bytes:
     """Comme :func:`render_rgba`, mais renvoie directement les octets PNG."""
     w, h, rgba = render_rgba(meshes, width, height, yaw, pitch, zoom, cull,
-                             max_faces, supersample=supersample)
+                             max_faces, supersample=supersample, frustum=frustum)
     return png_bytes(w, h, rgba)
 
 
 def turntable_png(meshes, views: int = 4, width: int = 480, height: int = 480,
                   pitch: float = -0.3, zoom: float = 1.0,
-                  cull: bool = True) -> bytes:
+                  cull: bool = True, frustum: bool = True,
+                  supersample: int = 1) -> bytes:
     """Planche de ``views`` rotations (de 0 à 360°) côte à côte.
 
     Pratique pour juger un modèle d'un coup d'œil sans interface graphique.
@@ -160,7 +162,8 @@ def turntable_png(meshes, views: int = 4, width: int = 480, height: int = 480,
         yaw = 6.283185307179586 * i / views
         try:
             frames.append(render_rgba(meshes, width, height, yaw, pitch, zoom,
-                                      cull))
+                                      cull, supersample=supersample,
+                                      frustum=frustum))
             rendered += 1
         except HookyError:
             # vue sans face visible (modèle plat vu de dos) : on garde la place
