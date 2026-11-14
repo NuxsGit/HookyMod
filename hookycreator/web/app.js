@@ -185,6 +185,17 @@ const VIEW_LABELS = {
   settings: "Réglages",
 };
 
+/* une image qui ne se charge pas : on marque la tuile au lieu d'afficher
+   l'icône « fichier manquant » du navigateur (visible dans toutes les grilles) */
+document.addEventListener("error", (event) => {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || image.dataset.broken) return;
+  image.dataset.broken = "1";
+  image.classList.add("broken");
+  const box = image.closest(".thumb, .strip-item");
+  if (box) box.classList.add("broken");
+}, true);
+
 /* ------------------------------------------------------------------ barre d'état */
 function renderStatus() {
   const assets = state.project?.assets || [];
@@ -192,7 +203,8 @@ function renderStatus() {
   const settings = state.settings || {};
   const node = $("#status-counts");
   if (node) {
-    node.textContent = `${count("model")} modèles · ${count("texture")} textures · `
+    node.textContent = `${count("model")} modèles · ${count("animation")} anims · `
+      + `${count("texture")} textures · `
       + `${state.project?.mobs?.length || 0} mobs`;
   }
   const budget = $("#status-budget");
@@ -210,6 +222,7 @@ function renderStatus() {
     stats.innerHTML = `
       <span class="chip"><b>${count("texture")}</b> textures</span>
       <span class="chip"><b>${count("model")}</b> modèles</span>
+      <span class="chip"><b>${count("animation")}</b> anims</span>
       <span class="chip"><b>${state.project?.mobs?.length || 0}</b> mobs</span>
       <span class="chip"><b>${state.project?.edited?.length || 0}</b> fichiers modifiés</span>
       <span class="chip" title="Budget mémoire des aperçus">budget
@@ -271,7 +284,7 @@ function tileMarkup(asset, kind) {
     <article class="tile ${chosen ? "selected" : ""}" data-kind="${kind}"
              data-rel="${esc(asset.rel)}" data-key="${esc(key)}">
       <button class="pick" data-pick="${esc(key)}" title="Sélectionner (Ctrl+clic)">✓</button>
-      <div class="thumb ${shown === "aperçu désactivé" ? "placeholder" : ""}">${shown}</div>
+      <div class="thumb ${shown === "aperçu désactivé" ? "placeholder" : ""} ${kind === "texture" ? "checker" : ""}">${shown}</div>
       <div class="meta">
         <strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
         <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}</small>
@@ -420,6 +433,7 @@ async function openModel(rel, options = {}) {
       <p class="hint">Les animations restent des fichiers séparés du jeu : elles ne sont pas
         encore injectées dans le modèle exporté.</p></details>` : ""}
     <div class="actions">
+      <button class="btn" id="btn-uv">Vérifier les UV</button>
       <button class="btn primary" id="btn-blend">Exporter en .blend</button>
       <button class="btn" id="btn-blender">Exporter pour Blender (glTF/OBJ)</button>
       <button class="btn ghost" id="btn-turntable">Planche de rotations</button>
@@ -460,6 +474,7 @@ async function openModel(rel, options = {}) {
   };
   $("#btn-blender").onclick = () => exportModel(rel);
   $("#btn-blend").onclick = () => exportBlend(rel);
+  $("#btn-uv").onclick = () => showUv(rel);
   $$("[data-open-texture]", document).forEach((node) => {
     node.onclick = () => openTexture(node.dataset.openTexture);
   });
@@ -1042,6 +1057,59 @@ async function exportModel(rel) {
   } finally {
     if (button) { button.disabled = false; button.textContent = "Exporter pour Blender"; }
   }
+}
+
+/* ------------------------------------------------------------------ vérificateur d'UV */
+function uvShot(rel, flip, size = 512) {
+  return `/api/model/uv?path=${encodeURIComponent(rel)}&size=${size}`
+    + `&flip=${flip ? 1 : 0}`;
+}
+
+async function showUv(rel) {
+  let report;
+  try {
+    report = await api(`/api/model/uv/info?path=${encodeURIComponent(rel)}`);
+  } catch (error) { toast(error.message, "error"); return; }
+  const name = rel.split("/").pop();
+  const range = (pair) => `${pair[0].toFixed(2)} → ${pair[1].toFixed(2)}`;
+  const facts = report.has_uvs
+    ? `<li><span class="k">UV décodées</span>${report.mapped_meshes}/${report.meshes} maillage(s)</li>
+       <li><span class="k">Bornes U</span>${range(report.u)}</li>
+       <li><span class="k">Bornes V</span>${range(report.v)}</li>
+       <li><span class="k">Hors [0, 1]</span>${report.outside}</li>
+       <li><span class="k">Triangles plats en UV</span>${report.degenerate}</li>
+       <li><span class="k">Étirement max</span>×${report.stretch.toFixed(1)}</li>`
+    : `<li><span class="k">UV</span>aucune coordonnée de texture dans ce modèle</li>`;
+  showInspector("UV", `
+    <h3>${esc(name)}</h3>
+    <div class="sub">Contours des triangles UV dessinés sur l'atlas :
+      si le maillage épouse les zones utiles de la texture, elle tombe juste.</div>
+    <img class="uv-shot" id="uv-shot" alt="atlas UV" src="${uvShot(rel, false)}">
+    <div class="toolbar">
+      <button class="btn tiny" id="uv-normal" aria-pressed="true">V du jeu (0 en haut)</button>
+      <button class="btn tiny" id="uv-flip" aria-pressed="false">V retourné</button>
+    </div>
+    <ul class="facts">${facts}</ul>
+    ${report.warnings.length ? `<ul class="todo">${report.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`
+      : (report.has_uvs ? `<p class="hint">Aucun défaut mesurable : coordonnées dans [0, 1],
+         pas de triangle plat, densité régulière.</p>` : "")}
+    <p class="hint">Texture comparée : ${report.texture ? esc(report.texture) : "aucune trouvée"}.
+      L'export suit chaque spécification — glTF : ${esc(report.conventions.gltf)} ;
+      OBJ : ${esc(report.conventions.obj)}. Une texture à l'envers dans Blender venait
+      d'un V retourné deux fois ; ce n'est plus le cas.</p>
+    <div class="actions">
+      <button class="btn ghost tiny" id="uv-back">← Retour à la fiche</button>
+    </div>`);
+
+  const shot = $("#uv-shot");
+  const setFlip = (flip) => {
+    shot.src = uvShot(rel, flip);
+    $("#uv-normal").setAttribute("aria-pressed", String(!flip));
+    $("#uv-flip").setAttribute("aria-pressed", String(flip));
+  };
+  $("#uv-normal").onclick = () => setFlip(false);
+  $("#uv-flip").onclick = () => setFlip(true);
+  $("#uv-back").onclick = () => openModel(rel);
 }
 
 async function exportBlend(rel) {

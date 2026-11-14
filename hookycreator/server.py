@@ -144,6 +144,19 @@ class HookyCreatorServer:
                                          int(faces) if faces else None,
                                          textured=textured), "image/png"
 
+        if route == "/api/model/uv":
+            if "path" not in query:
+                raise ProjectError("Paramètre « path » manquant.")
+            size = _size(query, "size", 640)
+            flip = query.get("flip", ["0"])[0] not in ("0", "false", "")
+            return project.uv_overlay(query["path"][0], size=size, flip=flip), \
+                "image/png"
+
+        if route == "/api/model/uv/info":
+            if "path" not in query:
+                raise ProjectError("Paramètre « path » manquant.")
+            return _json(project.uv_info(query["path"][0]))
+
         if route == "/api/model/blend":
             return _json(project.export_blend(body["path"],
                                               textures=bool(body.get("textures", True))))

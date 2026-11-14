@@ -318,3 +318,58 @@ Le bouton **Exporter en .blend** de la barre de sélection produit un seul ZIP
 `creer_blend.py` et, quand Blender est là, le `.blend` — plus un `LIRE-MOI.txt`
 qui donne la commande de chaque modèle restant. Le ZIP reste donc utilisable sur
 une machine sans Blender.
+
+# Orientation des textures (V) et vérificateur d'UV
+
+## Le bug
+
+Une épée (Biggoron) exportée pour Blender arrivait avec sa texture **à l'envers** :
+il fallait retourner l'image dans Paint pour que ça marche. Cause : l'export
+retournait V **deux fois** pour le glTF. Chaque format a sa convention, et elles
+ne sont pas les mêmes :
+
+| Format | Origine de (0, 0) | Ce que fait l'importeur Blender | Ce qu'il faut écrire |
+| --- | --- | --- | --- |
+| `.gltf` | coin **haut**-gauche (spec glTF 2.0, §3.8.3) | retourne V vers son repère (bas-gauche) | `v` **tel quel** |
+| `.obj` | coin **bas**-gauche (OpenGL) | ne retourne rien | `1 - v` |
+
+Les UV lues dans le BFRES sont déjà dans le repère du jeu (V = 0 en haut de
+l'image), comme le glTF. Écrire `1 - v` dans le glTF annulait la conversion de
+Blender : texture à l'envers. L'OBJ, lui, avait raison depuis le début — les deux
+fichiers ne doivent donc **pas** porter le même V, et c'est documenté dans
+`IMPORT_BLENDER.txt` pour éviter qu'on « corrige » l'un avec l'autre.
+
+## Le vérificateur
+
+Ouvrir un modèle ▸ **Vérifier les UV**. L'écran montre l'atlas du modèle avec les
+**triangles UV tracés dessus** (translucides, une couleur par matériau) :
+
+* si le contour du maillage épouse les zones utiles de la texture (la lame sur la
+  lame, la garde sur la garde), la texture tombe juste ;
+* le bouton **V retourné** rejoue le tracé avec `1 - v` : quand les deux se
+  ressemblent, c'est en comparant qu'on tranche, pas en devinant.
+
+Sous l'image, les chiffres qui trahissent un vrai défaut :
+
+* **bornes U / V** — un modèle dont toutes les UV sortent de [0, 1] se répète ;
+* **hors [0, 1]** — nombre de sommets concernés (tiling voulu sur un tissu,
+  suspect ailleurs) ;
+* **triangles plats en UV** — aire nulle : la texture y est réduite à un point ;
+* **étirement** — 95ᵉ centile de la densité de texels rapporté à la médiane
+  (le maximum servait de faux positif à cause d'un unique triangle minuscule).
+
+Un modèle sans coordonnées de texture le dit explicitement au lieu d'afficher un
+atlas vide.
+
+## Bugs visuels corrigés au passage
+
+* les textures transparentes se lisent sur un **damier** (elles s'affichaient sur
+  un fond noir, indistinguables d'une image noire) ;
+* une vignette qui ne se charge pas marque sa tuile « aperçu indisponible » au
+  lieu de laisser l'icône « fichier manquant » du navigateur ;
+* le rail a maintenant sept entrées : il **défile** sur une fenêtre basse au lieu
+  de rogner les dernières ;
+* `.badge` était défini deux fois (styles partiellement écrasés) : une seule
+  définition, avec les deux variantes `warn` et `off` ;
+* la barre d'état compte aussi les **animations**, et un bouton d'export
+  sélectionné indique son état (`aria-pressed`) au lieu de rester neutre.

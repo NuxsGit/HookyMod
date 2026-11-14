@@ -45,6 +45,16 @@ Les textures sont les PNG de ce dossier, déjà branchées sur les matériaux
 (base color pour l'albedo). Les noms de matériaux viennent du modèle, ce qui
 permet de retrouver à quoi correspond chaque partie.
 
+Orientation des UV (V) : chaque format suit sa spécification, donc les deux
+fichiers ne portent pas le même V — c'est normal, ne « corrige » pas l'un avec
+l'autre :
+  * .gltf : V d'origine (0 = haut de l'image, comme le jeu) ;
+  * .obj  : V retourné (0 = bas de l'image, convention OpenGL).
+
+Si une texture semble à l'envers dans Blender : ouvre « Vérifier les UV » dans
+HookyCreator (le maillage tracé sur l'atlas montre tout de suite l'orientation),
+plutôt que de retourner l'image dans un éditeur.
+
 Rien n'est trié ni fusionné : un objet Blender par maillage, comme dans le
 fichier d'origine.
 """
@@ -220,11 +230,15 @@ def _write_gltf(meshes: list[MeshData], path: Path,
             attributes["NORMAL"] = len(accessors) - 1
 
         if mesh.uvs:
-            # glTF : V vers le haut (BFRES compte à l'envers)
+            # glTF : l'origine (0,0) est le **coin supérieur gauche** de l'image
+            # (spécification glTF 2.0, §3.8.3), exactement comme les UV du jeu.
+            # Retourner V ici produisait une texture à l'envers dans Blender :
+            # l'importeur glTF de Blender applique déjà la conversion vers son
+            # propre repère (V vers le haut).
             flat = array("f")
             for u, v in mesh.uvs:
                 flat.append(u)
-                flat.append(1.0 - v)
+                flat.append(v)
             view = binary.add(flat.tobytes(), 34962)
             accessors.append({"bufferView": view, "componentType": 5126,
                               "count": len(mesh.uvs), "type": "VEC2"})

@@ -255,6 +255,9 @@ kbd {
   flex-direction: column;
   gap: 3px;
   padding: 8px 6px;
+  /* sept entrées : sur une fenêtre basse, le rail défile au lieu de rogner */
+  overflow-y: auto;
+  scrollbar-width: thin;
   background: linear-gradient(180deg, #0a101a, #070c13);
   border-right: 1px solid var(--line);
 }
@@ -697,12 +700,20 @@ input[type="range"]::-moz-range-thumb {
 .badge {
   display: inline-block;
   border-radius: 999px;
-  padding: 1px 7px;
+  padding: 2px 7px;
   font-size: 10px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
+  white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
 }
-.badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.badge.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.badge.off {
+  border-color: color-mix(in srgb, var(--faint) 45%, transparent);
+  background: transparent;
+  color: var(--faint);
+}
 
 /* ------------------------------------------------------------------ inspecteur */
 .inspector {
@@ -1003,17 +1014,6 @@ details.warns ul.todo { margin: 2px 0 0 12px; }
    animations. */
 .tile.ensemble .meta { gap: 4px; }
 .tile.ensemble .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
-.badge {
-  font-size: 10px; padding: 2px 6px; border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--text); white-space: nowrap;
-}
-.badge.off {
-  border-color: color-mix(in srgb, var(--faint) 45%, transparent);
-  background: transparent; color: var(--faint);
-}
-
 /* bande de textures dans la fiche d'un modèle */
 .ensemble-strip { margin-top: 12px; }
 .ensemble-strip h4 { font-size: 11.5px; color: var(--muted); font-weight: 560; margin-bottom: 6px; }
@@ -1041,3 +1041,34 @@ pre.command {
   overflow-x: auto; white-space: pre-wrap; word-break: break-all;
 }
 details.anims p.hint { margin-top: 6px; }
+
+/* ------------------------------------------------------ vérificateur d'UV */
+.uv-shot {
+  width: 100%; border-radius: var(--radius); border: 1px solid var(--line);
+  background: repeating-conic-gradient(#182130 0% 25%, #101823 0% 50%) 50% / 16px 16px;
+  image-rendering: pixelated;
+}
+.uv-shot + .toolbar { margin-top: 8px; }
+.toolbar .btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+ul.facts { list-style: none; margin: 10px 0 6px; padding: 0; display: grid; gap: 4px; }
+ul.facts li { font-size: 11.5px; color: var(--text); display: flex; justify-content: space-between; gap: 10px; }
+ul.facts .k { color: var(--muted); }
+
+/* les textures transparentes se lisent sur un damier, pas sur du noir */
+.thumb.checker {
+  background: repeating-conic-gradient(#1a2432 0% 25%, #0e1620 0% 50%) 50% / 14px 14px;
+}
+
+/* une image cassée ne laisse pas une icône « fichier manquant » dans la grille */
+.thumb.broken, .strip-item.broken { position: relative; }
+.thumb.broken::after {
+  content: "aperçu indisponible"; position: absolute; inset: auto; color: var(--faint);
+  font-size: 11px;
+}
+.thumb.broken img { opacity: 0.15; }
+.strip-item.broken img { opacity: 0.15; }
+.toolbar .btn[aria-pressed="false"] { opacity: 0.75; }

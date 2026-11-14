@@ -829,6 +829,42 @@ class Project:
             found[asset.stem] = str(target)
         return found
 
+    # ------------------------------------------------------------------ UV
+    def _uv_texture(self, rel: str):
+        """Albédo le plus probable du modèle, ou ``None`` (jamais une erreur)."""
+        for asset in self.texture_assets_for(rel):
+            try:
+                return asset, self.texture_png(asset.rel, 0)
+            except Exception:      # texture illisible : on juge les UV seuls
+                continue
+        return None, None
+
+    def uv_info(self, rel: str) -> dict:
+        """Diagnostic des UV : ce qui se voit (bornes, débordements, étirement)."""
+        from . import uvmap
+
+        meshes = self._model_meshes(rel)
+        asset, _png = self._uv_texture(rel)
+        report = uvmap.summarise(meshes, asset.stem if asset else "")
+        report["rel"] = rel
+        return report
+
+    def uv_overlay(self, rel: str, size: int = 640, flip: bool = False,
+                   mtime: int = 0) -> bytes:
+        """Texture du modèle avec ses triangles UV tracés dessus (PNG)."""
+        from . import uvmap
+
+        asset, png = self._uv_texture(rel)
+        stamp = (size, bool(flip), asset.rel if asset else "",
+                 self._version(asset.rel) if asset else 0)
+        key = cache_mod.digest(("uv", rel, self._version(rel), stamp))
+        cached = self.thumbs.get(key)
+        if cached:
+            return cached
+        result = uvmap.overlay(png, self._model_meshes(rel), size=size, flip=flip)
+        self.thumbs.put(key, result)
+        return result
+
     def export_blend(self, rel: str, textures: bool = True) -> dict:
         """Exporte le modèle puis produit ``.blend`` (via Blender s'il est là).
 

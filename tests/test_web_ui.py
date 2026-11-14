@@ -19,9 +19,10 @@ WEB = ROOT / "hookycreator" / "web"
 #: éléments fabriqués à la volée par le script (panneau de détail), donc absents
 #: du HTML livré : ils sont créés par showInspector() et ses appelants.
 DYNAMIC_IDS = {
-    "btn-blender", "btn-blend", "btn-export-png", "btn-import",
+    "btn-blender", "btn-blend", "btn-export-png", "btn-import", "btn-uv",
     "btn-translate-model", "btn-turntable", "copy-command", "file-import",
     "model-budget", "model-budget-note", "model-quality", "model-shot",
+    "uv-back", "uv-flip", "uv-normal", "uv-shot",
 }
 
 
@@ -74,6 +75,11 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('dataset.density', self.js)
         self.assertIn('html[data-accent="azur"]', self.css)
         self.assertIn('html[data-density="compact"]', self.css)
+
+    def test_uv_checker_is_wired_to_the_api(self) -> None:
+        self.assertIn("/api/model/uv", self.js)
+        self.assertIn("/api/model/uv/info", self.js)
+        self.assertIn("showUv", self.js)
 
     def test_ensemble_view_is_wired_to_the_api(self) -> None:
         self.assertIn("/api/ensembles", self.js)
