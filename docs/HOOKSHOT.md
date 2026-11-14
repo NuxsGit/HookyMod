@@ -20,8 +20,17 @@ Pour modder sans reconstruire le jeu, il suffit donc d'un dossier `romfs` access
 
 ```bash
 # extraire le .nup en romfs/ + exefs/ (sans toucher au fichier d'origine)
-python -m hookymod.cli nup "/chemin/game.nup" --extract "C:/Games/Hookshot_dump" --verify
+python -m hookymod.cli nup "/chemin/game.nup" --extract "C:/Games/Hookshot_dump" --verify --deep
 ```
+
+Cette lecture NUP a été vérifiée sur des paquets synthétiques, pas encore sur un
+paquet réel. `--verify` contrôle notamment la structure et le SHA-256 de la TOC
+s'il est présent ; `--deep` lit aussi les contenus et contrôle les empreintes
+présentes. Une empreinte absente ne prouve pas l'intégrité. L'extraction seule
+ne vérifie pas ces empreintes : conserve `--verify --deep` pour les contrôler.
+Choisis un **dossier vide** : des fichiers existants peuvent être remplacés et
+une extraction interrompue peut laisser des fichiers partiels. Les chemins hors
+cible et le remplacement du paquet source sont refusés.
 
 Dans l'interface : bouton **`.nup…`** de la barre d'outils (ou **Fichier → Ouvrir un
 paquet .nup (Switch 2)…**), choisir le `.nup`, puis le dossier d'extraction. Une petite
