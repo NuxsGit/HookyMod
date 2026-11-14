@@ -12,6 +12,7 @@ retouche d'image sont déjà.
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import json
 import mimetypes
@@ -47,6 +48,8 @@ class HookyCreatorServer:
         self.render_slots = threading.Semaphore(2)
         self.job: dict = {"running": False, "done": 0, "total": 0, "label": "",
                           "report": None, "error": None}
+        # fichiers statiques lus une fois : un rechargement ne relit pas le disque
+        self._static_cache: dict[str, tuple] = {}
 
     # ------------------------------------------------------------------ cycle
     def start(self, open_browser: bool = False) -> "HookyCreatorServer":
@@ -77,7 +80,7 @@ class HookyCreatorServer:
         project = self.project
 
         if route == "/api/state":
-            return _json({"project": project.state()})
+            return project.state_payload(), "application/json"
 
         if route == "/api/settings":
             if method == "POST":
@@ -93,12 +96,14 @@ class HookyCreatorServer:
             return _json({"plan": plan, "settings": project.settings.as_json()})
 
         if route == "/api/textures":
-            entries = [a.as_json() for a in project.by_kind("texture")]
-            return _json({"textures": entries})
+            return project.cached_json("textures", lambda: {
+                "textures": [a.as_json() for a in project.by_kind("texture")]}), \
+                "application/json"
 
         if route == "/api/models":
-            entries = [a.as_json() for a in project.by_kind("model")]
-            return _json({"models": entries})
+            return project.cached_json("models", lambda: {
+                "models": [a.as_json() for a in project.by_kind("model")]}), \
+                "application/json"
 
         if route == "/api/texture/info":
             return _json(project.texture_info(query["path"][0]))
@@ -106,7 +111,10 @@ class HookyCreatorServer:
         if route == "/api/texture/png":
             index = int(query.get("index", ["0"])[0])
             mip = int(query.get("mip", ["0"])[0])
-            return project.texture_png(query["path"][0], index, mip), "image/png"
+            max_size = query.get("max", [None])[0]
+            return project.texture_png(query["path"][0], index, mip,
+                                       max_size=int(max_size) if max_size else None), \
+                "image/png"
 
         if route == "/api/texture/import":
             image = base64.b64decode(body["image"])
@@ -121,8 +129,9 @@ class HookyCreatorServer:
             return _json({"file": project.shown_path(target)})
 
         if route == "/api/ensembles":
-            return _json({"ensembles": project.ensembles(),
-                          "blender": _blender_state(project)})
+            return project.cached_json("ensembles", lambda: {
+                "ensembles": project.ensembles(),
+                "blender": _blender_state(project)}), "application/json"
 
         if route == "/api/blender":
             return _json(_blender_state(project))
@@ -274,14 +283,25 @@ class HookyCreatorServer:
         return {"started": True}
 
     # ------------------------------------------------------------------ statique
-    def static(self, path: str) -> tuple[bytes, str] | None:
+    def static(self, path: str) -> tuple[bytes, str, str] | None:
+        """Fichier statique + son ETag (calculé une fois par version du fichier)."""
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
         rel = rel.removeprefix("static/")
         candidate = (WEB_DIR / rel).resolve()
         if not str(candidate).startswith(str(WEB_DIR)) or not candidate.is_file():
             return None
         kind = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
-        return candidate.read_bytes(), kind
+        try:
+            stamp = (candidate, candidate.stat().st_mtime_ns, candidate.stat().st_size)
+        except OSError:
+            return None
+        cached = self._static_cache.get(str(candidate))
+        if cached and cached[0] == stamp:
+            return cached[1], kind, cached[2]
+        body = candidate.read_bytes()
+        etag = '"%s"' % hashlib.sha1(body).hexdigest()[:20]
+        self._static_cache[str(candidate)] = (stamp, body, etag)
+        return body, kind, etag
 
 
 def _blender_state(project) -> dict:
@@ -335,10 +355,21 @@ def _make_handler(server: HookyCreatorServer):
         # -- utilitaires
         def _send(self, body: bytes, kind: str, status: int = 200,
                   headers: dict | None = None) -> None:
+            headers = dict(headers or {})
+            # Un état de projet fait 0,6 Mo en JSON et 7 Mo sur un dump complet :
+            # compressé, c'est 10 fois moins à traverser. Les PNG, déjà
+            # compressés, ne sont jamais recompressés (ce serait du temps perdu).
+            compressible = kind.startswith(("application/json", "text/",
+                                            "application/xml", "image/svg"))
+            if (compressible and len(body) >= 1024
+                    and "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+                    and "Content-Encoding" not in headers):
+                body = gzip.compress(body, 6)
+                headers["Content-Encoding"] = "gzip"
+                headers["Vary"] = "Accept-Encoding"
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(body)))
-            headers = dict(headers or {})
             if "Cache-Control" not in headers:
                 self.send_header("Cache-Control", "no-store")
             for name, value in headers.items():
@@ -383,7 +414,16 @@ def _make_handler(server: HookyCreatorServer):
             found = server.static(parsed.path)
             if not found:
                 return self._error("Page inconnue", 404)
-            self._send(*found)
+            body, kind, etag = found
+            # le CSS et le JS changent à chaque mise à jour : on revalide (coût
+            # d'un 304, quelques octets) au lieu de tout retélécharger
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
+            self._send(body, kind, headers={"ETag": etag, "Cache-Control": "no-cache"})
 
         def do_POST(self) -> None:               # noqa: N802
             parsed = urlparse(self.path)

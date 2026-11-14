@@ -24,6 +24,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 #: nom du script déposé à côté de l'export
@@ -210,9 +211,25 @@ def _windows_candidates() -> list[Path]:
     return found
 
 
+#: dernier résultat de :func:`find_blender` (date, dossier) : chercher Blender
+#: relit le PATH et les dossiers « Program Files » à chaque appel, et l'atelier
+#: demande cette information à chaque affichage de la vue Ensembles
+_BLENDER_CACHE: dict[str, tuple[float, Path | None]] = {}
+BLENDER_CACHE_SECONDS = 30.0
+
+
 def find_blender(configured: str = "") -> Path | None:
     """Exécutable Blender : réglage explicite, ``PATH``, puis dossiers usuels."""
     configured = (configured or "").strip().strip('"')
+    cached = _BLENDER_CACHE.get(configured)
+    if cached and time.monotonic() - cached[0] < BLENDER_CACHE_SECONDS:
+        return cached[1]
+    found = _find_blender(configured)
+    _BLENDER_CACHE[configured] = (time.monotonic(), found)
+    return found
+
+
+def _find_blender(configured: str) -> Path | None:
     if configured:
         candidate = Path(configured).expanduser()
         if candidate.is_file():
