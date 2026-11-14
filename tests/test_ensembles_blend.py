@@ -26,7 +26,6 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import synth  # noqa: E402
 
-from hookycreator import project as project_mod  # noqa: E402
 from hookycreator.project import Project, _make_sampler  # noqa: E402
 from hookycreator.server import HookyCreatorServer  # noqa: E402
 from hookymod import blendfile  # noqa: E402

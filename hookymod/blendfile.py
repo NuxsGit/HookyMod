@@ -21,7 +21,6 @@ sortie et la taille du fichier avant de rendre la main.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
