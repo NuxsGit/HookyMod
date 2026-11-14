@@ -95,7 +95,7 @@ class HookyCreatorServer:
             directory.mkdir(parents=True, exist_ok=True)
             target = directory / f"{Path(query['path'][0]).name.split('.')[0]}.png"
             target.write_bytes(data)
-            return _json({"file": str(target.relative_to(project.root))})
+            return _json({"file": project.shown_path(target)})
 
         if route == "/api/model/info":
             return _json(project.model_info(query["path"][0]))

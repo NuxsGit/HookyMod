@@ -32,7 +32,7 @@ class Asset:
     """Un fichier du projet, tel qu'il apparaît dans le navigateur."""
 
     rel: str
-    kind: str                       # model | texture | bytecode | other
+    kind: str                       # model | animation | texture | bytecode | archive
     size: int
     compressed: bool = False
 
@@ -161,7 +161,11 @@ class Project:
             if rel.startswith(("hookycreator_work/", "mods/")):
                 continue
             low = path.name.lower()
-            if low.endswith(MODEL_SUFFIXES):
+            if ".anim." in low:
+                # Les animations sont des BFRES sans maillage : les afficher
+                # comme « modèle » promet une géométrie qui n'existe pas.
+                kind = "animation"
+            elif low.endswith(MODEL_SUFFIXES):
                 kind = "model"
             elif low.endswith(TEXTURE_SUFFIXES):
                 kind = "texture"
@@ -180,10 +184,23 @@ class Project:
             "count": len(assets),
             "truncated": truncated,
             "models": sum(1 for a in assets if a.kind == "model"),
+            "animations": sum(1 for a in assets if a.kind == "animation"),
             "textures": sum(1 for a in assets if a.kind == "texture"),
             "bytecode": sum(1 for a in assets if a.kind == "bytecode"),
             "archives": sum(1 for a in assets if a.kind == "archive"),
         }
+
+    def shown_path(self, path: Path) -> str:
+        """Chemin lisible : relatif au projet si possible, absolu sinon.
+
+        Le dossier de travail peut être hors du dump (c'est même recommandé) :
+        ``Path.relative_to`` lèverait alors une erreur au lieu d'afficher un
+        chemin, ce qui cassait l'export.
+        """
+        try:
+            return path.relative_to(self.root).as_posix()
+        except ValueError:
+            return str(path)
 
     def by_kind(self, kind: str) -> list[Asset]:
         return [a for a in self.assets if a.kind == kind]
@@ -247,7 +264,7 @@ class Project:
                 raise ProjectError(str(exc)) from exc
         target.write_bytes(payload)
         self._cache.pop(("png", rel, index), None)
-        return {"rel": rel, "texture": name, "wrote": str(target.relative_to(self.root)),
+        return {"rel": rel, "texture": name, "wrote": self.shown_path(target),
                 "size": len(payload), "mips": getattr(report, "mip_count", None),
                 "format": self.texture_info(rel)["textures"][index]["format"]}
 
@@ -305,7 +322,7 @@ class Project:
                         continue
         written = blender.export_bundle(meshes, folder, folder.name,
                                         textures=found or None)
-        return {"folder": str(folder.relative_to(self.root)),
+        return {"folder": self.shown_path(folder),
                 "files": sorted(p.name for p in written.values()),
                 "textures": len(found),
                 "faces": sum(len(m.faces) for m in meshes)}
@@ -414,7 +431,7 @@ class Project:
                     "source_root": str(self.root)}
         (target.parent / "hookycreator.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"mod": clean, "path": str(target.parent.relative_to(self.root)),
+        return {"mod": clean, "path": self.shown_path(target.parent),
                 "files": len(written), "mobs": manifest["mobs"]}
 
     # ------------------------------------------------------------------ état

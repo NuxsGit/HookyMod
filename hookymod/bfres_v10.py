@@ -1,29 +1,34 @@
-"""BFRES version 10 (Switch 2) : lecture de la géométrie.
+"""BFRES version 10 (Switch 2) : lecture de la géométrie, pilotée par les données.
 
-Il n'existe **aucune documentation publique** du BFRES 10.x : ce module ne suit
-pas un cahier des charges, il applique ce qui a été **mesuré** sur un vrai
-fichier du jeu (papillon, build 1.1.1), puis **vérifie** chaque hypothèse avant
-de livrer une géométrie.
+Il n'existe **aucune documentation publique** du BFRES 10.x.  Ce module ne suit
+donc pas un cahier des charges : il lit les tables que le fichier contient
+lui-même (table d'attributs de sommets), puis **vérifie** chaque étape avant de
+livrer une géométrie.  Rien n'est codé en dur pour un modèle particulier.
 
-Structure observée
-------------------
-* en-tête : `FRES`, version `0x000A0400`, nom (offset de chaîne) à `0x20`,
-  pointeur du modèle à `0x28`, dictionnaire de modèles à `0x30` ; la base des
-  tampons GPU est un `u64` à `0x170` (ici `0x4000`) ;
-* `FMDL` : nom `+0x08`, squelette `+0x18`, `FVTX` `+0x20`, formes `+0x28`,
-  matériaux `+0x38` ;
-* `FVTX` : nombre de tampons `+0x04`, listes d'attributs `+0x08`/`+0x10` ;
-  l'offset du tampon de sommets (relatif à la base) est dans le bloc, on le
-  retrouve par validation (voir :func:`_find_vertex_offset`) ;
-* tampon de sommets : enregistrements de **24 octets**
-  (`position = 3 × f16` à `+0`, `UV = 2 × u16 / 65535` à `+16`) ;
-  le reste (`+8`, `+12`, `+20`) n'est pas encore décodé : on n'invente rien ;
-* tampon d'indices : `u16`, découpé en sous-maillages alignés sur `0x1000`
-  octets, chacun terminé par du remplissage (triangles dégénérés).
+Structure mesurée sur les fichiers du jeu (papillon + 4 ennemis)
+---------------------------------------------------------------
+* en-tête : ``FRES``, version ``u32`` à ``0x08`` (``0x000A0400`` = 10.4),
+  BOM ``u16`` à ``0x0C`` (``0xFFFE`` = petit-boutiste), ``FMDL`` en ``u64`` à
+  ``0x28``, base des tampons GPU en ``u64`` à ``0x170`` (0x4000, 0xE000,
+  0x15000… selon le modèle) ;
+* ``FMDL`` : nom ``+0x08``, ``FVTX`` ``+0x20``, matériaux ``+0x38`` ;
+* ``FVTX`` (un par forme) : table d'attributs ``u64 +0x08``, table des LOD
+  ``u64 +0x10``, fin des données ``u64 +0x18``, **tampon de sommets** ``u32
+  +0x48`` (relatif à la base), et ``u32 +0x4C`` dont l'octet bas donne le
+  **nombre d'attributs** ;
+* attribut (16 octets) : référence de chaîne ``+0`` (les chaînes sont
+  préfixées par leur longueur ``u16``), format ``u32 +8``, offset ``u32 +12``
+  dans l'enregistrement ;
+* les tampons de sommets sont rangés **bout à bout** : le nombre de sommets
+  d'une forme est l'écart avec le tampon suivant divisé par le pas, ce qui se
+  vérifie au lieu de se deviner ;
+* formats rencontrés : ``0x1805`` = position ``3 x f32`` (12 o), ``0x1505`` =
+  position ``3 x f16`` (6 o), ``0x0E02`` = normale/tangente sur 4 o,
+  ``0x1201``/``0x1202`` = UV ``2 x u16``, ``0x0B0x``/``0x090x``/``0x02xx`` =
+  peaux (indices/weights).
 
-Comme rien n'est garanti par un document, chaque étape a une porte de sortie :
-si la vérification échoue, la fonction renvoie ``None`` et l'appelant explique
-pourquoi. Une géométrie douteuse ne doit jamais arriver jusqu'à Blender.
+Tout ce qui n'est pas vérifiable est refusé : une géométrie douteuse ne doit
+jamais arriver jusqu'à Blender ou au viewer.
 """
 
 from __future__ import annotations
@@ -34,12 +39,95 @@ from dataclasses import dataclass, field
 
 from .mesh import MeshData
 
-#: enregistrements mesurés dans le tampon de sommets
+#: valeurs historiques (papillon) conservées comme repli
 STRIDE = 24
 POSITION_OFFSET = 0
 UV_OFFSET = 16
 #: découpage des sous-maillages dans le tampon d'indices
 SUBMESH_ALIGN = 0x1000
+
+#: en-tête
+HEADER_VERSION = 0x08
+HEADER_MODEL = 0x28
+HEADER_BUFFER_BASE = 0x170
+#: FMDL
+FMDL_NAME = 0x08
+FMDL_VERTEX_INFO = 0x20
+FMDL_MATERIALS = 0x38
+#: FVTX
+FVTX_ATTRIBUTES = 0x08
+FVTX_LODS = 0x10
+FVTX_DATA_END = 0x18
+FVTX_BUFFER = 0x48
+FVTX_FLAGS = 0x4C
+#: table d'attributs
+ATTRIBUTE_SIZE = 16
+
+#: tailles connues des formats rencontrés (octets par sommet)
+FORMAT_SIZES: dict[int, int] = {
+    0x1805: 12,   # position 3 x f32
+    0x1505: 6,    # position 3 x f16 (rangée sur 8 dans l'enregistrement)
+    0x1802: 12,   # position 2 x f32 + 1 x f32
+    0x1502: 6,
+    0x0E02: 4,    # normale / tangente compactée
+    0x1201: 4,    # UV 2 x u16
+    0x1202: 4,
+    0x0B03: 4,    # indices de peaux
+    0x0903: 4,
+    0x0203: 4,
+    0x0B01: 2,    # poids de peaux
+    0x0901: 2,
+}
+
+#: préfixes de noms d'attributs -> rôle
+_KIND_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("_p", "position"),
+    ("_n", "normal"),
+    ("_t", "tangent"),
+    ("_u", "uv"),
+    ("_c", "color"),
+    ("_i", "index"),
+    ("_w", "weight"),
+)
+
+
+@dataclass
+class VertexAttribute:
+    """Un attribut de sommet tel que déclaré par le fichier."""
+
+    name: str
+    format: int
+    offset: int
+    size: int
+    kind: str = "unknown"
+
+    def describe(self) -> str:
+        return f"{self.name}@0x{self.offset:X} (f{self.format:X}, {self.size} o)"
+
+
+@dataclass
+class VertexShape:
+    """Une forme (un ``FVTX``) : ses attributs et son tampon de sommets."""
+
+    offset: int = 0
+    attributes: list[VertexAttribute] = field(default_factory=list)
+    stride: int = STRIDE
+    buffer_offset: int = 0        # relatif à la base des tampons
+    vertex_offset: int = 0        # absolu dans le fichier
+    vertex_count: int = 0
+    data_end: int = 0
+    flags: int = 0
+
+    def attribute(self, kind: str) -> VertexAttribute | None:
+        for attribute in self.attributes:
+            if attribute.kind == kind:
+                return attribute
+        return None
+
+    def summary(self) -> str:
+        return (f"forme @0x{self.offset:X} : {self.vertex_count} sommets x "
+                f"{self.stride} o @0x{self.vertex_offset:X} "
+                f"({', '.join(a.name for a in self.attributes)})")
 
 
 @dataclass
@@ -59,6 +147,8 @@ class V10Report:
     index_count: int = 0
     submeshes: int = 0
     uv: bool = False
+    attributes: list[str] = field(default_factory=list)
+    shapes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def describe(self) -> str:
@@ -68,7 +158,9 @@ class V10Report:
             f"  sommets          : {self.vertex_count} × {self.stride} o à 0x{self.vertex_offset:X}",
             f"  indices          : {self.index_count} u16 à 0x{self.index_offset:X}",
             f"  sous-maillages   : {self.submeshes}",
-            f"  UV               : {'oui (u16/65535)' if self.uv else 'non (non décodées)'}",
+            f"  attributs        : {', '.join(self.attributes) or '(aucun)'}",
+            f"  formes           : {len(self.shapes)}",
+            f"  UV               : {'oui' if self.uv else 'non (non décodées)'}",
         ]
         lines += [f"  ⚠ {w}" for w in self.warnings]
         return "\n".join(lines)
@@ -106,6 +198,126 @@ def _string_at(data: bytes, offset: int) -> str:
     return text if text.isprintable() else ""
 
 
+def _kind_of(name: str, fmt: int) -> str:
+    for prefix, kind in _KIND_PREFIXES:
+        if name.startswith(prefix):
+            return kind
+    if fmt in (0x1805, 0x1505, 0x1802, 0x1502):
+        return "position"
+    return "unknown"
+
+
+def _round_up(value: int, multiple: int = 4) -> int:
+    return (value + multiple - 1) // multiple * multiple
+
+
+# --------------------------------------------------------------------------- attributs
+def read_attributes(data: bytes, array_offset: int, count: int = 0) -> list[VertexAttribute]:
+    """Lit la table d'attributs d'un ``FVTX``.
+
+    La taille d'un attribut se déduit de l'offset du suivant (donc du fichier
+    lui-même, pas d'une table externe) ; pour le dernier on retombe sur la
+    taille connue de son format, arrondie à 4 octets.
+    """
+    if not (0 < array_offset < len(data) - ATTRIBUTE_SIZE):
+        return []
+    raw: list[VertexAttribute] = []
+    limit = count if count else 32
+    for index in range(min(limit, 32)):
+        entry = array_offset + ATTRIBUTE_SIZE * index
+        if entry + ATTRIBUTE_SIZE > len(data):
+            break
+        reference = _u32(data, entry)
+        name = _string_at(data, reference)
+        if not name:
+            break
+        fmt = _u32(data, entry + 8)
+        offset = _u32(data, entry + 12)
+        raw.append(VertexAttribute(name=name, format=fmt, offset=offset,
+                                   size=0, kind=_kind_of(name, fmt)))
+    if not raw:
+        return []
+    for index, attribute in enumerate(raw[:-1]):
+        following = raw[index + 1].offset
+        size = following - attribute.offset
+        if size <= 0:
+            return []
+        attribute.size = size
+    last = raw[-1]
+    known = FORMAT_SIZES.get(last.format)
+    last.size = known if known else 4
+    return raw
+
+
+def _stride_of(attributes: list[VertexAttribute]) -> int:
+    """Pas d'enregistrement : fin du dernier attribut, arrondie à 4 octets."""
+    if not attributes:
+        return 0
+    end = max(a.offset + (a.size or 4) for a in attributes)
+    return _round_up(end, 4)
+
+
+# --------------------------------------------------------------------------- formes
+def _looks_like_shape(data: bytes, offset: int, base: int) -> VertexShape | None:
+    """Valide un candidat ``FVTX`` : attributs lisibles + tampon dans le fichier."""
+    if offset + FVTX_FLAGS + 4 > len(data):
+        return None
+    array_offset = _u64(data, offset + FVTX_ATTRIBUTES)
+    if not (0 < array_offset < len(data) - ATTRIBUTE_SIZE):
+        return None
+    flags = _u32(data, offset + FVTX_FLAGS)
+    declared = flags & 0xFF
+    buffer_relative = _u32(data, offset + FVTX_BUFFER)
+    if not buffer_relative or base + buffer_relative >= len(data):
+        return None
+    attributes = read_attributes(data, array_offset, declared)
+    if len(attributes) < 2:
+        return None
+    if not any(a.kind == "position" for a in attributes):
+        return None
+    if declared and len(attributes) != declared:
+        return None
+    shape = VertexShape(
+        offset=offset,
+        attributes=attributes,
+        stride=_stride_of(attributes),
+        buffer_offset=buffer_relative,
+        vertex_offset=base + buffer_relative,
+        data_end=_u64(data, offset + FVTX_DATA_END),
+        flags=flags,
+    )
+    return shape if shape.stride >= 4 else None
+
+
+def find_shapes(data: bytes, base: int) -> list[VertexShape]:
+    """Toutes les formes du fichier, dans l'ordre des tampons.
+
+    On balaye les signatures ``FVTX`` puis on ne garde que celles qui passent
+    la validation ci-dessus : une fausse signature au milieu des tampons ne
+    peut pas produire une table d'attributs cohérente.
+    """
+    shapes: dict[int, VertexShape] = {}
+    start = 0
+    while True:
+        found = data.find(b"FVTX", start)
+        if found < 0:
+            break
+        start = found + 4
+        if found % 4:
+            continue
+        shape = _looks_like_shape(data, found, base)
+        if shape and shape.vertex_offset not in shapes:
+            shapes[shape.vertex_offset] = shape
+    ordered = sorted(shapes.values(), key=lambda s: s.vertex_offset)
+    # le nombre de sommets se déduit de l'écart entre tampons voisins
+    for index, shape in enumerate(ordered):
+        following = ordered[index + 1].vertex_offset if index + 1 < len(ordered) else len(data)
+        available = following - shape.vertex_offset
+        if shape.vertex_count == 0:
+            shape.vertex_count = max(0, available // max(1, shape.stride))
+    return ordered
+
+
 # --------------------------------------------------------------------------- tampons
 def _coherence(positions: list[tuple[float, float, float]],
                triangles: list[tuple[int, int, int]]) -> float:
@@ -139,23 +351,161 @@ def _coherence(positions: list[tuple[float, float, float]],
     return local / far if far > 0 else 1.0
 
 
-def _decode_positions(data: bytes, start: int, count: int, stride: int):
-    positions = []
+def _diagonal(positions) -> float:
+    if not positions:
+        return 0.0
+    xs = [p[0] for p in positions]
+    ys = [p[1] for p in positions]
+    zs = [p[2] for p in positions]
+    return math.dist((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+
+
+def _edge_ratio(positions, triangles, diagonal: float) -> float:
+    """Longueur médiane des arêtes rapportée à la diagonale du modèle.
+
+    Un triangle juste est petit devant le modèle ; des arêtes qui traversent
+    tout le volume trahissent des indices appartenant à une autre forme ou à
+    un autre niveau de détail (rendu en « spaghettis »).
+    """
+    if not positions or not triangles or diagonal <= 0:
+        return 1.0
+    step = max(1, len(triangles) // 200)
+    lengths = []
+    for index in range(0, len(triangles), step):
+        a, b, c = triangles[index]
+        try:
+            lengths.append(math.dist(positions[a], positions[b]))
+            lengths.append(math.dist(positions[b], positions[c]))
+        except IndexError:
+            return 1.0
+    if not lengths:
+        return 1.0
+    lengths.sort()
+    return lengths[len(lengths) // 2] / diagonal
+
+
+def _drop_oversized(positions, triangles, diagonal: float,
+                    limit: float = 0.15) -> list[tuple[int, int, int]]:
+    """Retire les triangles dont une arête traverse tout le modèle.
+
+    Ces triangles viennent d'indices appartenant à une autre forme (ou à un
+    autre tampon) : ils dessinent de longues pointes au lieu d'une surface.
+    On garde les triangles dont la plus grande arête reste sous 15 % de la
+    diagonale du modèle.
+    """
+    if not positions or diagonal <= 0:
+        return triangles
+    threshold = diagonal * limit
+    kept: list[tuple[int, int, int]] = []
+    for a, b, c in triangles:
+        try:
+            pa, pb, pc = positions[a], positions[b], positions[c]
+        except IndexError:
+            continue
+        if (math.dist(pa, pb) > threshold or math.dist(pb, pc) > threshold
+                or math.dist(pa, pc) > threshold):
+            continue
+        kept.append((a, b, c))
+    return kept
+
+
+def _decode_positions(data: bytes, start: int, count: int, stride: int,
+                      offset: int = 0, fmt: int = 0x1505):
+    """Positions d'un tampon, selon le format déclaré par la table d'attributs.
+
+    Le compte demandé vient de l'écart entre tampons : quand celui-ci est
+    anormal (plusieurs mégaoctets), le tampon déborde sur autre chose. On
+    s'arrête donc au premier enregistrement incohérent, l'échelle de référence
+    étant prise sur le début du tampon (les 128 premiers sommets).
+    """
+    unpack = "<3f" if fmt == 0x1805 else "<3e"
+    positions: list[tuple[float, float, float]] = []
+    reference = 0.0
     for index in range(count):
         try:
-            x, y, z = struct.unpack_from("<3e", data, start + index * stride)
+            x, y, z = struct.unpack_from(unpack, data, start + index * stride + offset)
         except struct.error:
-            return []
+            break
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            break
+        scale = max(abs(x), abs(y), abs(z))
+        if index < 128:
+            reference = max(reference, scale)
+        elif scale > max(reference * 50.0, 1e-4):
+            break
         positions.append((x, y, z))
     return positions
 
 
-def _decode_uvs(data: bytes, start: int, count: int, stride: int):
-    uvs = []
-    for index in range(count):
-        u, v = struct.unpack_from("<2H", data, start + index * stride + UV_OFFSET)
-        uvs.append((u / 65535.0, v / 65535.0))
-    return uvs
+def _decode_positions_of(data: bytes, shape: VertexShape) -> list[tuple[float, float, float]]:
+    attribute = shape.attribute("position")
+    if attribute is None:
+        return []
+    return _decode_positions(data, shape.vertex_offset, shape.vertex_count,
+                             shape.stride, attribute.offset, attribute.format)
+
+
+def _snorm(bits: int, width: int) -> float:
+    half = 1 << (width - 1)
+    value = bits & ((1 << width) - 1)
+    if value >= half:
+        value -= 1 << width
+    return value / (half - 1)
+
+
+def _decode_normals(data: bytes, shape: VertexShape, count: int) -> list[tuple[float, float, float]]:
+    """Normales, quel que soit le compactage (10_10_10_2, 4 x s8, f16)."""
+    attribute = shape.attribute("normal")
+    if attribute is None:
+        return []
+    start = shape.vertex_offset + attribute.offset
+    stride = shape.stride
+    candidates: list[tuple[str, list[tuple[float, float, float]]]] = []
+
+    if attribute.size == 4:
+        packed: list[tuple[float, float, float]] = []
+        for index in range(count):
+            try:
+                bits = _u32(data, start + index * stride)
+            except struct.error:
+                packed = []
+                break
+            packed.append((_snorm(bits, 10), _snorm(bits >> 10, 10), _snorm(bits >> 20, 10)))
+        candidates.append(("10_10_10_2", packed))
+        octets: list[tuple[float, float, float]] = []
+        for index in range(count):
+            try:
+                x, y, z = struct.unpack_from("<3b", data, start + index * stride)
+            except struct.error:
+                octets = []
+                break
+            octets.append((x / 127.0, y / 127.0, z / 127.0))
+        candidates.append(("4x s8", octets))
+    elif attribute.size in (6, 8):
+        halves: list[tuple[float, float, float]] = []
+        for index in range(count):
+            try:
+                halves.append(struct.unpack_from("<3e", data, start + index * stride))
+            except struct.error:
+                halves = []
+                break
+        candidates.append(("3x f16", halves))
+
+    best: list[tuple[float, float, float]] = []
+    best_score = 0.0
+    for _, values in candidates:
+        if not values:
+            continue
+        sample = values[: min(400, len(values))]
+        good = 0
+        for x, y, z in sample:
+            length = math.sqrt(x * x + y * y + z * z)
+            if 0.8 <= length <= 1.25:
+                good += 1
+        score = good / len(sample)
+        if score > best_score:
+            best, best_score = values, score
+    return best if best_score >= 0.9 else []
 
 
 def _uv_plausible(positions, uvs, triangles) -> bool:
@@ -170,13 +520,16 @@ def _uv_plausible(positions, uvs, triangles) -> bool:
     samples = triangles[:: max(1, len(triangles) // 300)]
     xs, ys = [], []
     for a, b, c in samples:
-        pa, pb, pc = positions[a], positions[b], positions[c]
+        try:
+            pa, pb, pc = positions[a], positions[b], positions[c]
+            (ax, ay), (bx, by), (cx2, cy2) = uvs[a], uvs[b], uvs[c]
+        except IndexError:
+            continue
         u = [pb[i] - pa[i] for i in range(3)]
         v = [pc[i] - pa[i] for i in range(3)]
         cx, cy, cz = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
                       u[0] * v[1] - u[1] * v[0])
         area3 = 0.5 * math.sqrt(cx * cx + cy * cy + cz * cz)
-        (ax, ay), (bx, by), (cx2, cy2) = uvs[a], uvs[b], uvs[c]
         area2 = 0.5 * abs((bx - ax) * (cy2 - ay) - (cx2 - ax) * (by - ay))
         if area3 > 0 and area2 > 0:
             xs.append(area3)
@@ -189,72 +542,54 @@ def _uv_plausible(positions, uvs, triangles) -> bool:
     return den > 0 and num / den > 0.3
 
 
-#: nombre de sommets regardés pour valider un candidat (rapide, suffisant)
-_PROBE_VERTICES = 4000
+def _decode_uvs(data: bytes, shape: VertexShape, count: int, positions,
+                triangles) -> tuple[list[tuple[float, float]], str]:
+    """UV : ``2 x u16`` ou ``2 x f16``, choisi par validation (jamais au hasard)."""
+    attribute = shape.attribute("uv")
+    if attribute is None:
+        return [], ""
+    start = shape.vertex_offset + attribute.offset
+    stride = shape.stride
+    candidates: list[tuple[str, list[tuple[float, float]]]] = []
 
+    halves: list[tuple[float, float]] = []
+    for index in range(count):
+        try:
+            halves.append(struct.unpack_from("<2e", data, start + index * stride))
+        except struct.error:
+            halves = []
+            break
+    candidates.append(("2 x f16", halves))
 
-def _candidate_offsets(data: bytes, vertex_info: int, base: int) -> list[int]:
-    """Offsets absolus plausibles du tampon de sommets, lus dans ``FVTX``.
+    shorts: list[tuple[float, float]] = []
+    for index in range(count):
+        try:
+            u, v = struct.unpack_from("<2H", data, start + index * stride)
+        except struct.error:
+            shorts = []
+            break
+        shorts.append((u / 65535.0, v / 65535.0))
+    candidates.append(("2 x u16", shorts))
 
-    Le bloc mélange des ``u32`` et des ``u64`` : on lit les deux, on ne garde
-    que ce qui tombe dans le fichier, aligné, après la base des tampons.
-    """
-    found: list[int] = []
-    # Le bloc FVTX s'arrête à la section suivante : au-delà, les valeurs lues
-    # sont des pointeurs de matériaux (ils ressemblent à des offsets de tampon,
-    # d'où la nécessité de borner).
-    end = min(vertex_info + 0x240, len(data) - 8)
-    for magic in (b"FMAT", b"FSHP", b"FSKL", b"_STR"):
-        found_at = data.find(magic, vertex_info + 8)
-        if found_at != -1:
-            end = min(end, found_at)
-    for offset in range(vertex_info, end, 2):
-        values = []
-        if offset % 8 == 0:
-            values.append(_u64(data, offset))
-        values.append(_u32(data, offset))
-        for value in values:
-            absolute = base + value
-            if (value and absolute % 8 == 0 and base < absolute
-                    and absolute + STRIDE * 8 < len(data) and absolute not in found):
-                found.append(absolute)
-    return found
-
-
-def _find_vertex_offset(data: bytes, vertex_info: int, base: int,
-                        vertex_count_hint: int = _PROBE_VERTICES) -> int:
-    """Offset du tampon de sommets, cherché dans le bloc ``FVTX`` puis validé.
-
-    On teste chaque ``u64`` du bloc : le bon candidat est celui qui donne un
-    tampon de sommets dont les positions passent la cohérence. Aucun candidat
-    n'est accepté sur la seule foi de sa place dans la structure.
-    """
-    if not _valid_pointer(vertex_info, data):
-        return 0
-    best, best_score = 0, 1.0
-    for absolute in _candidate_offsets(data, vertex_info, base):
-        count = min(vertex_count_hint, (len(data) - absolute) // STRIDE)
-        positions = _decode_positions(data, absolute, count, STRIDE)
-        if len(positions) < 32 or not all(all(map(math.isfinite, p)) for p in positions):
+    for label, values in candidates:
+        if not values:
             continue
-        # Un vrai modèle occupe un volume : des positions quasi identiques
-        # signifient qu'on lit autre chose (des index, du remplissage…).
-        spread = max(abs(v) for p in positions for v in p)
-        if not (1e-3 < spread < 1e4):
+        sample = values[: min(600, len(values))]
+        inside = sum(1 for u, v in sample if -0.05 <= u <= 1.05 and -0.05 <= v <= 1.05)
+        if inside / len(sample) < 0.9:
             continue
-        if len({(round(p[0], 6), round(p[1], 6), round(p[2], 6)) for p in positions}) < 50:
-            continue
-        groups = _index_triangles(data, base, absolute, count)
-        if not groups or len(groups[0]) < 20:
-            continue
-        score = _coherence(positions, groups[0])
-        if 1e-3 < score < best_score:
-            best, best_score = absolute, score
-    return best if best_score < 0.35 else 0
+        if _uv_plausible(positions, values, triangles):
+            return values, label
+    return [], ""
 
 
 def _detect_stride(data: bytes, start: int, end: int, fallback: int = STRIDE) -> int:
-    """Pas d'enregistrement des sommets, par autocorrélation des octets."""
+    """Pas d'enregistrement des sommets, par autocorrélation des octets.
+
+    Conservé comme **repli** : quand la table d'attributs est illisible, ce
+    détecteur donne une indication, et l'appelant décide de faire confiance ou
+    non (le rapport le signale).
+    """
     window = data[start:min(end, start + 0x4000)]
     if len(window) < 128:
         return fallback
@@ -266,115 +601,203 @@ def _detect_stride(data: bytes, start: int, end: int, fallback: int = STRIDE) ->
     best = scores[best_lag]
     if best <= 0.15:
         return fallback
-    # Un pas de 24 donne aussi un pic à 48 : on garde le plus petit multiple
-    # qui explique presque aussi bien les répétitions.
     for lag in range(8, best_lag):
         if best_lag % lag == 0 and scores[lag] >= best - 0.02:
             return lag
     return best_lag
 
 
-# --------------------------------------------------------------------------- lecture
-def _index_triangles(data: bytes, start: int, end: int, vertex_count: int):
-    """Triangles du tampon d'indices, découpés en sous-maillages alignés.
+# --------------------------------------------------------------------------- indices
+def _block_triangles(data: bytes, start: int, limit: int, vertex_count: int):
+    """Triangles d'un bloc d'indices, jusqu'au remplissage ou à l'incohérence."""
+    triangles: list[tuple[int, int, int]] = []
+    offset = start
+    while offset + 6 <= limit:
+        a, b, c = struct.unpack_from("<3H", data, offset)
+        offset += 6
+        if max(a, b, c) >= vertex_count:
+            break
+        if a == b or b == c or a == c:      # remplissage / fin de sous-maillage
+            break
+        triangles.append((a, b, c))
+    return triangles
 
-    Chaque sous-maillage se termine par du remplissage : ses triangles
-    dégénérés servent de sentinelle, on s'arrête là.
-    """
+
+def _index_triangles(data: bytes, start: int, end: int, vertex_count: int):
+    """Triangles du tampon d'indices, découpés en blocs alignés sur 0x1000."""
     groups: list[list[tuple[int, int, int]]] = []
     for block in range(start, end, SUBMESH_ALIGN):
         limit = min(block + SUBMESH_ALIGN, end)
-        triangles: list[tuple[int, int, int]] = []
-        offset = block
-        while offset + 6 <= limit:
-            a, b, c = struct.unpack_from("<3H", data, offset)
-            offset += 6
-            if max(a, b, c) >= vertex_count:
-                break
-            if a == b or b == c or a == c:      # remplissage / fin de sous-maillage
-                break
-            triangles.append((a, b, c))
+        triangles = _block_triangles(data, block, limit, vertex_count)
         if triangles:
             groups.append(triangles)
     return groups
 
 
+def _scan_block(data: bytes, start: int, stop: int, vertex_count: int,
+                maximum: int = 2048) -> list[tuple[int, int, int]]:
+    """Triangles d'un bloc aligné, en sautant le remplissage de tête.
+
+    Un sous-maillage commence à une frontière de 0x1000 octets : les premiers
+    octets du bloc peuvent être du remplissage, d'où le balayage par pas de 2
+    octets avant le premier triangle exploitable. On s'arrête au premier
+    triangle dégénéré (fin du sous-maillage) ou hors bornes.
+    """
+    offset = start
+    triangles: list[tuple[int, int, int]] = []
+    while offset + 6 <= stop:
+        a, b, c = struct.unpack_from("<3H", data, offset)
+        if max(a, b, c) >= vertex_count or a == b or b == c or a == c:
+            if triangles:
+                break
+            offset += 2
+            continue
+        triangles.append((a, b, c))
+        offset += 6
+        if len(triangles) >= maximum:
+            break
+    return triangles
+
+
+# --------------------------------------------------------------------------- lecture
 def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
     """Maillages d'un BFRES 10.x, ou ``None`` si la structure n'est pas reconnue.
 
-    Le retour est volontairement « tout ou rien » : soit les tampons vérifient
-    leurs hypothèses, soit on ne renvoie rien et l'appelant dit pourquoi.
+    Le retour est volontairement « tout ou rien » : soit les tables du fichier
+    vérifient leurs hypothèses, soit on ne renvoie rien et l'appelant dit
+    pourquoi.
     """
-    if data[:4] != b"FRES" or len(data) < 0x200:
+    if len(data) < 0x200 or data[:4] != b"FRES":
         return None
-    report = V10Report(version=_u32(data, 0x08))
+    report = V10Report(version=_u32(data, HEADER_VERSION))
     report.major = (report.version >> 16) & 0xFFFF
     report.minor = (report.version >> 8) & 0xFF
     if report.major != 10:
         return None
 
-    model_offset = _u64(data, 0x28)
+    model_offset = _u64(data, HEADER_MODEL)
     if not _valid_pointer(model_offset, data) or data[model_offset:model_offset + 4] != b"FMDL":
         report.warnings.append("Pointeur FMDL invalide : structure 10.x non reconnue.")
         return None
-    base = _u64(data, 0x170)
+    base = _u64(data, HEADER_BUFFER_BASE)
     if not _valid_pointer(base, data, 8):
         report.warnings.append("Base des tampons GPU (0x170) invalide.")
         return None
     report.buffer_base = base
-    report.model_name = _string_at(data, _u64(data, model_offset + 0x08))
+    report.model_name = _string_at(data, _u64(data, model_offset + FMDL_NAME))
 
-    vertex_info = _u64(data, model_offset + 0x20)
-    materials_offset = _u64(data, model_offset + 0x38)
+    materials_offset = _u64(data, model_offset + FMDL_MATERIALS)
     if _valid_pointer(materials_offset, data):
         report.material_names.append(_string_at(data, _u64(data, materials_offset + 0x08)))
 
-    vertex_start = _find_vertex_offset(data, vertex_info, base)
-    if not vertex_start:
-        report.warnings.append("Tampon de sommets introuvable dans FVTX.")
-        return None
-    report.vertex_offset = vertex_start
-    report.index_offset = base
-
-    stride = _detect_stride(data, vertex_start, len(data))
-    report.stride = stride
-    vertex_count = (len(data) - vertex_start) // stride
-    report.vertex_count = vertex_count
-    report.index_count = (vertex_start - base) // 2
-
-    positions = _decode_positions(data, vertex_start, vertex_count, stride)
-    if not positions or not all(all(map(math.isfinite, p)) for p in positions):
-        report.warnings.append("Positions illisibles (f16) : géométrie refusée.")
-        return None
-
-    groups = _index_triangles(data, base, vertex_start, vertex_count)
-    groups = [g for g in groups if len(g) >= 8]      # fragments = bruit de découpage
-    if not groups:
-        report.warnings.append("Aucun triangle valide dans le tampon d'indices.")
-        return None
-
-    score = _coherence(positions, groups[0])
-    if score > 0.5:
+    shapes = find_shapes(data, base)
+    if not shapes:
         report.warnings.append(
-            f"Géométrie incohérente (score {score:.2f}) : refusée plutôt que fausse."
-        )
+            "Aucune forme lisible : table d'attributs (FVTX) absente ou incohérente.")
+        return None
+    report.shapes = [shape.summary() for shape in shapes]
+    first = shapes[0]
+    report.attributes = [a.describe() for a in first.attributes]
+    report.stride = first.stride
+    report.vertex_offset = first.vertex_offset
+    report.vertex_count = first.vertex_count
+
+    # tampon d'indices : de la base jusqu'au premier tampon de sommets
+    first_vertex = min(shape.vertex_offset for shape in shapes)
+    report.index_offset = base
+    report.index_count = max(0, (first_vertex - base) // 2)
+
+    # positions provisoires (bornées par l'écart entre tampons voisins)
+    positions: dict[int, list[tuple[float, float, float]]] = {}
+    for index, shape in enumerate(shapes):
+        positions[index] = _decode_positions_of(data, shape) if shape.vertex_count >= 3 else []
+
+    # un sous-maillage par bloc aligné : on l'attribue à la forme qui « colle »
+    diagonals = {index: _diagonal(values) for index, values in positions.items()}
+    assigned: dict[int, list[list[tuple[int, int, int]]]] = {}
+    refused = 0
+    if first_vertex > base:
+        for block in range(base, first_vertex, SUBMESH_ALIGN):
+            stop = min(block + SUBMESH_ALIGN, first_vertex)
+            best: tuple[float, int, list[tuple[int, int, int]]] | None = None
+            for index, shape in enumerate(shapes):
+                bound = len(positions[index])
+                if bound < 3:
+                    continue
+                triangles = _scan_block(data, block, stop, bound)
+                if len(triangles) < 4:
+                    continue
+                score = _coherence(positions[index], triangles)
+                if score > 0.2:
+                    continue
+                diagonal = diagonals.get(index, 0.0)
+                if _edge_ratio(positions[index], triangles, diagonal) > 0.15:
+                    continue                    # arêtes qui traversent tout le modèle
+                cleaned = _drop_oversized(positions[index], triangles, diagonal)
+                if len(cleaned) < max(4, len(triangles) // 2):
+                    continue
+                score = _coherence(positions[index], cleaned)
+                if best is None or score < best[0]:
+                    best = (score, index, cleaned)
+            if best is not None and best[0] <= 0.2:
+                assigned.setdefault(best[1], []).append(best[2])
+            else:
+                refused += 1
+    if refused:
+        report.warnings.append(f"{refused} bloc(s) d'indices ignoré(s) faute de validation.")
+
+    if not assigned:
+        report.warnings.append(
+            "Aucun triangle valide : tampon d'indices non reconnu (géométrie refusée).")
         return None
 
-    uvs = _decode_uvs(data, vertex_start, vertex_count, stride)
-    report.uv = _uv_plausible(positions, uvs, groups[0])
-    if not report.uv:
-        report.warnings.append("UV non reconnues : export sans texture (pas de fausse UV).")
-        uvs = []
+    # signale les formes dont plusieurs niveaux de détail se mélangent : la
+    # géométrie reste juste, mais elle est plus dense que le LOD 0 seul
+    for index, blocks in assigned.items():
+        peak = max(max(triangle) for block in blocks for triangle in block)
+        lower = sum(1 for block in blocks
+                    if max(max(triangle) for triangle in block) < peak * 0.75)
+        if lower:
+            report.warnings.append(
+                f"forme {index} : {lower} sous-maillage(s) de LOD inférieur inclus "
+                f"(pic d'indices {peak}).")
 
     meshes: list[MeshData] = []
     material = report.material_names[0] if report.material_names else ""
-    for index, triangles in enumerate(groups):
-        mesh = MeshData(name=f"{report.model_name or 'modele'}_{index:02d}",
-                        positions=list(positions), faces=list(triangles),
-                        material=material)
-        if report.uv:
-            mesh.uvs = list(uvs)
-        mesh.ensure_normals()
-        meshes.append(mesh)
+    counter = 0
+    for index, shape in enumerate(shapes):
+        blocks = assigned.get(index)
+        if not blocks:
+            continue
+        needed = max(max(triangle) for block in blocks for triangle in block) + 1
+        if needed > len(positions[index]):
+            needed = len(positions[index])
+        shape_positions = positions[index][:needed]
+        if len(shape_positions) < 3:
+            continue
+        normals = _decode_normals(data, shape, needed)
+        uvs, label = _decode_uvs(data, shape, needed, shape_positions, blocks[0])
+        if uvs and not report.uv:
+            report.uv = True
+            report.warnings.append(f"UV décodées ({label}).")
+        for block in blocks:
+            if max(max(triangle) for triangle in block) >= len(shape_positions):
+                continue
+            mesh = MeshData(name=f"{report.model_name or 'modele'}_{counter:02d}",
+                            positions=shape_positions, faces=list(block),
+                            material=material)
+            counter += 1
+            if uvs:
+                mesh.uvs = uvs
+            if normals and len(normals) == len(shape_positions):
+                mesh.normals = normals
+            mesh.ensure_normals()
+            meshes.append(mesh)
+
+    if not meshes:
+        report.warnings.append("Géométrie vide après validation : refusée.")
+        return None
+    first_needed = max(len(mesh.positions) for mesh in meshes)
+    report.vertex_count = max(report.vertex_count, first_needed)
     report.submeshes = len(meshes)
     return meshes, report

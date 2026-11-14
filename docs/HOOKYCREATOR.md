@@ -76,3 +76,19 @@ hookycreator/
   pngread.py   lecture d'images (Pillow si présent, sinon décodeur PNG maison)
   web/         interface (HTML/CSS/JS, sans build)
 ```
+
+## Modèles : ce qui est traduit aujourd'hui
+
+La lecture des BFRES 10.x est **pilotée par les données** : le module
+`hookymod/bfres_v10.py` lit la table d'attributs de sommets du fichier (nom,
+format, offset, pas) au lieu de supposer une disposition. Conséquence :
+
+* le papillon (`_p0` en `3 x f16`, pas 24 o) **et** les ennemis (`_p0` en
+  `3 x f32`, pas 32 o) sont décodés par le même code ;
+* les positions, les UV, les normales et les couleurs sont prises dans le bon
+  tampon, avec des garde-fous (cohérence géométrique, indices bornés, UV
+  corrélées aux aires 3D) ;
+* ce qui n'est pas reconnu est **refusé et expliqué** dans `warnings` : blocs
+  d'indices ignorés, LOD inférieurs inclus, attributs non décodés.
+
+Détail des mesures et méthode : `docs/trainIA/README.md`.
