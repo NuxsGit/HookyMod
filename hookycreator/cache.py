@@ -20,10 +20,9 @@ import sys
 import time
 import threading
 from collections import OrderedDict
-from contextlib import contextmanager
 from pathlib import Path
 
-from hookymod.util import write_atomic
+from hookymod.util import KeyedLocks, write_atomic
 
 CACHE_MIN_MB = 0
 CACHE_MAX_MB = 4096
@@ -46,28 +45,6 @@ def file_stamp(path: Path) -> tuple[int, int]:
     except OSError:
         return 0, 0
     return stat.st_size, stat.st_mtime_ns
-
-
-class KeyedLocks:
-    """Un verrou par clé active, sans conserver les clés après utilisation."""
-
-    def __init__(self) -> None:
-        self._guard = threading.Lock()
-        self._locks: dict[object, list] = {}
-
-    @contextmanager
-    def hold(self, key):
-        with self._guard:
-            entry = self._locks.setdefault(key, [threading.Lock(), 0])
-            entry[1] += 1
-        try:
-            with entry[0]:
-                yield
-        finally:
-            with self._guard:
-                entry[1] -= 1
-                if not entry[1]:
-                    del self._locks[key]
 
 
 class ImageCache:

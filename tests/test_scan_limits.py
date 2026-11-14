@@ -66,6 +66,9 @@ class ScanLimitTests(unittest.TestCase):
         denied = self.root / "Interdit"
         denied.mkdir()
         (denied / "Secret.bfres").write_bytes(synth.make_bfres())
+        # Windows peut convertir le chemin temporaire court RUNNER~1 en chemin
+        # long lorsque Project résout sa racine.
+        denied = denied.resolve()
         original = os.scandir
         def scandir(path):
             if Path(path) == denied:
