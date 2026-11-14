@@ -71,6 +71,128 @@ print("HOOKY_OK", blend)
 '''
 
 
+#: script déposé avec les textures : il branche chaque carte sur la bonne entrée
+#: du Principled BSDF, y compris quand on a importé l'OBJ (qui ne porte que la
+#: couleur de base). Écrit en ``bpy`` pur, sans dépendance.
+SHADER_SCRIPT = '''"""Branche les textures du dossier sur les matériaux — script HookyCreator.
+
+À lancer **après** avoir importé le modèle (OBJ ou glTF) dans Blender :
+
+  blender --background --python assembler_shaders.py -- mon_modele.blend
+  # ou dans Blender : onglet Scripting ▸ Open ▸ ce fichier ▸ Run Script
+
+Il reconnaît les cartes par leur suffixe (_Alb, _Nrm, _Rgh, _Mtl, _AO, _Emi),
+charge les images avec le bon espace colorimétrique et relie chaque entrée du
+Principled BSDF. Rien n'est inventé : une carte absente reste absente, et le
+script dit à la fin ce qu'il n'a pas trouvé.
+"""
+
+import glob
+import os
+import re
+import sys
+
+import bpy
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# suffixe (dernier jeton du nom) → rôle
+ROLES = {
+    "alb": "albedo", "albedo": "albedo", "bc": "albedo", "dif": "albedo",
+    "basecolor": "albedo", "col": "albedo", "color": "albedo",
+    "nrm": "normal", "normal": "normal", "norm": "normal",
+    "rgh": "roughness", "rough": "roughness", "roughness": "roughness",
+    "mtl": "metallic", "met": "metallic", "metal": "metallic",
+    "ao": "occlusion", "occ": "occlusion", "occlusion": "occlusion",
+    "emi": "emissive", "emit": "emissive", "emissive": "emissive",
+}
+# rôles qui sont des données, pas des couleurs (donc Non-Color)
+DATA_ROLES = {"normal", "roughness", "metallic", "occlusion"}
+
+
+def find_maps(folder):
+    """{rôle: chemin} d'après le suffixe des PNG du dossier."""
+    found = {}
+    for path in sorted(glob.glob(os.path.join(folder, "*.png"))):
+        stem = os.path.splitext(os.path.basename(path))[0].lower()
+        token = [part for part in re.split(r"[_.]", stem) if part]
+        role = ROLES.get(token[-1]) if token else None
+        if role and role not in found:
+            found[role] = path
+    return found
+
+
+def load_image(path, data):
+    image = bpy.data.images.load(path, check_existing=True)
+    try:
+        image.colorspace_settings.name = "Non-Color" if data else "sRGB"
+    except Exception as error:                     # ancienne version de Blender
+        print("espace colorimétrique non réglé pour", path, error)
+    return image
+
+
+def principled(material):
+    material.use_nodes = True
+    tree = material.node_tree
+    node = next((n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if node is None:
+        node = tree.nodes.new("ShaderNodeBsdfPrincipled")
+        output = next((n for n in tree.nodes if n.type == "OUTPUT_MATERIAL"), None) \
+            or tree.nodes.new("ShaderNodeOutputMaterial")
+        tree.links.new(node.outputs["BSDF"], output.inputs["Surface"])
+    return tree, node
+
+
+def main():
+    maps = find_maps(HERE)
+    print("cartes trouvées :", {role: os.path.basename(path) for role, path in maps.items()})
+    if not maps:
+        print("aucune carte reconnue : rien à brancher")
+        return
+
+    images = {role: load_image(path, role in DATA_ROLES) for role, path in maps.items()}
+    materials = [m for m in bpy.data.materials if m.users]
+    for material in materials:
+        tree, node = principled(material)
+
+        def connect(role, socket, via=None):
+            if role not in images or socket not in node.inputs:
+                return False
+            source = node
+            tex = tree.nodes.new("ShaderNodeTexImage")
+            tex.image = images[role]
+            tex.location = (node.location.x - 400, node.location.y - 200)
+            if via == "normal":
+                bump = tree.nodes.new("ShaderNodeNormalMap")
+                bump.location = (node.location.x - 200, node.location.y - 300)
+                tree.links.new(tex.outputs["Color"], bump.inputs["Color"])
+                tree.links.new(bump.outputs["Normal"], node.inputs["Normal"])
+            else:
+                tree.links.new(tex.outputs["Color"], node.inputs[socket])
+            return True
+
+        connect("albedo", "Base Color")
+        connect("roughness", "Roughness")
+        connect("metallic", "Metallic")
+        connect("normal", "Normal", via="normal")
+        # Blender 4.x : « Emission Color » ; 3.x : « Emission »
+        emission = "Emission Color" if "Emission Color" in node.inputs else "Emission"
+        if connect("emissive", emission) and "Emission Strength" in node.inputs:
+            node.inputs["Emission Strength"].default_value = 1.0
+
+    print("matériaux traités :", len(materials))
+    missing = [role for role in ("albedo", "normal", "roughness", "metallic")
+               if role not in maps]
+    if missing:
+        print("cartes absentes (ce n'est pas une erreur) :", ", ".join(missing))
+    print("Fichier ▸ Enregistrer pour garder les branchements.")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
 def _windows_candidates() -> list[Path]:
     found: list[Path] = []
     for root in (Path(r"C:\Program Files\Blender Foundation"),
@@ -124,6 +246,15 @@ def write_script(folder, gltf_name: str, blend_name: str) -> Path:
     path.write_text(IMPORT_SCRIPT.format(blend=blend_name, gltf=gltf_name,
                                          gltf_name=gltf_name, blend_name=blend_name),
                     encoding="utf-8")
+    return path
+
+
+def write_shader_script(folder, name: str = "") -> Path:
+    """Dépose ``assembler_shaders.py`` à côté des textures et rend son chemin."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "assembler_shaders.py"
+    path.write_text(SHADER_SCRIPT, encoding="utf-8")
     return path
 
 

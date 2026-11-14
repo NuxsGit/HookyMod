@@ -373,3 +373,69 @@ atlas vide.
   définition, avec les deux variantes `warn` et `off` ;
 * la barre d'état compte aussi les **animations**, et un bouton d'export
   sélectionné indique son état (`aria-pressed`) au lieu de rester neutre.
+
+## Toutes les cartes de texture, pas seulement la couleur
+
+L'export d'origine ne sortait que l'**albédo** : dans Blender, l'épée de
+Biggoron arrivait avec sa couleur, mais sans normale (surface lisse et fausse),
+sans rugosité (tout brillant) et sans métal (tout plastique). La cause était un
+filtre sur le nom : `texture_assets_for` ne gardait que `_Alb`, `_Dif`,
+`albedo`, `basecolor`.
+
+Désormais un modèle exporte **toutes** ses cartes. Le suffixe du fichier suffit
+à connaître le rôle — et c'est toujours le **dernier** jeton qui décide, sinon
+le préfixe `Mt_` (pour *material*) serait lu comme du métal :
+
+| Suffixes rencontrés | Rôle | Entrée Principled BSDF |
+| --- | --- | --- |
+| `_Alb` `_Albedo` `_BC` `_BaseColor` `_Dif` `_Col` | albédo | Base Color (sRGB) |
+| `_Nrm` `_Normal` | normale | Normal ← nœud Normal Map (Non-Color) |
+| `_Rgh` `_Rough` | rugosité | Roughness (Non-Color) |
+| `_Mtl` `_Met` `_Metal` | métal | Metallic (Non-Color) |
+| `_AO` `_Occ` | occlusion | facteur AO (Non-Color) |
+| `_Emi` `_Emit` | émission | Emission, force 1.0 |
+| `_Spc` `_Spec` | spéculaire | pas d'équivalent glTF → à la main |
+| `_Msk` `_Mask` `_Op` `_Alpha` | masque / opacité | Alpha, à la main |
+| autre | `autre` | **exporté quand même**, signalé à part |
+
+Un suffixe inconnu n'est jamais jeté : une carte qu'on cache est une carte
+qu'on croit absente. Elle part dans l'export, classée « autre », et
+`TEXTURES.md` dit qu'il faut l'ouvrir pour décider.
+
+### Ce que produit un export
+
+* un PNG par carte, nommé comme dans le jeu (`Mt_..._Alb.png`, `..._Nrm.png`…) ;
+* un `*_MetalRough.png` **composé** : **G = rugosité, B = métal** — c'est
+  l'emballage que glTF et Unity attendent, et il évite les deux images ;
+* `TEXTURES.md` : le tableau fichier → rôle → entrée Blender, plus les pièges ;
+* `assembler_shaders.py` : un script `bpy` qui recrée les nœuds tout seul
+  (Base Color, Normal Map, Separate Color sur la MR, émission) ;
+* le `.gltf` porte `baseColorTexture`, `normalTexture`,
+  `metallicRoughnessTexture`, `occlusionTexture` et `emissiveTexture`, avec
+  `metallicFactor`/`roughnessFactor` à 1.0 pour que ce soit **l'image** qui
+  décide (sinon Blender assombrit malgré la carte) ;
+* le `.mtl` de l'OBJ porte `map_Kd` et `norm` (Wavefront n'a rien d'autre).
+
+### Le piège n°1 : l'espace colorimétrique
+
+Une normale lue en sRGB paraît bombée de travers, une rugosité en sRGB donne un
+métal trop brillant. Une seule règle : **albédo et émission en sRGB**, tout le
+reste (normale, rugosité, métal, AO, masque) en **Non-Color**. Le script le fait
+pour vous ; à la main, c'est le menu déroulant au-dessus de l'aperçu de l'image.
+
+Quand un modèle n'a **que** l'albédo, ce n'est pas un bug : le jeu n'a pas plus
+de cartes pour lui. Gardez `Roughness ≈ 0.5`, `Metallic = 0`.
+
+### Dans l'interface
+
+* chaque vignette de texture porte une **pastille de rôle** (`Alb`, `Nrm`,
+  `Rgh`, `Mtl`, `AO`, `Emi`, `Spc`, `Msk`, `?`) — le nom complet est tronqué
+  dans la grille, la pastille non ;
+* le menu **« Toutes les cartes »** de l'écran Textures ne montre qu'un rôle ;
+* la fiche d'un modèle liste **toutes** ses cartes, groupées par rôle ;
+* la **coche verte** sur une vignette est le bouton de sélection (Ctrl+clic
+  pour en prendre plusieurs) : ce n'est pas un état de texture.
+
+Tests : `tests/test_texture_maps.py` (20 cas) — classification par suffixe,
+`Mt_` non métallique, composition de la MR, export multi-cartes, câblage glTF
+et MTL.

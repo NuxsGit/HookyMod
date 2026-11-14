@@ -127,7 +127,9 @@ def _fmt(value: float) -> str:
 
 
 def export_obj(meshes: list[MeshData], path, mtl: bool = True,
-               scale: float = 1.0, up_axis: str = "y") -> Path:
+               scale: float = 1.0, up_axis: str = "y",
+               albedo_map: dict[str, str] | None = None,
+               normal_map: str = "") -> Path:
     """Écrit un fichier OBJ (+ MTL) lisible par Blender, Maya, etc.
 
     Blender importe l'OBJ avec ``bpy.wm.obj_import`` : c'est la voie la plus
@@ -136,6 +138,9 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
     La version précédente appelait un formateur **trois fois par sommet** :
     15 millions d'appels pour une armure, 13,7 s d'écriture. Ici un sommet
     coûte une seule chaîne formatée, et les faces sont formatées en bloc.
+
+    :param albedo_map: ``{matériau: fichier PNG}`` → ``map_Kd`` dans le MTL.
+    :param normal_map: fichier PNG de normale → ``norm`` (normale) dans le MTL.
     """
     path = Path(path)
     chunks: list[str] = ["# Exporté par HookyMod / Asset Explorer", ""]
@@ -164,7 +169,15 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
             mtl_lines += [f"newmtl {material}",
                           f"Kd {color[0]:.3f} {color[1]:.3f} {color[2]:.3f}",
                           "Ka 0.1 0.1 0.1", "Ks 0.0 0.0 0.0", "d 1.0",
-                          "illum 2", ""]
+                          "illum 2"]
+            albedo_file = _albedo_for(material, albedo_map or {})
+            if albedo_file:
+                mtl_lines.append(f"map_Kd {albedo_file}")
+            if normal_map:
+                # Wavefront : « norm » = carte de normales ; Blender l'importe
+                # comme une image, à brancher sur Normal Map (voir TEXTURES.md)
+                mtl_lines.append(f"norm {normal_map}")
+            mtl_lines.append("")
 
         if z_up:
             for x, y, z in mesh.positions:
@@ -220,6 +233,16 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
     if use_mtl:
         write_atomic(path.with_suffix(".mtl"), ("\n".join(mtl_lines) + "\n").encode("utf-8"))
     return path
+
+
+def _albedo_for(material: str, albedo_map: dict[str, str]) -> str:
+    """Fichier d'albédo d'un matériau : nom exact, nom sans suffixe, ou l'unique."""
+    if not albedo_map:
+        return ""
+    if material in albedo_map:
+        return albedo_map[material]
+    unique = {value for value in albedo_map.values()}
+    return next(iter(unique)) if len(unique) == 1 else ""
 
 
 def load_obj(path_or_bytes) -> MeshData:

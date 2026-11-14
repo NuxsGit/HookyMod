@@ -205,6 +205,18 @@
             </div>
             <div class="toolbar">
               <input type="search" class="search" id="search-tex" placeholder="Filtrer…">
+              <select id="tex-role" title="Ne montrer qu'un type de carte">
+                <option value="">Toutes les cartes</option>
+                <option value="albedo">Albédo (Alb)</option>
+                <option value="normal">Normale (Nrm)</option>
+                <option value="roughness">Rugosité (Rgh)</option>
+                <option value="metallic">Métal (Mtl)</option>
+                <option value="occlusion">Occlusion (AO)</option>
+                <option value="emissive">Émission (Emi)</option>
+                <option value="specular">Spéculaire (Spc)</option>
+                <option value="mask">Masque (Msk)</option>
+                <option value="autre">Inconnu (?)</option>
+              </select>
             </div>
           </div>
           <div class="grid" id="texture-grid"></div>

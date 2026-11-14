@@ -19,7 +19,9 @@ from pathlib import Path
 
 from hookymod import bfres as bfres_mod
 from hookymod import bntx as bntx_mod
-from hookymod import blendfile, bntx_encode, blender, render, util, zs
+from hookymod import blendfile, bntx_encode, blender, render, zs
+from hookymod import texturemaps as texture_maps
+from hookymod.texturemaps import ROLE_LABELS, ROLE_ORDER
 from hookymod.blender import _base_name
 from hookymod.mesh import MeshData
 
@@ -42,11 +44,15 @@ class Asset:
     size: int
     compressed: bool = False
     mtime: int = 0                  # sert de version dans les URL de vignettes
+    role: str = ""                  # texture seulement : albedo, normal, roughness…
 
     def as_json(self) -> dict:
-        return {"rel": self.rel, "kind": self.kind, "size": self.size,
+        data = {"rel": self.rel, "kind": self.kind, "size": self.size,
                 "compressed": self.compressed, "name": Path(self.rel).name,
                 "mtime": self.mtime}
+        if self.role:
+            data["role"] = self.role
+        return data
 
     @property
     def stem(self) -> str:
@@ -68,6 +74,12 @@ def _animation_key(name: str) -> str:
         if base.endswith(suffix):
             return base[: -len(suffix)]
     return base
+
+
+def _png_stem(stem: str) -> str:
+    """``Mt_Epee_Alb.0`` → ``Mt_Epee_Alb`` (le numéro de variante ne sert à rien)."""
+    head, _, tail = stem.rpartition(".")
+    return head if head and tail.isdigit() else stem
 
 
 def _display_name(stem: str) -> str:
@@ -161,6 +173,7 @@ class Project:
         self.geo_misses = 0
         self._reports: dict[str, dict] = {}
         self._texture_index: dict[str, list] = {}
+        self._map_index: dict[str, dict] = {}
         self._animation_index: list | None = None
         # géométrie aplatie pour l'affichage : reconstruite à chaque aperçu,
         # elle coûtait ~1 s sur un modèle de 170 000 faces
@@ -314,7 +327,12 @@ class Project:
             stat = path.stat()
             assets.append(Asset(rel=rel, kind=kind, size=stat.st_size,
                                 compressed=low.endswith(".zs"),
-                                mtime=int(stat.st_mtime)))
+                                mtime=int(stat.st_mtime),
+                                # un `.bntx` est une carte précise (albédo,
+                                # normale, rugosité…) : le dire une fois pour
+                                # toutes évite de le redécouvrir à chaque écran
+                                role=texture_maps.classify(path.name)
+                                if kind == "texture" else ""))
         self.assets = assets
         self.scanned_at = started
         self.scan_seconds = round(__import__("time").perf_counter() - started_clock, 3)
@@ -606,8 +624,11 @@ class Project:
             "bounds": [round(highest[i] - lowest[i], 4) for i in range(3)],
             "warnings": meta.get("warnings", [])[:8],
             "textures": [{"rel": asset.rel, "name": asset.stem,
-                          "size": asset.size, "mtime": asset.mtime}
-                         for asset in self.texture_assets_for(rel)][:12],
+                          "size": asset.size, "mtime": asset.mtime,
+                          "role": role,
+                          "label": ROLE_LABELS.get(role, "?")}
+                         for role, assets in self.texture_maps_for(rel).items()
+                         for asset in assets[:4]][:24],
             "animations": [{"rel": asset.rel, "name": asset.stem,
                             "size": asset.size}
                            for asset in self.animations_for(rel)][:32],
@@ -807,6 +828,147 @@ class Project:
                 found.append(asset)
         return found
 
+    def texture_maps_for(self, rel: str) -> dict[str, list]:
+        """**Toutes** les cartes du modèle, groupées par rôle (``albedo``, ``normal``…).
+
+        On classe les textures du projet par précision du nom (nom du modèle,
+        puis famille ``Weapon_Sword``, puis préfixe), puis par rôle d'après le
+        suffixe du fichier. Une texture au suffixe inconnu finit dans ``autre`` :
+        elle est exportée quand même, jamais jetée par ignorance.
+        """
+        cached = self._map_index.get(rel)
+        if cached is not None:
+            return cached
+        stem = Path(rel).name.split(".")[0].lower()
+        parts = stem.split("_")
+        family = "_".join(parts[:2]) if len(parts) > 1 else stem
+        ranks: dict[int, list] = {0: [], 1: [], 2: []}
+        for asset in self.by_kind("texture"):
+            low = Path(asset.rel).name.lower()
+            if stem and stem in low:
+                ranks[0].append(asset)
+            elif family and family in low:
+                ranks[1].append(asset)
+            elif parts and parts[0] and parts[0] in low:
+                ranks[2].append(asset)
+        chosen = next((ranks[rank] for rank in (0, 1, 2) if ranks[rank]), [])
+        buckets: dict[str, list] = {}
+        for asset in chosen:
+            role = asset.role or texture_maps.classify(asset.rel)
+            buckets.setdefault(role, []).append(asset)
+        for role, items in buckets.items():
+            # le nom le plus court est le plus proche du modèle (« X_Alb » plutôt
+            # que « X_Alb_Copy_02 »)
+            items.sort(key=lambda item: (len(item.rel), item.rel))
+        self._map_index[rel] = buckets
+        return buckets
+
+    def export_maps_for(self, rel: str, folder: Path,
+                        limit: int = 24) -> dict:
+        """Écrit **toutes** les cartes du modèle en PNG, plus ``TEXTURES.md``.
+
+        :return: ``{maps: {rôle: fichier}, files: [...], textures: n,
+                  warnings: [...]}``.
+        """
+        folder = Path(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        buckets = self.texture_maps_for(rel)
+        base = _display_name(Path(rel).name.split(".")[0])
+        maps: dict[str, str] = {}
+        files: list[dict] = []
+        warnings: list[str] = []
+        raw: dict[str, bytes] = {}
+        written = 0
+
+        for role in ROLE_ORDER:
+            for asset in buckets.get(role, [])[:1]:
+                if written >= limit:
+                    warnings.append(f"plus de {limit} cartes : les suivantes sont "
+                                    "ignorées (exporte-les seules)")
+                    break
+                try:
+                    png = self.texture_png(asset.rel, 0)
+                except ProjectError as error:
+                    warnings.append(f"{Path(asset.rel).name} illisible : {error}")
+                    continue
+                name = f"{_png_stem(asset.stem)}.png"
+                (folder / name).write_bytes(png)
+                maps[role] = name
+                raw[role] = png
+                files.append({"role": role, "label": ROLE_LABELS.get(role, "?"),
+                              "file": name, "source": asset.rel})
+                written += 1
+
+        # glTF n'a qu'une image pour rugosité + métal (G et B) : on la fabrique
+        if "metalrough" not in maps and ("roughness" in raw or "metallic" in raw):
+            composed = texture_maps.compose_metal_roughness(raw.get("roughness"),
+                                                           raw.get("metallic"))
+            if composed:
+                name = f"{base}_MetalRough.png"
+                (folder / name).write_bytes(composed)
+                maps["metalrough"] = name
+                parts = [label for role, label in (("roughness", "Rgh"),
+                                                   ("metallic", "Mtl"))
+                         if role in raw]
+                files.append({"role": "metalrough", "label": "MR", "file": name,
+                              "source": " + ".join(parts)})
+
+        if not maps:
+            warnings.append("aucune texture ne porte le nom de ce modèle : "
+                            "rien à brancher (le modèle sort sans couleur)")
+        else:
+            blendfile.write_shader_script(folder, base)   # branchement dans Blender
+        self._write_textures_note(folder, base, rel, files, warnings)
+        return {"maps": maps, "files": files, "textures": len(files),
+                "warnings": warnings}
+
+    def _write_textures_note(self, folder: Path, base: str, rel: str,
+                             files: list[dict], warnings: list[str]) -> Path:
+        """``TEXTURES.md`` : quelle image va sur quelle entrée de shader."""
+        lines = [f"# Textures de {base}", "",
+                 f"Modèle : `{rel}`", "",
+                 "Chaque fichier va sur **une** entrée du shader. Dans Blender, ouvre le",
+                 "matériau → Principled BSDF, puis glisse l'image sur l'entrée indiquée.",
+                 "",
+                 "Pour ne pas le faire à la main : **`assembler_shaders.py`** (dans ce",
+                 "dossier) branche tout d'un coup — onglet Scripting ▸ Open ▸ Run Script,",
+                 "ou `blender --background --python assembler_shaders.py`.", "",
+                 "| Fichier | Rôle | Entrée Blender |", "| --- | --- | --- |"]
+        for item in files:
+            help_text = texture_maps.ROLE_HELP.get(item["role"], "")
+            lines.append(f"| `{item['file']}` | {item['label']} | {help_text} |")
+        if not files:
+            lines.append("| — | — | aucune texture trouvée pour ce modèle |")
+        lines += ["", "## Espace colorimétrique (la cause n°1 d'un rendu « lavé »)", "",
+                  "* **Albédo** : sRGB (c'est une couleur).",
+                  "* **Tout le reste** (normale, rugosité, métal, AO) : **Non-Color**.",
+                  "  Une normale lue en sRGB donne des facettes qui semblent fausses ;",
+                  "  une rugosité en sRGB donne un métal trop brillant.", "",
+                  "## Réglages qui vont avec", "",
+                  "* normale : nœud **Normal Map**, force (`Strength`) 1.0 ;",
+                  "* métal : 1.0 quand la carte `Mtl` est blanche à cet endroit, sinon 0 ;",
+                  "* rugosité : `Roughness` reçoit la carte directement ;",
+                  "* si tu n'as **que** l'albédo (pas de `Nrm`, `Rgh`…) : ce n'est pas une",
+                  "  erreur, le modèle n'a pas plus de cartes — garde `Roughness` ≈ 0.5.",
+                  "",
+                  "## Rugosité + métal : deux façons", "",
+                  "* **Deux images** (`Rgh` sur Roughness, `Mtl` sur Metallic) : le plus",
+                  "  lisible dans Blender, c'est ce que fait `assembler_shaders.py` ;",
+                  "* **Une image** `*_MetalRough.png` : c'est l'emballage glTF/Unity —",
+                  "  **G = rugosité, B = métal**, R et A ignorés. Pour l'utiliser dans",
+                  "  Blender : nœud `Separate Color`, puis G → Roughness et B → Metallic.",
+                  "",
+                  "## Sortie glTF", "",
+                  "Le `.gltf` porte déjà : `baseColorTexture`, `normalTexture`,",
+                  "`metallicRoughnessTexture` (rugosité en G, métal en B) et",
+                  "`occlusionTexture`. Les cartes sans équivalent glTF (spéculaire,",
+                  "masque) sont écrites quand même et listées ci-dessus."]
+        if warnings:
+            lines += ["", "## Remarques", ""] + [f"* {w}" for w in warnings]
+        path = Path(folder) / "TEXTURES.md"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
     def export_textures_for(self, rel: str, folder: Path) -> dict[str, str]:
         """PNG d'albédo du modèle, indexés par nom de matériau **et** par nom de fichier.
 
@@ -874,9 +1036,11 @@ class Project:
         """
         meshes = self._model_meshes(rel)
         folder = self.work / "export" / Path(rel).name.split(".")[0]
-        found = self.export_textures_for(rel, folder) if textures else {}
+        found = self.export_maps_for(rel, folder) if textures else {
+            "maps": {}, "files": [], "textures": 0, "warnings": []}
         written = blender.export_bundle(meshes, folder, folder.name,
-                                        textures=found or None)
+                                        textures=self._albedo_index(rel, folder),
+                                        maps=found["maps"] or None)
         executable = blendfile.find_blender(self.settings.blender_path)
         result = blendfile.make_blend(folder, folder.name, blender=executable)
         files = {path.name for path in written.values()}
@@ -886,7 +1050,8 @@ class Project:
         return {
             "folder": self.shown_path(folder),
             "files": sorted(files),
-            "textures": len({path for path in found.values()}),
+            "textures": found["textures"],
+            "maps": found["files"],
             "faces": sum(len(mesh.faces) for mesh in meshes),
             "method": result["method"],
             "blend": self.shown_path(Path(result["blend"])) if result["blend"] else "",
@@ -899,18 +1064,43 @@ class Project:
         }
 
     def export_model(self, rel: str, textures: bool = True) -> dict:
+        """Exporte géométrie **et toutes les cartes** de texture du modèle."""
         meshes = self._model_meshes(rel)
         folder = self.work / "export" / Path(rel).name.split(".")[0]
-        found: dict[str, str] = self.export_textures_for(rel, folder) if textures else {}
+        found = self.export_maps_for(rel, folder) if textures else {
+            "maps": {}, "files": [], "textures": 0, "warnings": []}
         written = blender.export_bundle(meshes, folder, folder.name,
-                                        textures=found or None)
+                                        textures=self._albedo_index(rel, folder),
+                                        maps=found["maps"] or None)
         meta = self._reports.get(rel, {})
+        files = sorted({path.name for path in written.values()}
+                       | {item["file"] for item in found["files"]}
+                       | {"TEXTURES.md"})
+        warnings = meta.get("warnings", [])[:6] + found["warnings"]
         return {"folder": self.shown_path(folder),
-                "files": sorted({path.name for path in written.values()}),
-                "textures": len({path for path in found.values()}),
+                "files": files,
+                "textures": found["textures"],
+                "maps": found["files"],
                 "faces": sum(len(m.faces) for m in meshes),
                 "submeshes": len(meshes),
-                "warnings": meta.get("warnings", [])[:6]}
+                "warnings": warnings}
+
+    def _albedo_index(self, rel: str, folder: Path) -> dict[str, str]:
+        """PNG d'albédo indexés par nom de matériau (Blender les y retrouve)."""
+        buckets = self.texture_maps_for(rel)
+        found: dict[str, str] = {}
+        # un albédo par matériau : on ne tronque pas la liste, sinon un modèle à
+        # six matériaux n'en garde que quatre et les autres sortent en gris
+        for asset in buckets.get("albedo", [])[:32]:
+            target = folder / f"{_png_stem(asset.stem)}.png"
+            if not target.is_file():
+                continue
+            base = _base_name(asset.stem)
+            for key in (asset.stem, base,
+                        base[3:] if base.startswith("mt_") else ""):
+                if key:
+                    found.setdefault(key, str(target))
+        return found
 
     # ------------------------------------------------------------------ mobs
     def _mobs_file(self) -> Path:
@@ -1011,9 +1201,11 @@ class Project:
                     continue
                 stem = Path(rel).name.split(".")[0]
                 target = Path(folder) / stem
-                found = self.export_textures_for(rel, target)
-                written = blender.export_bundle(self._model_meshes(rel), target,
-                                                stem, textures=found or None)
+                maps = self.export_maps_for(rel, target)
+                written = blender.export_bundle(
+                    self._model_meshes(rel), target, stem,
+                    textures=self._albedo_index(rel, target),
+                    maps=maps["maps"] or None)
                 # tout ce que l'export a produit : le .bin du glTF et les PNG
                 # compris (sans le .bin, Blender refuse le glTF)
                 for produced in sorted(target.rglob("*")):
@@ -1021,7 +1213,7 @@ class Project:
                         relative = produced.relative_to(target)
                         archive.write(produced, f"modeles/{stem}/{relative.as_posix()}")
                 lines.append(f"[modèle] {rel} ({len(written)} fichier(s) + "
-                             f"{len(set(found.values()))} texture(s))")
+                             f"{maps['textures']} carte(s) de texture)")
                 models += 1
             lines.insert(1, f"{models} modèle(s), {textures} texture(s)")
             archive.writestr("LISEZMOI.txt", "\n".join(lines) + "\n")

@@ -273,6 +273,32 @@ function textureThumb(asset) {
     + (asset.mtime ? `&v=${asset.mtime}` : "");
 }
 
+/* le suffixe d'un `.bntx` dit tout (Alb, Nrm, Rgh…) : on l'affiche en clair,
+   sinon le nom tronqué ne dit plus de quelle carte il s'agit */
+const ROLE_NAMES = {
+  albedo: "Alb", normal: "Nrm", roughness: "Rgh", metallic: "Mtl",
+  metalrough: "MR", occlusion: "AO", emissive: "Emi", specular: "Spc",
+  mask: "Msk", autre: "?",
+};
+const ROLE_TITLES = {
+  albedo: "albédo — couleur de base (Base Color)",
+  normal: "normale — Normal Map",
+  roughness: "rugosité — Roughness",
+  metallic: "métallique — Metallic",
+  metalrough: "metallicRoughness combinée (G = rugosité, B = métal)",
+  occlusion: "occlusion — facteur AO",
+  emissive: "émission — Emission",
+  specular: "spéculaire — pas d'équivalent glTF, à régler à la main",
+  mask: "masque / opacité — à brancher à la main",
+  autre: "rôle inconnu — ouvre l'image pour décider",
+};
+
+function ROLE_BADGE(role) {
+  if (!role) return "";
+  const label = ROLE_NAMES[role] || "?";
+  return `<span class="badge role role-${esc(role)}" title="${esc(ROLE_TITLES[role] || "")}">${label}</span>`;
+}
+
 function tileMarkup(asset, kind) {
   const key = `${kind}:${asset.rel}`;
   const chosen = state.selection.has(key);
@@ -287,7 +313,8 @@ function tileMarkup(asset, kind) {
       <div class="thumb ${shown === "aperçu désactivé" ? "placeholder" : ""} ${kind === "texture" ? "checker" : ""}">${shown}</div>
       <div class="meta">
         <strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
-        <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}</small>
+        <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}
+          ${kind === "texture" ? ROLE_BADGE(asset.role) : ""}</small>
       </div>
     </article>`;
 }
@@ -421,11 +448,12 @@ async function openModel(rel, options = {}) {
     ${info.warnings.length ? `<details class="warns"><summary>${info.warnings.length} remarque(s) de décodage</summary>
       <ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
     ${info.textures.length ? `<div class="ensemble-strip">
-      <h4>Textures du modèle</h4>
+      <h4>Cartes du modèle (${info.textures.length})</h4>
       <div class="strip">${info.textures.map((t) => `
         <button class="strip-item" data-open-texture="${esc(t.rel)}" title="${esc(t.rel)}">
           <img loading="lazy" alt="" src="/api/texture/png?path=${encodeURIComponent(t.rel)}&index=0${t.mtime ? `&v=${t.mtime}` : ""}">
           <span>${esc(t.name)}</span>
+          <span class="strip-role">${ROLE_BADGE(t.role)}</span>
         </button>`).join("")}</div>
     </div>` : ""}
     ${info.animations.length ? `<details class="warns anims"><summary>${info.animations.length} animation(s) liée(s)</summary>
@@ -496,13 +524,17 @@ async function openModel(rel, options = {}) {
 async function renderTextures() {
   const grid = $("#texture-grid");
   if (!grid) return;
+  const role = $("#tex-role")?.value || "";
   const textures = (state.project?.assets || [])
-    .filter((asset) => asset.kind === "texture" && matches(asset));
+    .filter((asset) => asset.kind === "texture" && matches(asset)
+      && (!role || (asset.role || "autre") === role));
   state.textures = textures;
   const shown = textures.slice(0, state.shown.textures);
   const count = $("#texture-count");
   if (count) {
+    const roleName = role ? (ROLE_NAMES[role] || role) : "";
     count.textContent = `${textures.length} texture(s)`
+      + (role ? ` de type ${roleName}` : "")
       + (state.filter ? ` pour « ${state.filter} »` : "")
       + (shown.length < textures.length ? ` — ${shown.length} affichées` : "");
   }
@@ -1048,7 +1080,13 @@ async function exportModel(rel) {
         + "le glTF sort sans image (les PNG sont à côté du BFRES dans le dump)");
       toast("Export fait, mais aucune texture n'a été trouvée", "error");
     } else {
-      log("ok", `${result.textures} texture(s) liée(s) aux matériaux`);
+      // le rôle de chaque carte dit sur quelle entrée de shader la mettre
+      const byRole = (result.maps || [])
+        .map((map) => `${map.label} → ${map.file}`).join(" · ");
+      log("ok", `${result.textures} carte(s) : ${byRole}`);
+      log("info", "TEXTURES.md explique où va chaque image ; assembler_shaders.py "
+        + "les branche dans Blender");
+      toast(`${result.textures} carte(s) de texture exportée(s)`);
     }
     (result.warnings || []).forEach((warning) => log("warn", warning));
   } catch (error) {
@@ -1673,6 +1711,11 @@ function wire() {
   };
   const ensTex = $("#ens-textures");
   if (ensTex) ensTex.onchange = () => renderEnsembles();
+  const texRole = $("#tex-role");
+  if (texRole) texRole.onchange = () => {
+    state.shown.textures = 48;
+    renderTextures();
+  };
   $("#model-more-btn").onclick = () => {
     state.shown.models += 48;
     renderModels();

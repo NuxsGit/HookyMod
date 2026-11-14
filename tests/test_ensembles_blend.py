@@ -125,7 +125,9 @@ class EnsembleTests(unittest.TestCase):
 
     def test_model_info_lists_the_companions(self) -> None:
         info = self.project.model_info(self.rel)
-        self.assertEqual([item["name"] for item in info["textures"]], ["Heros_Alb"])
+        # toutes les cartes du modèle, chacune avec son rôle (albédo + normale)
+        roles = {item["name"]: item["role"] for item in info["textures"]}
+        self.assertEqual(roles, {"Heros_Alb": "albedo", "Heros_Nrm": "normal"})
         self.assertEqual([item["name"] for item in info["animations"]],
                          ["Heros.anim"])
 
@@ -153,7 +155,7 @@ class EnsembleTests(unittest.TestCase):
         info = self.project.model_info(self.rel)
         self.assertFalse(info["textured"])
         # l'albédo reste listé : on l'éteint à l'affichage, on ne le cache pas
-        self.assertEqual(len(info["textures"]), 1)
+        self.assertIn("albedo", {item["role"] for item in info["textures"]})
 
     def test_albedo_is_shared_by_every_material(self) -> None:
         samplers = self.project.albedo_samplers(self.rel)
