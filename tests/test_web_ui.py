@@ -19,9 +19,9 @@ WEB = ROOT / "hookycreator" / "web"
 #: éléments fabriqués à la volée par le script (panneau de détail), donc absents
 #: du HTML livré : ils sont créés par showInspector() et ses appelants.
 DYNAMIC_IDS = {
-    "btn-blender", "btn-export-png", "btn-import", "btn-translate-model",
-    "btn-turntable", "file-import", "model-budget", "model-budget-note",
-    "model-quality", "model-shot",
+    "btn-blender", "btn-blend", "btn-export-png", "btn-import",
+    "btn-translate-model", "btn-turntable", "copy-command", "file-import",
+    "model-budget", "model-budget-note", "model-quality", "model-shot",
 }
 
 
@@ -44,8 +44,9 @@ class WebContractTests(unittest.TestCase):
     def test_every_view_has_a_section_and_a_rail_button(self) -> None:
         sections = set(re.findall(r'id="view-([a-z]+)"', self.html))
         rail = set(re.findall(r'data-view="([a-z]+)"', self.html))
-        labels = set(re.findall(r'^\s+(home|models|textures|mobs|blender|settings):',
-                                self.js, re.M))
+        labels = set(re.findall(
+            r'^\s+(home|models|ensembles|textures|mobs|blender|settings):',
+            self.js, re.M))
         self.assertEqual(sections, rail)
         self.assertTrue(sections <= labels | {"home"})
         self.assertIn("home", sections)
@@ -73,6 +74,15 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('dataset.density', self.js)
         self.assertIn('html[data-accent="azur"]', self.css)
         self.assertIn('html[data-density="compact"]', self.css)
+
+    def test_ensemble_view_is_wired_to_the_api(self) -> None:
+        self.assertIn("/api/ensembles", self.js)
+        self.assertIn("renderEnsembles", self.js)
+        self.assertIn("tex=1", self.js)
+
+    def test_blend_export_is_wired_to_the_api(self) -> None:
+        self.assertIn("/api/model/blend", self.js)
+        self.assertIn("/api/blender", self.js)
 
     def test_blend_view_is_wired_to_the_api(self) -> None:
         for route in ("/api/blend/list", "/api/blend/inspect",

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from hookymod import bfres as bfres_mod
 from hookymod import bntx as bntx_mod
-from hookymod import bntx_encode, blender, render, util, zs
+from hookymod import blendfile, bntx_encode, blender, render, util, zs
 from hookymod.blender import _base_name
 from hookymod.mesh import MeshData
 
@@ -57,6 +57,78 @@ class Asset:
         return name.rsplit(".", 1)[0]
 
 
+#: suffixes que le jeu ajoute au nom du modèle pour nommer ses animations
+ANIMATION_SUFFIXES = ("_player_animation", "_animation", "_anim")
+
+
+def _animation_key(name: str) -> str:
+    """``Animal_Cat_Animation.anim.bfres.zs`` → ``animal_cat``."""
+    base = name.split(".")[0].lower()
+    for suffix in ANIMATION_SUFFIXES:
+        if base.endswith(suffix):
+            return base[: -len(suffix)]
+    return base
+
+
+def _display_name(stem: str) -> str:
+    """``Animal_Cat.Animal_Cat`` → ``Animal_Cat`` (le jeu double souvent le nom)."""
+    head, _, tail = stem.partition(".")
+    return head if head and head == tail else stem
+
+
+#: côté de la table d'échantillonnage (assez pour une couleur par face)
+SAMPLER_SIZE = 48
+
+
+def _make_sampler(image, size: int = SAMPLER_SIZE):
+    """Fabrique ``(u, v) -> (r, g, b)`` depuis une image décodée.
+
+    L'image est réduite en une petite table de couleurs (moyenne par bloc, les
+    pixels transparents ignorés) : un seul décodage, puis une lecture par face.
+    """
+    width, height, pixels = image
+    if width < 1 or height < 1 or not pixels:
+        raise ValueError("image vide")
+    table = bytearray(size * size * 3)
+    for y in range(size):
+        top = (y * height) // size
+        bottom = max(top + 1, ((y + 1) * height) // size)
+        for x in range(size):
+            left = (x * width) // size
+            right = max(left + 1, ((x + 1) * width) // size)
+            red = green = blue = count = 0
+            for sy in range(top, bottom):
+                row = sy * width * 4
+                for sx in range(left, right):
+                    offset = row + sx * 4
+                    if pixels[offset + 3] == 0:
+                        continue
+                    red += pixels[offset]
+                    green += pixels[offset + 1]
+                    blue += pixels[offset + 2]
+                    count += 1
+            index = (y * size + x) * 3
+            if count:
+                table[index] = red // count
+                table[index + 1] = green // count
+                table[index + 2] = blue // count
+            else:
+                table[index] = table[index + 1] = table[index + 2] = 180
+
+    def sample(u: float, v: float) -> tuple[float, float, float]:
+        x = int((u if u > 0.0 else 0.0) * size)
+        y = int((v if v > 0.0 else 0.0) * size)
+        if x > size - 1:
+            x = size - 1
+        if y > size - 1:
+            y = size - 1
+        offset = (y * size + x) * 3
+        return (table[offset] / 255.0, table[offset + 1] / 255.0,
+                table[offset + 2] / 255.0)
+
+    return sample
+
+
 class ProjectError(Exception):
     """Erreur lisible par l'interface (aucune trace technique)."""
 
@@ -88,9 +160,13 @@ class Project:
         self.geo_hits = 0
         self.geo_misses = 0
         self._reports: dict[str, dict] = {}
+        self._texture_index: dict[str, list] = {}
+        self._animation_index: list | None = None
         # géométrie aplatie pour l'affichage : reconstruite à chaque aperçu,
         # elle coûtait ~1 s sur un modèle de 170 000 faces
         self._render_data: dict[str, tuple] = {}
+        # échantillonneurs d'albédo (aperçus colorés par les vraies textures)
+        self._samplers: dict[str, dict] = {}
         self.warm: dict = {"running": False, "done": 0, "total": 0, "error": None}
         self._warm_thread = None
         self._dicts_lock = __import__("threading").Lock()
@@ -112,6 +188,10 @@ class Project:
         self.thumbs.trim()
         self._cache.clear()
         self._mesh_bytes = 0
+        # une fiche ou un aperçu dépend des réglages : on ne réutilise pas l'ancien
+        self._reports.clear()
+        self._render_data.clear()
+        self._samplers.clear()
         return self.settings.as_json()
 
     # ------------------------------------------------------------------ fichiers
@@ -274,9 +354,12 @@ class Project:
 
     def _render_digest(self) -> str:
         settings = self.settings
-        return cache_mod.digest(("rendu", settings.supersample, settings.cull,
-                                 settings.frustum, settings.max_faces,
-                                 settings.thumb_faces, settings.lod))
+        # « couleurs v2 » : une couleur par matériau (les vignettes d'avant,
+        # colorées par sous-maillage, ne doivent pas être réutilisées)
+        return cache_mod.digest(("rendu", "couleurs-v2", settings.supersample,
+                                 settings.cull, settings.frustum,
+                                 settings.max_faces, settings.thumb_faces,
+                                 settings.lod))
 
     def _store_mesh(self, key, meshes) -> list[MeshData]:
         cost = cache_mod.mesh_bytes(meshes)
@@ -290,19 +373,56 @@ class Project:
         self._mesh_bytes += cost
         return meshes
 
+    def albedo_samplers(self, rel: str) -> dict:
+        """Échantillonneurs ``(u, v) -> (r, g, b)`` des albédos d'un modèle.
+
+        Une seule texture trouvée : elle colore tous les matériaux (c'est le cas
+        d'une épée ou d'une arme). Plusieurs : on associe par nom quand c'est
+        possible, sinon la première sert de repli — la géométrie n'est jamais
+        concernée, seul l'habillage change.
+        """
+        cached = self._samplers.get(rel)
+        if cached is not None:
+            return cached
+        from .pngread import decode_image
+
+        samplers: dict = {}
+        for asset in self.texture_assets_for(rel)[:8]:
+            try:
+                image = decode_image(self.texture_png(asset.rel, 0))
+            except Exception:          # texture illisible : on garde la palette
+                continue
+            sampler = _make_sampler(image)
+            samplers[_base_name(asset.stem)] = sampler
+            samplers[asset.stem] = sampler
+            samplers.setdefault("", sampler)
+        self._samplers[rel] = samplers
+        return samplers
+
     def thumbnail_key(self, rel: str, width: int, height: int,
                       yaw: float = 0.7, pitch: float = -0.35,
-                      views: int = 1, face_limit: int | None = None) -> str:
-        """Clé de cache d'une vignette (identique pour l'aperçu et le préchauffage)."""
+                      views: int = 1, face_limit: int | None = None,
+                      textured: bool = False) -> str:
+        """Clé de cache d'une vignette (identique pour l'aperçu et le préchauffage).
+
+        ``textured`` fait partie de la clé : la vignette colorée par les textures
+        n'écrase pas celle qui montre la géométrie nue.
+        """
+        textures = ""
+        if textured:
+            stamps = [(asset.rel, self._version(asset.rel))
+                      for asset in self.texture_assets_for(rel)]
+            textures = cache_mod.digest(("textures", stamps))
         return cache_mod.digest(("apercu", rel, self._version(rel), width, height,
                                  round(yaw, 2), round(pitch, 2), views,
                                  self.settings.thumb_faces if face_limit is None
                                  else face_limit,
-                                 self._render_digest()))
+                                 self._render_digest(), textures))
 
-    def thumbnail_cached(self, rel: str, width: int, height: int) -> bool:
+    def thumbnail_cached(self, rel: str, width: int, height: int,
+                         textured: bool = False) -> bool:
         try:
-            key = self.thumbnail_key(rel, width, height)
+            key = self.thumbnail_key(rel, width, height, textured=textured)
         except ProjectError:
             return False
         return self.thumbs.get(key) is not None
@@ -485,7 +605,39 @@ class Project:
             "materials": meta.get("materials") or sorted({m.material for m in meshes if m.material}),
             "bounds": [round(highest[i] - lowest[i], 4) for i in range(3)],
             "warnings": meta.get("warnings", [])[:8],
+            "textures": [{"rel": asset.rel, "name": asset.stem,
+                          "size": asset.size, "mtime": asset.mtime}
+                         for asset in self.texture_assets_for(rel)][:12],
+            "animations": [{"rel": asset.rel, "name": asset.stem,
+                            "size": asset.size}
+                           for asset in self.animations_for(rel)][:32],
+            "textured": bool(self.texture_assets_for(rel)
+                             and self.settings.textured_previews),
         }
+
+    def ensembles(self) -> list[dict]:
+        """Modèles avec leurs textures et leurs animations, prêts à être vus entiers.
+
+        C'est la vue « Ensembles » : un modèle du jeu n'est jamais seul — ses
+        textures vivent dans un autre dossier et ses animations dans un
+        ``*.anim.bfres``. On les réunit ici sans rien décoder (le nom suffit),
+        pour que la liste s'affiche instantanément même sur un gros dump.
+        """
+        rows = []
+        for asset in self.by_kind("model"):
+            textures = self.texture_assets_for(asset.rel)
+            animations = self.animations_for(asset.rel)
+            rows.append({
+                "rel": asset.rel,
+                "name": _display_name(asset.stem),
+                "size": asset.size,
+                "mtime": asset.mtime,
+                "textures": len(textures),
+                "animations": len(animations),
+                "textured": bool(textures),
+                "complete": bool(textures and animations),
+            })
+        return rows
 
     def _version_label(self, rel: str) -> str:
         data = self.read_asset(rel)[:12]
@@ -548,9 +700,13 @@ class Project:
 
     def model_preview(self, rel: str, width: int = 640, height: int = 480,
                       yaw: float = 0.7, pitch: float = -0.35,
-                      views: int = 1, face_limit: int | None = None) -> bytes:
+                      views: int = 1, face_limit: int | None = None,
+                      textured: bool | None = None) -> bytes:
         """Rend un aperçu **dans le budget mémoire** réglé par l'utilisateur."""
-        key = self.thumbnail_key(rel, width, height, yaw, pitch, views, face_limit)
+        if textured is None:
+            textured = bool(self.settings.textured_previews)
+        key = self.thumbnail_key(rel, width, height, yaw, pitch, views,
+                                 face_limit, textured)
         cached = self.thumbs.get(key)
         if cached:
             return cached
@@ -571,7 +727,7 @@ class Project:
             planned = vram.plan(self.settings, meshes, width, height, limit)
         except vram.BudgetError as error:
             raise ProjectError(str(error)) from None
-        data = self._flatten(rel, meshes)
+        data = self._flatten(rel, meshes, textured=textured)
         options = dict(zoom=1.0, cull=self.settings.cull,
                        frustum=self.settings.frustum,
                        supersample=planned.supersample,
@@ -584,29 +740,33 @@ class Project:
                                     data=data, **options)
         return self.thumbs.put(key, png)
 
-    def _flatten(self, rel: str, meshes):
+    def _flatten(self, rel: str, meshes, textured: bool = False):
         """Géométrie d'affichage aplatie, gardée pour les aperçus suivants."""
         from hookymod.viewer import build_render_data
 
         size, mtime = self._version(rel)
-        entry = self._render_data.get(rel)
+        key = (rel, bool(textured))
+        entry = self._render_data.get(key)
         if entry and entry[0] == size and entry[1] == mtime:
             return entry[2]
-        data = build_render_data(meshes)
+        samplers = self.albedo_samplers(rel) if textured else None
+        data = build_render_data(meshes, textures=samplers)
         if len(self._render_data) > 24:
             self._render_data.clear()      # borne simple : 24 modèles aplatis
-        self._render_data[rel] = (size, mtime, data)
+        self._render_data[key] = (size, mtime, data)
         return data
 
-    def export_textures_for(self, rel: str, folder: Path) -> dict[str, str]:
-        """PNG d'albédo du modèle, indexés par nom de matériau **et** par nom de fichier.
+    def texture_assets_for(self, rel: str) -> list:
+        """Textures d'albédo les plus proches d'un modèle, de la plus sûre à la moins sûre.
 
-        On ne devine pas : on classe les textures candidates par précision de
-        nom (nom exact du modèle, puis famille ``Weapon_Sword``) et on ne garde
-        que les albédos (``_Alb``…). Le nom d'un matériau (``Mt_Blade``) ne
-        contient jamais celui de la texture : l'index contient donc aussi la
-        forme sans suffixe, ce qui permet à Blender de retrouver la bonne image.
+        Classement : nom exact du modèle, puis famille (``Weapon_Sword``), puis
+        première composante (``Weapon``). On ne garde que les albédos
+        (``_Alb``, ``albedo``, ``basecolor``, ``_Dif``) : une normale ou une
+        métallique ne doit pas colorer le modèle.
         """
+        entry = self._texture_index.get(rel)
+        if entry is not None:
+            return entry
         stem = Path(rel).name.split(".")[0].lower()
         parts = stem.split("_")
         family = "_".join(parts[:2]) if len(parts) > 1 else stem
@@ -622,7 +782,41 @@ class Project:
                 ranked[1].append(asset)
             elif parts and parts[0] and parts[0] in low:
                 ranked[2].append(asset)
-        candidates = next((ranked[rank] for rank in (0, 1, 2) if ranked[rank]), [])
+        found = next((ranked[rank] for rank in (0, 1, 2) if ranked[rank]), [])
+        self._texture_index[rel] = found
+        return found
+
+    def animations_for(self, rel: str) -> list:
+        """Animations (``*.anim.bfres``) qui vont avec ce modèle.
+
+        Le jeu ne nomme pas ses animations comme ses modèles : à côté de
+        ``Animal_Cat.Animal_Cat.bfres`` vit ``Animal_Cat_Animation.anim.bfres``.
+        On enlève donc le suffixe ``_Animation`` / ``_Player_Animation`` avant de
+        comparer, puis on accepte les variantes préfixées (``Animal_Dog_Wild``
+        pour ``Animal_Dog``) : c'est le seul appariement possible sans ouvrir
+        chaque fichier, et il reste instantané.
+        """
+        if self._animation_index is None:
+            self._animation_index = [
+                (_animation_key(Path(asset.rel).name), asset)
+                for asset in self.by_kind("animation")]
+        base = _animation_key(Path(rel).name)
+        found = []
+        for key, asset in self._animation_index:
+            if key == base or base.startswith(key + "_") or key.startswith(base + "_"):
+                found.append(asset)
+        return found
+
+    def export_textures_for(self, rel: str, folder: Path) -> dict[str, str]:
+        """PNG d'albédo du modèle, indexés par nom de matériau **et** par nom de fichier.
+
+        On ne devine pas : on classe les textures candidates par précision de
+        nom (nom exact du modèle, puis famille ``Weapon_Sword``) et on ne garde
+        que les albédos (``_Alb``…). Le nom d'un matériau (``Mt_Blade``) ne
+        contient jamais celui de la texture : l'index contient donc aussi la
+        forme sans suffixe, ce qui permet à Blender de retrouver la bonne image.
+        """
+        candidates = self.texture_assets_for(rel)
         found: dict[str, str] = {}
         folder.mkdir(parents=True, exist_ok=True)
         for asset in candidates[:24]:
@@ -634,6 +828,39 @@ class Project:
             found[_base_name(asset.stem)] = str(target)
             found[asset.stem] = str(target)
         return found
+
+    def export_blend(self, rel: str, textures: bool = True) -> dict:
+        """Exporte le modèle puis produit ``.blend`` (via Blender s'il est là).
+
+        Sans Blender installé, l'export glTF/OBJ/PNG reste complet et le script
+        ``creer_blend.py`` est déposé à côté : la fonction le dit explicitement
+        au lieu de laisser croire qu'un ``.blend`` a été écrit.
+        """
+        meshes = self._model_meshes(rel)
+        folder = self.work / "export" / Path(rel).name.split(".")[0]
+        found = self.export_textures_for(rel, folder) if textures else {}
+        written = blender.export_bundle(meshes, folder, folder.name,
+                                        textures=found or None)
+        executable = blendfile.find_blender(self.settings.blender_path)
+        result = blendfile.make_blend(folder, folder.name, blender=executable)
+        files = {path.name for path in written.values()}
+        files.add(Path(result["script"]).name)
+        if result["blend"]:
+            files.add(Path(result["blend"]).name)
+        return {
+            "folder": self.shown_path(folder),
+            "files": sorted(files),
+            "textures": len({path for path in found.values()}),
+            "faces": sum(len(mesh.faces) for mesh in meshes),
+            "method": result["method"],
+            "blend": self.shown_path(Path(result["blend"])) if result["blend"] else "",
+            "script": Path(result["script"]).name,
+            "command": result["command"],
+            "message": result["message"],
+            "output": (result.get("output") or "")[-1500:],
+            "blender": str(executable) if executable else "",
+            "platform_note": blendfile.platform_note(),
+        }
 
     def export_model(self, rel: str, textures: bool = True) -> dict:
         meshes = self._model_meshes(rel)
@@ -764,6 +991,61 @@ class Project:
             archive.writestr("LISEZMOI.txt", "\n".join(lines) + "\n")
         if not models and not textures:
             raise ProjectError("Rien à exporter dans cette sélection.")
+        return buffer.getvalue()
+
+    def export_selection_blend(self, items: list[dict]) -> bytes:
+        """Un seul ZIP pour toute la sélection : un ``.blend`` par modèle.
+
+        Un modèle sans ``.blend`` (Blender absent) apporte quand même son script
+        ``creer_blend.py`` et sa commande, consignée dans ``LIRE-MOI.txt`` : le
+        ZIP est toujours utilisable, et jamais présenté comme complet s'il ne
+        l'est pas.
+        """
+        import io
+        import zipfile
+
+        models = [str(item.get("rel") or "") for item in items
+                  if str(item.get("kind") or "") == "model" and item.get("rel")]
+        if not models:
+            raise ProjectError("Sélectionne au moins un modèle pour un export .blend.")
+        if len(models) > 50:
+            raise ProjectError(f"{len(models)} modèles d'un coup, c'est trop "
+                               "(50 maximum) : découpe la sélection.")
+        buffer = io.BytesIO()
+        notes = ["HookyCreator — export .blend", "",
+                 "Chaque dossier contient le modèle prêt pour Blender :",
+                 "  <modele>.gltf + <modele>.bin  →  à ouvrir, ou à passer au script",
+                 "  creer_blend.py                →  fabrique <modele>.blend",
+                 "  <modele>.blend                →  présent seulement si Blender a été",
+                 "                                   trouvé au moment de l'export",
+                 ""]
+        blends = 0
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for rel in models:
+                name = Path(rel).name.split(".")[0]
+                try:
+                    result = self.export_blend(rel)
+                except ProjectError as error:
+                    notes.append(f"{name} : échec ({error})")
+                    continue
+                source = self.work / "export" / name
+                for produced in sorted(source.iterdir()):
+                    if produced.is_file():
+                        archive.write(produced, f"{name}/{produced.name}")
+                if result["method"] == "blender":
+                    blends += 1
+                    notes.append(f"{name} : {name}.blend écrit par Blender.")
+                else:
+                    notes.append(
+                        f"{name} : pas de .blend (Blender introuvable) — depuis le "
+                        f"dossier {name}/, lance :")
+                    notes.append(f"    blender --background --factory-startup "
+                                 f"--python creer_blend.py -- {name}.gltf {name}.blend")
+            notes.append("")
+            notes.append(f"{blends} fichier(s) .blend sur {len(models)} modèle(s).")
+            notes.append("Le glTF, le .bin et les PNG sont joints : l'export "
+                         "reste utilisable sans Blender.")
+            archive.writestr("LIRE-MOI.txt", "\n".join(notes) + "\n")
         return buffer.getvalue()
 
     def build_mod(self, name: str = "HookyMod") -> dict:

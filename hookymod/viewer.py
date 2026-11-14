@@ -67,22 +67,42 @@ class RenderData:
     normals: list[tuple[float, float, float]] = field(default_factory=list)
 
 
-def build_render_data(meshes: list[MeshData]) -> RenderData:
-    """Fusionne des maillages en une seule liste de faces (testable sans Tk)."""
+def build_render_data(meshes: list[MeshData], textures=None) -> RenderData:
+    """Fusionne des maillages en une seule liste de faces (testable sans Tk).
+
+    ``textures`` associe un nom de matériau à une fonction ``(u, v) -> (r, g, b)``.
+    La couleur d'une face est alors prise **dans la texture** au centre de ses
+    UV : le modèle apparaît avec ses vraies couleurs (une couleur par face, ce
+    qui suffit à cent mille faces et ne coûte rien au rastériseur).
+    """
     data = RenderData()
+    # Une couleur par **matériau**, pas par sous-maillage : un mob découpé en
+    # dix-huit morceaux qui partagent « Mt_Body » doit apparaître d'une seule
+    # couleur, sinon le modèle entier ressemble à une mosaïque de confettis.
+    slots: dict[str, int] = {}
     for index, mesh in enumerate(meshes):
         if not mesh.faces:
             continue
         offset = len(data.positions)
         data.positions.extend(mesh.positions)
-        base_color = PALETTE[index % len(PALETTE)]
+        slot = slots.setdefault(mesh.material or f"#{index}", len(slots))
+        base_color = PALETTE[slot % len(PALETTE)]
+        sampler = None
+        if textures:
+            sampler = (textures.get(mesh.material or "")
+                       or textures.get(""))
+        has_uv = bool(mesh.uvs) and len(mesh.uvs) == len(mesh.positions)
         for face in mesh.faces:
             if len(face) < 3:
                 continue
             if any(i < 0 or i >= len(mesh.positions) for i in face):
                 continue
             data.faces.append((face[0] + offset, face[1] + offset, face[2] + offset))
-            if mesh.colors and face[0] < len(mesh.colors):
+            if sampler is not None and has_uv:
+                uv0, uv1, uv2 = mesh.uvs[face[0]], mesh.uvs[face[1]], mesh.uvs[face[2]]
+                color = sampler((uv0[0] + uv1[0] + uv2[0]) / 3.0,
+                                (uv0[1] + uv1[1] + uv2[1]) / 3.0)
+            elif mesh.colors and face[0] < len(mesh.colors):
                 color = mesh.colors[face[0]]
             else:
                 color = base_color

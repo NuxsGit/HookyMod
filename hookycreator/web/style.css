@@ -996,3 +996,48 @@ details.warns summary {
 details.warns summary::before { content: "▸ "; }
 details.warns[open] summary::before { content: "▾ "; }
 details.warns ul.todo { margin: 2px 0 0 12px; }
+
+/* ------------------------------------------------------ ensembles (modèle entier) */
+/* Une carte d'ensemble montre le modèle assemblé, puis ce qui l'habille :
+   deux pastilles disent d'un coup d'œil s'il manque des textures ou des
+   animations. */
+.tile.ensemble .meta { gap: 4px; }
+.tile.ensemble .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.badge {
+  font-size: 10px; padding: 2px 6px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text); white-space: nowrap;
+}
+.badge.off {
+  border-color: color-mix(in srgb, var(--faint) 45%, transparent);
+  background: transparent; color: var(--faint);
+}
+
+/* bande de textures dans la fiche d'un modèle */
+.ensemble-strip { margin-top: 12px; }
+.ensemble-strip h4 { font-size: 11.5px; color: var(--muted); font-weight: 560; margin-bottom: 6px; }
+.strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.strip-item {
+  flex: 0 0 auto; width: 76px; display: flex; flex-direction: column; gap: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 5px; cursor: pointer; color: var(--text);
+}
+.strip-item:hover { border-color: var(--accent); }
+.strip-item img {
+  width: 100%; height: 56px; object-fit: cover; border-radius: 4px;
+  background: repeating-conic-gradient(#182130 0% 25%, #101823 0% 50%) 50% / 12px 12px;
+}
+.strip-item span {
+  font-size: 9.5px; color: var(--faint); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* commande à copier quand Blender n'est pas installé */
+pre.command {
+  font-family: var(--mono, ui-monospace, monospace); font-size: 11px;
+  background: var(--sunken, #0d141d); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 8px 10px; margin: 8px 0;
+  overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+}
+details.anims p.hint { margin-top: 6px; }

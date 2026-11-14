@@ -132,8 +132,14 @@ blender --background --python tools/blender_import.py -- Papillon_blender --save
   la voie de secours quand Tkinter n'est pas installé — et un moyen rapide de
   jeter un œil à un modèle depuis un terminal.
 * **BFRES → OBJ export** with positions, UVs, normals and generated materials.
-* **One-click Blender export (`.blend`)**: BFRES is converted to OBJ then imported by
-  Blender in background mode — **no BFRES import add-on required anymore**.
+* **One-click Blender export (`.blend`)**: BFRES is converted to glTF then imported by
+  Blender in background mode — **no BFRES import add-on required anymore**. Textures are
+  packed into the `.blend`; when Blender is missing, HookyCreator writes
+  `creer_blend.py` and prints the exact command instead of pretending a file exists.
+* **Vue « Ensembles »** (HookyCreator) : un objet vu **en entier** — modèle assemblé,
+  coloré par son albédo, avec le compte de ses textures et de ses animations liées
+  (`Animal_Cat.Animal_Cat.bfres` ↔ `Animal_Cat_Animation.anim.bfres`). L'appariement
+  se fait par nom, sans décoder les fichiers : la liste reste instantanée.
 
 ### 🧭 Interface : une action, un seul endroit
 

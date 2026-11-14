@@ -258,3 +258,63 @@ Ce qui est **refusé** reste affiché : la fiche du modèle liste les sous-maill
 ignorés et leurs raisons (« 39 suite(s) d'indices ignorée(s) faute de
 validation »), l'export renvoie les mêmes remarques, et l'atelier écrit
 explicitement « aucune texture trouvée » plutôt que de produire un glTF muet.
+
+# Vue « Ensembles » : voir un objet en entier
+
+Un modèle du jeu n'est jamais seul. `Animal_Cat.Animal_Cat.bfres` a ses textures
+dans un autre dossier et son animation dans `Animal_Cat_Animation.anim.bfres`.
+L'onglet **Ensembles** réunit les trois pour chaque modèle :
+
+* la vignette est le **modèle assemblé**, coloré par son albédo (une couleur par
+  face, prise au centre des UV) — c'est la vue « en entier » ;
+* deux pastilles disent ce qui est là : `1 texture(s)` / `1 anim(s)` ; grisées
+  quand il manque quelque chose (`complet` = les deux) ;
+* un appariement par nom relie les fichiers sans en décoder aucun, donc la liste
+  s'affiche instantanément même sur un dump complet (150 modèles : < 0,5 s).
+
+L'appariement des animations enlève le suffixe que le jeu ajoute
+(`_Animation`, `_Player_Animation`) avant de comparer, sinon rien ne
+correspondrait : `Animal_Cat_Animation` → `animal_cat`. Les albédos sont classés
+par précision du nom (nom du modèle → famille `Weapon_Sword` → préfixe
+`Weapon`), et les cartes de normale ou de métallique sont écartées : elles ne
+doivent jamais colorer le modèle.
+
+Sans texture, la couleur vient du **matériau** (et non du sous-maillage) : un mob
+découpé en dix-huit morceaux qui partagent `Mt_Body` apparaît d'une seule teinte
+au lieu d'une mosaïque de confettis. C'était le défaut qui empêchait de lire un
+animal « en entier ».
+
+La fiche d'un modèle affiche désormais ses **textures** (bande de vignettes
+cliquables) et ses **animations** liées. Les animations restent des fichiers
+séparés du jeu : elles ne sont pas encore injectées dans le modèle exporté, et
+la fiche le dit.
+
+Réglages ▸ Interface ▸ « colorer les aperçus avec les textures du modèle »
+permet de revenir à la géométrie nue (utile pour lire une silhouette).
+
+# Export `.blend`
+
+Un `.blend` est le format interne de Blender. Le produire à la main suppose de
+réimplémenter son format (SDNA, blocs, images embarquées) et le moindre écart
+donne un fichier que Blender refuse. HookyCreator fait donc ce que fait un
+utilisateur : **il pilote Blender**.
+
+1. Le modèle est exporté comme d'habitude (glTF + `.bin` + OBJ + PNG).
+2. `creer_blend.py` est écrit à côté.
+3. Si Blender est trouvé — chemin réglé dans **Réglages**, sinon `blender` du
+   `PATH`, sinon les dossiers d'installation Windows (`C:\Program Files\Blender
+   Foundation\Blender 4.x`) — il est lancé en tâche de fond :
+   `blender --background --factory-startup --python creer_blend.py -- mon.gltf mon.blend`.
+   Le script importe le glTF, **emballe les textures** dans le fichier
+   (`pack_all`), puis enregistre le `.blend`.
+4. Le fichier est **vérifié** avant d'être annoncé : présent, non vide, plus
+   récent que l'export. Un `.blend` périmé est supprimé avant l'essai pour ne
+   jamais passer pour un résultat.
+
+Si Blender est absent ou échoue, l'atelier ne prétend rien : il affiche la
+commande exacte à lancer, la propose à la copie, et laisse le script utilisable.
+Le bouton **Exporter en .blend** de la barre de sélection produit un seul ZIP
+(`hookycreator-blender.zip`) avec un dossier par modèle — glTF, `.bin`, PNG,
+`creer_blend.py` et, quand Blender est là, le `.blend` — plus un `LIRE-MOI.txt`
+qui donne la commande de chaque modèle restant. Le ZIP reste donc utilisable sur
+une machine sans Blender.
