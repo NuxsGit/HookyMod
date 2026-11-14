@@ -79,6 +79,7 @@ class Settings:
     density: str = "confort"                  # confort | compact
     export_textures: bool = True              # joindre les PNG à l'export Blender
     thumb_faces: int | None = 20_000          # plafond des vignettes (None = auto)
+    preview_faces: int = 60_000               # plafond de l'aperçu détaillé (0 = tout)
     cache_mb: int = CACHE_DEFAULT_MB          # cache de vignettes sur disque
 
     # ------------------------------------------------------------------ état
@@ -97,6 +98,7 @@ class Settings:
             accent=_choice(self.accent, "accent", ACCENTS),
             density=_choice(self.density, "density", DENSITIES),
             export_textures=bool(self.export_textures),
+            preview_faces=int(_number(self.preview_faces, "preview_faces", 0, 400_000)),
             thumb_faces=(None if self.thumb_faces is None
                          else int(_number(self.thumb_faces, "thumb_faces",
                                           FACES_MIN, FACES_MAX))),
@@ -124,6 +126,7 @@ class Settings:
             "density": self.density,
             "export_textures": self.export_textures,
             "thumb_faces": self.thumb_faces,
+            "preview_faces": self.preview_faces,
             "cache_mb": self.cache_mb,
             "cache_min_mb": CACHE_MIN_MB,
             "cache_max_mb": CACHE_MAX_MB,
@@ -150,6 +153,7 @@ class Settings:
             "density": payload.get("density", base.density),
             "export_textures": payload.get("export_textures", base.export_textures),
             "thumb_faces": payload.get("thumb_faces", base.thumb_faces),
+            "preview_faces": payload.get("preview_faces", base.preview_faces),
             "cache_mb": payload.get("cache_mb", base.cache_mb),
         }
         for name in ("cull", "frustum", "adaptive", "export_textures"):

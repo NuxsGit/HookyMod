@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import shutil
-import struct
+from array import array
 from pathlib import Path
 
 from .mesh import MeshData, export_obj, triangulated
@@ -74,6 +74,38 @@ def _bounds(mesh: MeshData) -> tuple[list[float], list[float]]:
     return list(lo), list(hi)
 
 
+#: suffixes des textures du jeu (albédo) que l'on sait reconnaître
+ALBEDO_SUFFIXES = ("_Alb", "_Albedo", "_Alb_0", "_BC", "_BaseColor", "_Dif")
+
+
+def _base_name(name: str) -> str:
+    """``Weapon_Sword_Kokiri_Alb`` → ``Weapon_Sword_Kokiri`` (et variantes)."""
+    for suffix in ALBEDO_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _normalised_textures(textures: dict[str, str] | None) -> dict[str, str]:
+    """Indexe les PNG par nom de fichier **et** par nom sans suffixe.
+
+    Le nom d'un matériau (``Mt_Blade``) ne contient presque jamais celui de la
+    texture (``Weapon_Sword_Kokiri_Alb``) : sans cette normalisation, le glTF
+    sortait sans aucune texture alors que les PNG étaient bien exportés.
+    """
+    if not textures:
+        return {}
+    out: dict[str, str] = {}
+    for key, source in textures.items():
+        if not source:
+            continue
+        stem = Path(source).stem
+        for name in (key, stem, _base_name(stem)):
+            if name:
+                out.setdefault(name, source)
+    return out
+
+
 # --------------------------------------------------------------------------- glTF
 class _Buffer:
     """Accumule les données binaires d'un glTF (un seul tampon, simple)."""
@@ -111,18 +143,28 @@ def _write_gltf(meshes: list[MeshData], path: Path,
     gl_meshes: list[dict] = []
     copied: dict[str, str] = {}
 
-    for material_name, source in textures.items():
+    for material_name, source in _normalised_textures(textures).items():
         if not source or not Path(source).is_file():
             continue
         name = Path(source).name
-        if name not in copied:
-            try:
-                shutil.copyfile(source, path.parent / name)
-            except OSError:
-                continue
-            copied[name] = name
-        images.append({"uri": copied[name]})
+        if name in copied:
+            continue                    # une seule image par fichier
+        target_image = path.parent / name
+        try:
+            # les PNG arrivent souvent déjà dans le dossier d'export : les
+            # recopier sur eux-mêmes levait SameFileError, et le glTF sortait
+            # sans aucune texture alors que les images étaient là
+            if target_image.resolve() != Path(source).resolve():
+                shutil.copyfile(source, target_image)
+        except OSError:
+            continue
+        copied[name] = name
+        images.append({"uri": name})
         gl_textures.append({"source": len(images) - 1, "sampler": 0})
+
+    single_albedo = None
+    if len({str(path) for path in textures.values()}) == 1:
+        single_albedo = next(iter(textures.values()))
 
     def material_for(name: str, albedo: str | None) -> int:
         key = name or "Material"
@@ -137,6 +179,9 @@ def _write_gltf(meshes: list[MeshData], path: Path,
                 "roughnessFactor": 0.8,
             },
         }
+        if albedo is None:
+            albedo = (textures.get(key) or textures.get(_base_name(key))
+                      or single_albedo)
         if albedo and Path(albedo).name in copied:
             texture_name = Path(albedo).name
             for index, image in enumerate(images):
@@ -148,38 +193,39 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         return material_index[key]
 
     for index, mesh in enumerate(meshes):
-        scale_factor = scale
-        positions = [(x * scale_factor, y * scale_factor, z * scale_factor)
-                     for x, y, z in mesh.positions]
-        flat = bytearray()
-        for x, y, z in positions:
-            flat += struct.pack("<3f", x, y, z)
-        view = binary.add(bytes(flat), 34962)
+        # une seule mise à l'échelle, un seul tableau binaire (array), et les
+        # bornes calculées une fois : la version précédente reconstruisait les
+        # positions deux fois et appelait _bounds() deux fois par maillage
+        flat = array("f", [value * scale for point in mesh.positions
+                           for value in point])
+        positions_bytes = flat.tobytes()
+        view = binary.add(positions_bytes, 34962)
+        lo, hi = mesh.bounds()
         accessors.append({
             "bufferView": view,
             "componentType": 5126,
-            "count": len(positions),
+            "count": len(mesh.positions),
             "type": "VEC3",
-            "min": _bounds(mesh)[0],
-            "max": _bounds(mesh)[1],
+            "min": [value * scale for value in lo],
+            "max": [value * scale for value in hi],
         })
         position_accessor = len(accessors) - 1
         attributes = {"POSITION": position_accessor}
 
         if mesh.normals:
-            flat = bytearray()
-            for nx, ny, nz in mesh.normals:
-                flat += struct.pack("<3f", nx, ny, nz)
-            view = binary.add(bytes(flat), 34962)
+            flat = array("f", [value for normal in mesh.normals for value in normal])
+            view = binary.add(flat.tobytes(), 34962)
             accessors.append({"bufferView": view, "componentType": 5126,
                               "count": len(mesh.normals), "type": "VEC3"})
             attributes["NORMAL"] = len(accessors) - 1
 
         if mesh.uvs:
-            flat = bytearray()
+            # glTF : V vers le haut (BFRES compte à l'envers)
+            flat = array("f")
             for u, v in mesh.uvs:
-                flat += struct.pack("<2f", u, 1.0 - v)   # glTF : V vers le haut
-            view = binary.add(bytes(flat), 34962)
+                flat.append(u)
+                flat.append(1.0 - v)
+            view = binary.add(flat.tobytes(), 34962)
             accessors.append({"bufferView": view, "componentType": 5126,
                               "count": len(mesh.uvs), "type": "VEC2"})
             attributes["TEXCOORD_0"] = len(accessors) - 1
@@ -187,15 +233,11 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         triangles = triangulated(mesh)
         if not triangles:
             continue
-        indices = bytearray()
         largest = max(max(tri) for tri in triangles)
         wide = largest > 0xFFFF
-        for tri in triangles:
-            if wide:
-                indices += struct.pack("<3I", *tri)
-            else:
-                indices += struct.pack("<3H", *tri)
-        view = binary.add(bytes(indices), 34963)
+        indices = array("I" if wide else "H",
+                        [value for tri in triangles for value in tri])
+        view = binary.add(indices.tobytes(), 34963)
         accessors.append({
             "bufferView": view,
             "componentType": 5125 if wide else 5123,
@@ -235,8 +277,15 @@ def _write_gltf(meshes: list[MeshData], path: Path,
                                  "wrapS": 10497, "wrapT": 10497}]
     path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(path, json.dumps(document, indent=1).encode("utf-8"))
-    (path.parent / bin_name).write_bytes(bytes(binary.data))
+    binary_path = path.parent / bin_name
+    binary_path.write_bytes(bytes(binary.data))
     return path
+
+
+def gltf_bin_path(path) -> Path:
+    """Chemin du ``.bin`` associé à un ``.gltf`` (même nom, autre extension)."""
+    path = Path(path)
+    return path.parent / (path.with_suffix("").name + ".bin")
 
 
 # --------------------------------------------------------------------------- API
@@ -255,7 +304,11 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
     written: dict[str, Path] = {}
 
     if "gltf" in formats:
-        written["gltf"] = _write_gltf(meshes, folder / f"{name}.gltf", textures, scale)
+        gltf = _write_gltf(meshes, folder / f"{name}.gltf", textures, scale)
+        written["gltf"] = gltf
+        binary = gltf_bin_path(gltf)
+        if binary.is_file():
+            written["bin"] = binary
 
     if "obj" in formats:
         written["obj"] = export_obj(meshes, folder / f"{name}.obj", scale=scale)

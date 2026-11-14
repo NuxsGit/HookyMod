@@ -203,3 +203,58 @@ Elles font quelque chose : 🔴 quitte l'atelier (arrêt du serveur après
 confirmation), 🟡 réduit l'interface (rail masqué), 🟢 passe en plein écran réel
 (API Fullscreen). Le titre des boutons suit l'état, et un refus du navigateur est
 signalé plutôt qu'ignoré.
+
+## Ouvrir un modèle : mesurer, puis diviser le temps
+
+Un clic sur un modèle prenait **10 à 30 s** sur les personnages complets. Profil
+en main, le coût se répartissait ainsi sur une armure de 2,3 Mo :
+
+| étape | avant | après |
+|---|---|---|
+| fiche du modèle (`model_info`) | 4,97 s (redécodait tout) | **0,65 s** |
+| décodage de la géométrie | 4,87 s | **0,39 s** |
+| rendu 460 × 345 | 4,17 s | **1,1 s** |
+| réouverture (cache disque) | 4,97 s | **0,30 s** |
+| export Blender (OBJ + glTF) | 18,5 s | **1,9 s** |
+
+Ce qui a changé :
+
+* **la fiche ne redécode plus** : elle réutilise les maillages déjà décodés (le
+  même chemin que l'aperçu) au lieu de relire le BFRES une deuxième fois ;
+* **géométrie mise en cache sur disque** (`work/cache/geo/*.geo`, clé = taille +
+  date) : rouvrir un modèle coûte une lecture de fichier, pas un décodage ;
+* **décodage plus direct** : positions lues via `array` (au lieu d'un appel
+  `struct.unpack_from` par sommet), distances calculées sans `math.dist`
+  (4,7 millions d'appels en moins), et **seulement les sommets réellement
+  utilisés** (2,4 M de sommets décodés pour 165 000 faces auparavant) ;
+* **rastériseur en balayage de lignes** : le z avance par addition au lieu de
+  trois produits scalaires par pixel, l'éclairage est calculé une fois par face
+  (plus de `math.cos` par face), les bornes du nuage de points sont calculées en
+  une passe, et la géométrie aplatie est réutilisée d'un aperçu à l'autre ;
+* **plafonds réglables** : « Plafond des vignettes » et « Plafond de l'aperçu
+  détaillé » (Réglages ▸ Interface). Un modèle dense est échantillonné au lieu
+  d'être tronqué, donc la silhouette reste entière.
+
+## Trois défauts corrigés au passage
+
+1. **Une épée exportée en morceaux.** Le découpage des sous-maillages ne
+   regardait que des blocs de 0x1000 octets et s'arrêtait au premier triangle
+   douteux : un sous-maillage qui commençait au milieu d'un bloc était perdu.
+   Le découpage avance maintenant mot par mot et prolonge chaque suite tant
+   qu'elle reste valide, où qu'elle commence.
+2. **De longues traînées horizontales à l'écran.** L'interpolation des bords
+   sortait du triangle sur une arête presque horizontale (extrapolation) : une
+   arête de 0,01 unité barrait tout l'écran. Les lignes sont désormais bornées au
+   triangle, et les triangles aberrants (arête > 8 × l'arête médiane) sont
+   écartés.
+3. **Un glTF refusé par Blender** : le `.bin` n'était pas recopié dans le ZIP de
+   sélection, et les PNG déjà présents dans le dossier d'export n'étaient pas
+   liés (copie sur soi-même). Le `.bin` fait maintenant partie des fichiers de
+   l'export, et les albédos sont rattachés aux matériaux même quand le nom du
+   matériau ne contient pas celui de la texture (`Mt_Blade` ↔
+   `Weapon_Sword_Kokiri_Alb`), avec repli sur l'unique albédo du modèle.
+
+Ce qui est **refusé** reste affiché : la fiche du modèle liste les sous-maillages
+ignorés et leurs raisons (« 39 suite(s) d'indices ignorée(s) faute de
+validation »), l'export renvoie les mêmes remarques, et l'atelier écrit
+explicitement « aucune texture trouvée » plutôt que de produire un glTF muet.

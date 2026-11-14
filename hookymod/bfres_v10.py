@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import math
 import struct
+import sys
+from array import array
 from dataclasses import dataclass, field
 
 from .mesh import MeshData
@@ -146,6 +148,7 @@ class V10Report:
     index_offset: int = 0
     index_count: int = 0
     submeshes: int = 0
+    dropped: int = 0            # sous-maillages refusés faute de validation
     uv: bool = False
     attributes: list[str] = field(default_factory=list)
     shapes: list[str] = field(default_factory=list)
@@ -319,6 +322,18 @@ def find_shapes(data: bytes, base: int) -> list[VertexShape]:
 
 
 # --------------------------------------------------------------------------- tampons
+def _dist2(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+    """Distance au carré, sans appel de fonction externe.
+
+    ``math.dist`` coûtait 0,65 s à lui seul sur un modèle de 80 000 faces
+    (4,7 millions d'appels pour 25 modèles) : ici on compare des carrés.
+    """
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    dz = a[2] - b[2]
+    return dx * dx + dy * dy + dz * dz
+
+
 def _coherence(positions: list[tuple[float, float, float]],
                triangles: list[tuple[int, int, int]]) -> float:
     """Rapport « longueur moyenne des arêtes / distance moyenne au hasard ».
@@ -335,9 +350,12 @@ def _coherence(positions: list[tuple[float, float, float]],
     pairs = 0
     for index in range(0, len(triangles), step):
         a, b, c = triangles[index]
-        for i, j in ((a, b), (b, c)):
-            local += math.dist(positions[i], positions[j])
-            pairs += 1
+        try:
+            pa, pb, pc = positions[a], positions[b], positions[c]
+        except IndexError:
+            continue
+        local += math.sqrt(_dist2(pa, pb)) + math.sqrt(_dist2(pb, pc))
+        pairs += 2
     if not pairs:
         return 1.0
     local /= pairs
@@ -345,7 +363,7 @@ def _coherence(positions: list[tuple[float, float, float]],
     stride = max(1, count // 200)
     for i in range(0, count, stride):
         j = (i * 7 + 13) % count
-        far += math.dist(positions[i], positions[j])
+        far += math.sqrt(_dist2(positions[i], positions[j]))
         total += 1
     far /= max(1, total)
     return local / far if far > 0 else 1.0
@@ -359,13 +377,36 @@ EDGE_RATIO_MAX = 0.15
 OVERSIZED_RATIO = 0.15
 
 
-def _diagonal(positions) -> float:
+def _diagonal(positions, step_max: int = 4000, cut: float = 0.02) -> float:
+    """Diagonale **robuste** du nuage de points (2 % – 98 % par axe).
+
+    Le minimum/maximum absolu suffisait à valider un tampon de sommets, mais pas
+    à écarter un triangle aberrant : quelques sommets faux gonflaient la
+    diagonale, donc le seuil de 15 % devenait énorme et **rien** n'était
+    rejeté — d'où les longues traînées horizontales à l'écran. Les centiles
+    ignorent ces points isolés.
+    """
     if not positions:
         return 0.0
-    xs = [p[0] for p in positions]
-    ys = [p[1] for p in positions]
-    zs = [p[2] for p in positions]
-    return math.dist((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+    step = max(1, len(positions) // step_max)
+    xs: list[float] = []
+    ys: list[float] = []
+    zs: list[float] = []
+    for index in range(0, len(positions), step):
+        x, y, z = positions[index]
+        xs.append(x)
+        ys.append(y)
+        zs.append(z)
+
+    def span(values: list[float]) -> float:
+        values.sort()
+        last = len(values) - 1
+        low = values[min(last, int(last * cut))]
+        high = values[max(0, min(last, int(last * (1.0 - cut))))]
+        return max(0.0, high - low)
+
+    dx, dy, dz = span(xs), span(ys), span(zs)
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
 
 
 def _edge_ratio(positions, triangles, diagonal: float) -> float:
@@ -382,10 +423,11 @@ def _edge_ratio(positions, triangles, diagonal: float) -> float:
     for index in range(0, len(triangles), step):
         a, b, c = triangles[index]
         try:
-            lengths.append(math.dist(positions[a], positions[b]))
-            lengths.append(math.dist(positions[b], positions[c]))
+            pa, pb, pc = positions[a], positions[b], positions[c]
         except IndexError:
             return 1.0
+        lengths.append(math.sqrt(_dist2(pa, pb)))
+        lengths.append(math.sqrt(_dist2(pb, pc)))
     if not lengths:
         return 1.0
     lengths.sort()
@@ -410,11 +452,99 @@ def _drop_oversized(positions, triangles, diagonal: float,
             pa, pb, pc = positions[a], positions[b], positions[c]
         except IndexError:
             continue
-        if (math.dist(pa, pb) > threshold or math.dist(pb, pc) > threshold
-                or math.dist(pa, pc) > threshold):
+        limit = threshold * threshold
+        if (_dist2(pa, pb) > limit or _dist2(pb, pc) > limit
+                or _dist2(pa, pc) > limit):
             continue
         kept.append((a, b, c))
     return kept
+
+
+def _drop_outliers(positions, triangles, factor: float = 8.0,
+                   sample: int = 4000) -> list[tuple[int, int, int]]:
+    """Retire les triangles dont une arête dépasse ``factor`` × l'arête médiane.
+
+    Un seuil exprimé en pourcentage de la diagonale du modèle dépend de la
+    taille du modèle : sur une armure, 15 % laisse passer des triangles qui
+    relient deux points distants et dessinent de longues traînées à l'écran.
+    L'arête **médiane** est une échelle locale : un triangle normal en est
+    proche, un triangle parasite en est dix fois plus loin.
+    """
+    if not triangles or not positions:
+        return triangles
+    step = max(1, len(triangles) // sample)
+    lengths: list[float] = []
+    for index in range(0, len(triangles), step):
+        a, b, c = triangles[index]
+        try:
+            pa, pb, pc = positions[a], positions[b], positions[c]
+        except IndexError:
+            continue
+        lengths.append(math.sqrt(_dist2(pa, pb)))
+        lengths.append(math.sqrt(_dist2(pb, pc)))
+        lengths.append(math.sqrt(_dist2(pa, pc)))
+    if not lengths:
+        return triangles
+    lengths.sort()
+    median = lengths[len(lengths) // 2]
+    if median <= 0.0:
+        return triangles
+    limit = median * factor
+    limit2 = limit * limit
+    kept: list[tuple[int, int, int]] = []
+    for a, b, c in triangles:
+        try:
+            pa, pb, pc = positions[a], positions[b], positions[c]
+        except IndexError:
+            continue
+        if (_dist2(pa, pb) > limit2 or _dist2(pb, pc) > limit2
+                or _dist2(pa, pc) > limit2):
+            continue
+        kept.append((a, b, c))
+    return kept
+
+
+def _decode_positions_f32(data: bytes, start: int, count: int, stride: int,
+                          offset: int) -> list[tuple[float, float, float]] | None:
+    """Positions ``3 x f32`` lues via :mod:`array` (4 à 5 fois plus vite).
+
+    Mêmes garde-fous que la version générique : les 128 premiers sommets fixent
+    l'échelle de référence et le premier enregistrement aberrant arrête la
+    lecture (un tampon qui déborde ne doit pas inventer des millions de sommets).
+    """
+    step = stride // 4
+    first = offset // 4
+    if step < 3 or count < 1 or start < 0 or start + stride > len(data):
+        return None
+    available = (len(data) - start) // 4
+    limit = min(count, available // step)
+    if limit < 1:
+        return None
+    words = array("f")
+    words.frombytes(data[start:start + limit * step * 4])
+    if sys.byteorder != "little":
+        words.byteswap()
+    total = len(words)
+    positions: list[tuple[float, float, float]] = []
+    reference = 0.0
+    isfinite = math.isfinite
+    for index in range(limit):
+        base = index * step + first
+        if base + 2 >= total:
+            break
+        x = words[base]
+        y = words[base + 1]
+        z = words[base + 2]
+        if not (isfinite(x) and isfinite(y) and isfinite(z)):
+            break
+        scale = max(abs(x), abs(y), abs(z))
+        if index < 128:
+            if scale > reference:
+                reference = scale
+        elif scale > max(reference * 50.0, 1e-4):
+            break
+        positions.append((x, y, z))
+    return positions
 
 
 def _decode_positions(data: bytes, start: int, count: int, stride: int,
@@ -426,6 +556,10 @@ def _decode_positions(data: bytes, start: int, count: int, stride: int,
     s'arrête donc au premier enregistrement incohérent, l'échelle de référence
     étant prise sur le début du tampon (les 128 premiers sommets).
     """
+    if fmt == 0x1805 and stride % 4 == 0 and offset % 4 == 0:
+        fast = _decode_positions_f32(data, start, count, stride, offset)
+        if fast is not None:
+            return fast
     unpack = "<3f" if fmt == 0x1805 else "<3e"
     positions: list[tuple[float, float, float]] = []
     reference = 0.0
@@ -667,6 +801,88 @@ def _scan_block(data: bytes, start: int, stop: int, vertex_count: int,
     return triangles
 
 
+def _index_words(data: bytes, base: int, stop: int) -> "array":
+    """Tampon d'indices comme mots ``u16``, une seule fois (au lieu de 6 lectures)."""
+    raw = data[base:stop]
+    words = array("H")
+    words.frombytes(raw[:len(raw) - (len(raw) % 2)])
+    if sys.byteorder != "little":
+        words.byteswap()
+    return words
+
+
+def _segment_indices(words, bounds: list[int],
+                     minimum: int = 4) -> list[tuple[int, int, list]]:
+    """Découpe le tampon d'indices en sous-maillages **sans supposer un alignement**.
+
+    L'ancienne version ne regardait que des blocs de 0x1000 octets et
+    s'arrêtait au premier triangle douteux : un sous-maillage qui commençait au
+    milieu d'un bloc (ou juste après du remplissage) était perdu — d'où une épée
+    exportée en morceaux. Ici on avance mot par mot : dès qu'un triangle est
+    valide pour une forme, on prolonge la suite tant qu'elle reste valide, ce qui
+    retrouve un sous-maillage où qu'il commence.
+
+    Les formes sont essayées de la plus contrainte (moins de sommets) à la plus
+    large : celle qui accepte le moins d'indices est la plus précise.
+
+    :return: liste de ``(indice de forme, position en mots, triangles)``.
+    """
+    ordered = sorted(range(len(bounds)), key=lambda index: bounds[index])
+    total = len(words)
+    runs: list[tuple[int, int, list]] = []
+    cursor = 0
+    while cursor + 2 < total:
+        accepted = None
+        for index in ordered:
+            bound = bounds[index]
+            if bound < 3:
+                continue
+            a = words[cursor]
+            if a >= bound:
+                continue
+            b = words[cursor + 1]
+            c = words[cursor + 2]
+            if b >= bound or c >= bound or a == b or b == c or a == c:
+                continue
+            triangles = [(a, b, c)]
+            step = cursor + 3
+            while step + 2 < total:
+                x = words[step]
+                y = words[step + 1]
+                z = words[step + 2]
+                if (x >= bound or y >= bound or z >= bound
+                        or x == y or y == z or x == z):
+                    break
+                triangles.append((x, y, z))
+                step += 3
+            if len(triangles) >= minimum:
+                accepted = (index, cursor, triangles, step)
+                break
+        if accepted is None:
+            cursor += 1
+            continue
+        index, start, triangles, end = accepted
+        runs.append((index, start, triangles))
+        cursor = end
+    return runs
+
+
+def _merge_runs(runs: list[tuple[int, int, list]],
+                gap: int = 12) -> list[tuple[int, int, list]]:
+    """Recolle les morceaux voisins d'une même forme (même objet dans Blender)."""
+    merged: list[tuple[int, int, list]] = []
+    for index, start, triangles in runs:
+        if merged:
+            previous_index, previous_start, previous_tris = merged[-1]
+            previous_end = previous_start + 3 * len(previous_tris)
+            if previous_index == index and start - previous_end <= gap:
+                merged[-1] = (index, previous_start,
+                              previous_tris + triangles)
+                continue
+        merged.append((index, start, list(triangles)))
+    return merged
+
+
 # --------------------------------------------------------------------------- lecture
 def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
     """Maillages d'un BFRES 10.x, ou ``None`` si la structure n'est pas reconnue.
@@ -715,56 +931,80 @@ def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
     report.index_offset = base
     report.index_count = max(0, (first_vertex - base) // 2)
 
-    # positions provisoires (bornées par l'écart entre tampons voisins)
-    positions: dict[int, list[tuple[float, float, float]]] = {}
-    for index, shape in enumerate(shapes):
-        positions[index] = _decode_positions_of(data, shape) if shape.vertex_count >= 3 else []
-
-    # un sous-maillage par bloc aligné : on l'attribue à la forme qui « colle »
-    diagonals = {index: _diagonal(values) for index, values in positions.items()}
-    assigned: dict[int, list[list[tuple[int, int, int]]]] = {}
-    refused = 0
-    if first_vertex > base:
-        for block in range(base, first_vertex, SUBMESH_ALIGN):
-            stop = min(block + SUBMESH_ALIGN, first_vertex)
-            best: tuple[float, int, list[tuple[int, int, int]]] | None = None
-            for index, shape in enumerate(shapes):
-                bound = len(positions[index])
-                if bound < 3:
-                    continue
-                triangles = _scan_block(data, block, stop, bound)
-                if len(triangles) < 4:
-                    continue
-                score = _coherence(positions[index], triangles)
-                if score > COHERENCE_MAX:
-                    continue
-                diagonal = diagonals.get(index, 0.0)
-                if _edge_ratio(positions[index], triangles, diagonal) > EDGE_RATIO_MAX:
-                    continue                    # arêtes qui traversent tout le modèle
-                cleaned = _drop_oversized(positions[index], triangles, diagonal)
-                if len(cleaned) < max(4, len(triangles) // 2):
-                    continue
-                score = _coherence(positions[index], cleaned)
-                if best is None or score < best[0]:
-                    best = (score, index, cleaned)
-            if best is not None and best[0] <= COHERENCE_MAX:
-                assigned.setdefault(best[1], []).append(best[2])
-            else:
-                refused += 1
-    if refused:
-        report.warnings.append(f"{refused} bloc(s) d'indices ignoré(s) faute de validation.")
-
-    if not assigned:
+    # --- segmentation du tampon d'indices (une seule lecture, pas de blocs imposés)
+    words = _index_words(data, base, first_vertex)
+    bounds = [max(3, shape.vertex_count) for shape in shapes]
+    runs = _segment_indices(words, bounds)
+    if not runs:
         report.warnings.append(
             "Aucun triangle valide : tampon d'indices non reconnu (géométrie refusée).")
         return None
 
+    # positions décodées **une fois par forme**, et seulement jusqu'à l'indice
+    # réellement utilisé : décoder 2,4 M de sommets pour 80 000 faces était le
+    # premier poste de dépense mesuré (1,8 s sur une armure).
+    needed: dict[int, int] = {}
+    for index, _, triangles in runs:
+        highest = max(max(triangle) for triangle in triangles) + 1
+        if highest > needed.get(index, 0):
+            needed[index] = highest
+    positions: dict[int, list[tuple[float, float, float]]] = {}
+    for index, count in needed.items():
+        shape = shapes[index]
+        attribute = shape.attribute("position")
+        if attribute is None:
+            continue
+        limit = min(count, shape.vertex_count or count)
+        positions[index] = _decode_positions(data, shape.vertex_offset, limit,
+                                             shape.stride, attribute.offset,
+                                             attribute.format)
+    diagonals = {index: _diagonal(values) for index, values in positions.items()}
+
+    # --- validation de chaque suite d'indices, puis recollement des voisines
+    kept: list[tuple[int, int, list]] = []
+    dropped = 0
+    for index, start, triangles in runs:
+        values = positions.get(index)
+        bound = len(values) if values else 0
+        if bound < 3:
+            dropped += 1
+            continue
+        inside = [triangle for triangle in triangles
+                  if max(triangle) < bound]
+        if len(inside) < max(4, len(triangles) // 2):
+            dropped += 1
+            continue
+        diagonal = diagonals.get(index, 0.0)
+        if _coherence(values, inside) > COHERENCE_MAX:
+            dropped += 1
+            continue
+        if _edge_ratio(values, inside, diagonal) > EDGE_RATIO_MAX:
+            dropped += 1
+            continue
+        cleaned = _drop_oversized(values, inside, diagonal)
+        cleaned = _drop_outliers(values, cleaned)
+        if len(cleaned) < max(4, len(inside) // 2):
+            dropped += 1
+            continue
+        kept.append((index, start, cleaned))
+    if dropped:
+        report.dropped = dropped
+        report.warnings.append(
+            f"{dropped} suite(s) d'indices ignorée(s) faute de validation.")
+
+    runs = _merge_runs(kept) if kept else []
+    if not runs:
+        report.warnings.append(
+            "Aucun triangle validé : la géométrie n'a pas passé les contrôles.")
+        return None
+
     # signale les formes dont plusieurs niveaux de détail se mélangent : la
     # géométrie reste juste, mais elle est plus dense que le LOD 0 seul
-    for index, blocks in assigned.items():
-        peak = max(max(triangle) for block in blocks for triangle in block)
-        lower = sum(1 for block in blocks
-                    if max(max(triangle) for triangle in block) < peak * 0.75)
+    for index in {run[0] for run in runs}:
+        peaks = [max(max(triangle) for triangle in triangles)
+                 for shape_index, _, triangles in runs if shape_index == index]
+        peak = max(peaks)
+        lower = sum(1 for value in peaks if value < peak * 0.75)
         if lower:
             report.warnings.append(
                 f"forme {index} : {lower} sous-maillage(s) de LOD inférieur inclus "
@@ -773,34 +1013,42 @@ def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
     meshes: list[MeshData] = []
     material = report.material_names[0] if report.material_names else ""
     counter = 0
-    for index, shape in enumerate(shapes):
-        blocks = assigned.get(index)
-        if not blocks:
-            continue
-        needed = max(max(triangle) for block in blocks for triangle in block) + 1
-        if needed > len(positions[index]):
-            needed = len(positions[index])
-        shape_positions = positions[index][:needed]
+    for index, _, triangles in runs:
+        values = positions.get(index) or []
+        highest = max(max(triangle) for triangle in triangles) + 1
+        shape_positions = values[:min(highest, len(values))]
         if len(shape_positions) < 3:
             continue
-        normals = _decode_normals(data, shape, needed)
-        uvs, label = _decode_uvs(data, shape, needed, shape_positions, blocks[0])
-        if uvs and not report.uv:
-            report.uv = True
-            report.warnings.append(f"UV décodées ({label}).")
-        for block in blocks:
-            if max(max(triangle) for triangle in block) >= len(shape_positions):
-                continue
-            mesh = MeshData(name=f"{report.model_name or 'modele'}_{counter:02d}",
-                            positions=shape_positions, faces=list(block),
-                            material=material)
-            counter += 1
-            if uvs:
-                mesh.uvs = uvs
-            if normals and len(normals) == len(shape_positions):
-                mesh.normals = normals
-            mesh.ensure_normals()
-            meshes.append(mesh)
+        meshes.append(MeshData(name=f"{report.model_name or 'modele'}_{counter:02d}",
+                               positions=shape_positions, faces=list(triangles),
+                               material=material))
+        counter += 1
+
+    if meshes:
+        # normales et UV : une seule lecture par forme, partagée entre les
+        # morceaux qui utilisent le même tampon
+        decoded: dict[int, tuple] = {}
+        for shape_index in {run[0] for run in runs}:
+            shape = shapes[shape_index]
+            count = needed.get(shape_index, 0)
+            sample = next((triangles[:2000] for index, _, triangles in runs
+                           if index == shape_index), [])
+            normals = _decode_normals(data, shape, count)
+            uvs, label = _decode_uvs(data, shape, count,
+                                     positions.get(shape_index, []), sample)
+            decoded[shape_index] = (normals, uvs)
+            if uvs and not report.uv:
+                report.uv = True
+                report.warnings.append(f"UV décodées ({label}).")
+        for mesh, (index, _, _) in zip(meshes, runs):
+            normals, uvs = decoded.get(index, ([], []))
+            length = len(mesh.positions)
+            if uvs and len(uvs) >= length:
+                mesh.uvs = list(uvs[:length])
+            if normals and len(normals) >= length:
+                mesh.normals = list(normals[:length])
+            else:
+                mesh.ensure_normals()
 
     if not meshes:
         report.warnings.append("Géométrie vide après validation : refusée.")

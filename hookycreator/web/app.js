@@ -327,14 +327,15 @@ async function openModel(rel, options = {}) {
     <img class="preview" id="model-shot" alt="" src="${shot(null)}">
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}</dd>
-      <dt>Maillages</dt><dd>${info.meshes}</dd>
+      <dt>Maillages</dt><dd>${info.meshes}${info.dropped ? ` <span class="warn">(${info.dropped} ignoré(s))</span>` : ""}</dd>
       <dt>Faces</dt><dd>${info.faces.toLocaleString("fr-FR")}</dd>
       <dt>Sommets</dt><dd>${info.vertices.toLocaleString("fr-FR")}</dd>
       <dt>Dimensions</dt><dd>${info.bounds.map((value) => value.toFixed(3)).join(" × ")}</dd>
       <dt>Matériaux</dt><dd>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
       <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
     </dl>
-    ${info.warnings.length ? `<ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+    ${info.warnings.length ? `<details class="warns"><summary>${info.warnings.length} remarque(s) de décodage</summary>
+      <ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
     <div class="actions">
       <button class="btn primary" id="btn-blender">Exporter pour Blender</button>
       <button class="btn ghost" id="btn-turntable">Planche de rotations</button>
@@ -726,6 +727,7 @@ function renderSettings() {
   densities.innerHTML = (settings.densities || ["confort"]).map((density) =>
     `<option value="${density}" ${density === settings.density ? "selected" : ""}>${density}</option>`).join("");
   $("#set-thumb-faces").value = String(settings.thumb_faces || 0);
+  $("#set-preview-faces").value = String(settings.preview_faces ?? 60000);
   const cacheSlider = $("#set-cache");
   if (cacheSlider) {
     cacheSlider.max = settings.cache_max_mb || 1024;
@@ -790,6 +792,9 @@ function wireSettings() {
   on("#set-adaptive", "onchange", (event) => saveSettings({ adaptive: event.target.checked }));
   on("#set-accent", "onchange", (event) => saveSettings({ accent: event.target.value }));
   on("#set-density", "onchange", (event) => saveSettings({ density: event.target.value }));
+  on("#set-preview-faces", "onchange", (event) => {
+    saveSettings({ preview_faces: Number(event.target.value) });
+  });
   on("#set-thumb-faces", "onchange", (event) => {
     const value = Number(event.target.value);
     saveSettings({ thumb_faces: value > 0 ? value : null });
@@ -910,13 +915,30 @@ function markTile(kind, rel) {
 
 /* ------------------------------------------------------------------ actions */
 async function exportModel(rel) {
+  const button = $("#btn-blender");
+  if (button) { button.disabled = true; button.textContent = "Export en cours…"; }
   try {
     const result = await api("/api/model/export", {
       method: "POST",
       body: JSON.stringify({ path: rel, textures: state.settings?.export_textures !== false }),
     });
-    toast(`Export Blender : ${result.folder} (${result.faces} faces, ${result.textures} texture(s))`);
-  } catch (error) { toast(error.message, "error"); }
+    toast(`Export Blender : ${result.files.length} fichier(s), ${result.faces.toLocaleString("fr-FR")} faces`);
+    log("ok", `export → ${result.folder}`);
+    log("info", `fichiers : ${result.files.join(", ")}`);
+    if (!result.textures) {
+      log("warn", "aucune texture trouvée pour ce modèle dans le dossier scanné : "
+        + "le glTF sort sans image (les PNG sont à côté du BFRES dans le dump)");
+      toast("Export fait, mais aucune texture n'a été trouvée", "error");
+    } else {
+      log("ok", `${result.textures} texture(s) liée(s) aux matériaux`);
+    }
+    (result.warnings || []).forEach((warning) => log("warn", warning));
+  } catch (error) {
+    toast(error.message, "error");
+    log("error", error.message);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "Exporter pour Blender"; }
+  }
 }
 
 async function startBulk() {
