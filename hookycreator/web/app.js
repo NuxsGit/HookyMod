@@ -17,6 +17,11 @@ const state = {
   blends: [],
   blend: { ref: "", objects: [] },
   busy: 0,
+  selection: new Set(),
+  anchor: null,
+  shown: { models: 48, textures: 48 },
+  system: null,
+  fullscreen: false,
 };
 
 /* ------------------------------------------------------------------ outils */
@@ -165,7 +170,7 @@ function showView(view, options = {}) {
   if (view === "textures") renderTextures();
   if (view === "mobs") renderMobs();
   if (view === "blender") renderBlends();
-  if (view === "settings") renderSettings();
+  if (view === "settings") { renderSettings(); refreshSystem(); }
 }
 
 const VIEW_LABELS = {
@@ -185,7 +190,9 @@ function renderStatus() {
   }
   const budget = $("#status-budget");
   if (budget) {
-    budget.textContent = `budget ${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go`;
+    const cache = state.project?.cache?.thumbs;
+    budget.textContent = `budget ${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go`
+      + (cache ? ` · cache ${humanBytes(cache.bytes)}` : "");
   }
   const project = $("#status-project");
   if (project) project.textContent = state.project?.root || "—";
@@ -232,38 +239,67 @@ function thumbFaces() {
   return state.settings?.thumb_faces || "";
 }
 
-function modelThumb(rel) {
+// 320 × 240 et « faces » du réglage : mêmes paramètres que le préchauffage serveur,
+// sinon la vignette serait rendue une deuxième fois pour rien.
+function modelThumb(asset) {
   const faces = thumbFaces();
-  return `/api/model/preview?path=${encodeURIComponent(rel)}&w=360&h=270`
-    + (faces ? `&faces=${faces}` : "");
+  return `/api/model/preview?path=${encodeURIComponent(asset.rel)}&w=320&h=240`
+    + (faces ? `&faces=${faces}` : "")
+    + (asset.mtime ? `&v=${asset.mtime}` : "");
 }
 
-async function renderModels() {
-  const grid = $("#model-grid");
-  const shots = $("#model-shots")?.checked !== false;
-  const models = (state.project?.assets || [])
-    .filter((asset) => asset.kind === "model" && matches(asset));
-  state.models = models;
-  const count = $("#model-count");
-  if (count) {
-    count.textContent = `${models.length} modèle(s)`
-      + (state.filter ? ` pour « ${state.filter} »` : "")
-      + (shots ? "" : " — vignettes désactivées");
-  }
-  if (!models.length) {
-    grid.innerHTML = `<p class="muted">Aucun modèle repéré dans ce dossier.</p>`;
-    return;
-  }
-  grid.innerHTML = models.map((asset) => `
-    <article class="tile" data-kind="model" data-rel="${esc(asset.rel)}">
-      <div class="thumb ${shots ? "" : "placeholder"}">
-        ${shots ? `<img loading="lazy" alt="" src="${modelThumb(asset.rel)}">` : "aperçu désactivé"}
-      </div>
+function textureThumb(asset) {
+  return `/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=0`
+    + (asset.mtime ? `&v=${asset.mtime}` : "");
+}
+
+function tileMarkup(asset, kind) {
+  const key = `${kind}:${asset.rel}`;
+  const chosen = state.selection.has(key);
+  const shown = kind === "model"
+    ? (state.shots ? `<img loading="lazy" decoding="async" alt="" src="${modelThumb(asset)}">`
+                   : "aperçu désactivé")
+    : `<img loading="lazy" decoding="async" alt="" src="${textureThumb(asset)}">`;
+  return `
+    <article class="tile ${chosen ? "selected" : ""}" data-kind="${kind}"
+             data-rel="${esc(asset.rel)}" data-key="${esc(key)}">
+      <button class="pick" data-pick="${esc(key)}" title="Sélectionner (Ctrl+clic)">✓</button>
+      <div class="thumb ${shown === "aperçu désactivé" ? "placeholder" : ""}">${shown}</div>
       <div class="meta">
         <strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
         <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}</small>
       </div>
-    </article>`).join("");
+    </article>`;
+}
+
+function updateMore(kind, total, shown) {
+  const box = $(`#${kind}-more`);
+  const button = $(`#${kind}-more-btn`);
+  if (!box || !button) return;
+  box.hidden = total <= shown;
+  button.textContent = `Afficher ${Math.min(48, total - shown)} de plus `
+    + `(${total - shown} restant(s))`;
+}
+
+async function renderModels() {
+  const grid = $("#model-grid");
+  if (!grid) return;
+  state.shots = $("#model-shots")?.checked !== false;
+  const models = (state.project?.assets || [])
+    .filter((asset) => asset.kind === "model" && matches(asset));
+  state.models = models;
+  const shown = models.slice(0, state.shown.models);
+  const count = $("#model-count");
+  if (count) {
+    count.textContent = `${models.length} modèle(s)`
+      + (state.filter ? ` pour « ${state.filter} »` : "")
+      + (shown.length < models.length ? ` — ${shown.length} affichés` : "");
+  }
+  grid.innerHTML = shown.length
+    ? shown.map((asset) => tileMarkup(asset, "model")).join("")
+    : `<p class="muted">Aucun modèle repéré dans ce dossier.</p>`;
+  updateMore("model", models.length, shown.length);
+  updateSelectionBar();
 }
 
 function matches(asset) {
@@ -355,25 +391,22 @@ async function openModel(rel, options = {}) {
 /* ------------------------------------------------------------------ textures */
 async function renderTextures() {
   const grid = $("#texture-grid");
+  if (!grid) return;
   const textures = (state.project?.assets || [])
     .filter((asset) => asset.kind === "texture" && matches(asset));
   state.textures = textures;
+  const shown = textures.slice(0, state.shown.textures);
   const count = $("#texture-count");
-  if (count) count.textContent = `${textures.length} texture(s)`
-    + (state.filter ? ` pour « ${state.filter} »` : "");
-  if (!textures.length) {
-    grid.innerHTML = `<p class="muted">Aucune texture repérée dans ce dossier.</p>`;
-    return;
+  if (count) {
+    count.textContent = `${textures.length} texture(s)`
+      + (state.filter ? ` pour « ${state.filter} »` : "")
+      + (shown.length < textures.length ? ` — ${shown.length} affichées` : "");
   }
-  grid.innerHTML = textures.map((asset) => `
-    <article class="tile" data-kind="texture" data-rel="${esc(asset.rel)}">
-      <div class="thumb"><img loading="lazy" alt=""
-        src="/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=0"></div>
-      <div class="meta">
-        <strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
-        <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}</small>
-      </div>
-    </article>`).join("");
+  grid.innerHTML = shown.length
+    ? shown.map((asset) => tileMarkup(asset, "texture")).join("")
+    : `<p class="muted">Aucune texture repérée dans ce dossier.</p>`;
+  updateMore("texture", textures.length, shown.length);
+  updateSelectionBar();
 }
 
 async function openTexture(rel) {
@@ -693,6 +726,12 @@ function renderSettings() {
   densities.innerHTML = (settings.densities || ["confort"]).map((density) =>
     `<option value="${density}" ${density === settings.density ? "selected" : ""}>${density}</option>`).join("");
   $("#set-thumb-faces").value = String(settings.thumb_faces || 0);
+  const cacheSlider = $("#set-cache");
+  if (cacheSlider) {
+    cacheSlider.max = settings.cache_max_mb || 1024;
+    cacheSlider.value = settings.cache_mb ?? 256;
+    $("#set-cache-out").textContent = `${settings.cache_mb ?? 256} Mo`;
+  }
   $("#set-export-textures").checked = settings.export_textures !== false;
 
   $("#settings-summary").innerHTML = [
@@ -757,11 +796,97 @@ function wireSettings() {
   });
   on("#set-export-textures", "onchange", (event) =>
     saveSettings({ export_textures: event.target.checked }));
+  on("#set-cache", "oninput", (event) => {
+    const value = Number(event.target.value);
+    $("#set-cache-out").textContent = `${value} Mo`;
+    saveSettings({ cache_mb: value });
+  });
+  on("#cache-clear", "click", clearCache);
+  on("#scan-now", "click", rescanProject);
   on("#set-reset", "onclick", () => saveSettings({
     vram_gb: 6, supersample: 2, cull: true, frustum: true, adaptive: true,
     max_faces: null, lod: 0, accent: "menthe", density: "confort",
-    export_textures: true, thumb_faces: null,
+    export_textures: true, thumb_faces: null, cache_mb: 256,
   }, { quiet: false }));
+}
+
+/* ------------------------------------------------------------------ sélection */
+function selectionKeys() {
+  const view = state.view;
+  if (view === "models") return (state.models || []).map((asset) => `model:${asset.rel}`);
+  if (view === "textures") return (state.textures || []).map((asset) => `texture:${asset.rel}`);
+  return [];
+}
+
+function toggleSelection(key, force) {
+  const on = force === undefined ? !state.selection.has(key) : force;
+  if (on) state.selection.add(key);
+  else state.selection.delete(key);
+  refreshTileState();
+  updateSelectionBar();
+}
+
+function refreshTileState() {
+  $$(".tile[data-key]").forEach((node) => {
+    const chosen = state.selection.has(node.dataset.key);
+    node.classList.toggle("selected", chosen);
+  });
+}
+
+function updateSelectionBar() {
+  const bar = $("#selection-bar");
+  if (!bar) return;
+  const total = state.selection.size;
+  bar.hidden = total === 0;
+  const label = $("#selection-count");
+  if (label) label.textContent = `${total} sélectionné${total > 1 ? "s" : ""}`;
+}
+
+function selectRange(key) {
+  const keys = selectionKeys();
+  const target = keys.indexOf(key);
+  const anchor = keys.indexOf(state.anchor);
+  if (target < 0) return;
+  if (anchor < 0) { toggleSelection(key, true); return; }
+  const [from, to] = anchor <= target ? [anchor, target] : [target, anchor];
+  for (let index = from; index <= to; index += 1) state.selection.add(keys[index]);
+  refreshTileState();
+  updateSelectionBar();
+}
+
+function clearSelection() {
+  state.selection.clear();
+  state.anchor = null;
+  refreshTileState();
+  updateSelectionBar();
+}
+
+async function exportSelection() {
+  const items = [...state.selection].map((key) => {
+    const cut = key.indexOf(":");
+    return { kind: key.slice(0, cut), rel: key.slice(cut + 1) };
+  });
+  if (!items.length) { toast("Rien de sélectionné", "error"); return; }
+  status(`export de ${items.length} élément(s)…`, "busy");
+  try {
+    const response = await fetch("/api/export/selection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "hookycreator-selection.zip";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast(`${items.length} élément(s) exportés (${humanSize(blob.size)})`);
+  } catch (error) { toast(error.message, "error"); }
 }
 
 /* ------------------------------------------------------------------ inspecteur */
@@ -886,10 +1011,15 @@ async function createMob(event) {
 const MENUS = {
   fichier: [
     { label: "Rafraîchir le projet", hint: "F5", run: () => refresh({ quiet: false }) },
+    { label: "Rescanner les fichiers", run: () => rescanProject() },
+    { label: "Exporter la sélection (ZIP)", run: () => exportSelection() },
+    { sep: true },
     { label: "Exporter tout le projet", run: () => { showView("home"); startBulk(); } },
     { label: "Assembler le mod", run: () => { showView("home"); $("#mod-form")?.requestSubmit(); } },
     { sep: true },
     { label: "Ouvrir le dossier de travail", run: () => toast(`Dossier : ${state.project?.work || "—"}`) },
+    { sep: true },
+    { label: "Quitter l'atelier", danger: true, run: quitApp },
   ],
   edition: [
     { label: "Palette de commandes", hint: "Ctrl+K", run: openPalette },
@@ -931,6 +1061,10 @@ const MENUS = {
     { sep: true },
     { label: "Densité compacte", run: () => saveSettings({
       density: state.settings?.density === "compact" ? "confort" : "compact" }) },
+    { label: "Réduire l'interface", run: toggleReduced },
+    { label: "Plein écran", run: toggleFullscreen },
+    { sep: true },
+    { label: "Vider le cache des vignettes", run: clearCache },
   ],
   aide: [
     { label: "Raccourcis clavier", run: () => toast(
@@ -947,7 +1081,7 @@ function buildMenu(menu) {
   node.innerHTML = `<div class="menu-panel" style="left:${anchor.left}px;top:${anchor.bottom + 6}px">
     ${MENUS[menu].map((item) => item.sep
       ? `<div class="menu-sep"></div>`
-      : `<button class="menu-item" data-cmd="${esc(item.label)}">
+      : `<button class="menu-item ${item.danger ? "danger" : ""}" data-cmd="${esc(item.label)}">
            <span>${esc(item.label)}</span>${item.hint ? `<kbd>${esc(item.hint)}</kbd>` : ""}
          </button>`).join("")}
   </div>`;
@@ -986,6 +1120,14 @@ function paletteCommands() {
     { label: "Densité compacte", group: "affichage", run: () => saveSettings({
       density: state.settings?.density === "compact" ? "confort" : "compact" }) },
     { label: "Réinitialiser les réglages", group: "affichage", run: () => $("#set-reset")?.click() },
+    { label: "Rescanner les fichiers du projet", group: "action", run: () => rescanProject() },
+    { label: "Exporter la sélection (ZIP)", group: "action", run: () => exportSelection() },
+    { label: "Tout sélectionner", group: "sélection", run: () => $("#selection-all")?.click() },
+    { label: "Vider la sélection", group: "sélection", run: () => clearSelection() },
+    { label: "Vider le cache des vignettes", group: "mémoire", run: () => clearCache() },
+    { label: "Plein écran", group: "fenêtre", run: () => toggleFullscreen() },
+    { label: "Réduire l'interface", group: "fenêtre", run: () => toggleReduced() },
+    { label: "Quitter l'atelier", group: "fenêtre", run: () => quitApp() },
   ];
   (state.project?.assets || []).filter((asset) => asset.kind === "model").slice(0, 400)
     .forEach((asset) => commands.push({
@@ -1051,6 +1193,149 @@ function runPalette(index) {
   item.run();
 }
 
+/* ------------------------------------------------------------------ préchauffage */
+let warmTimer = null;
+
+function watchWarm(warm) {
+  clearTimeout(warmTimer);
+  if (!warm || !warm.total) return;
+  const label = $("#status-message");
+  if (label) label.textContent = `vignettes ${warm.done}/${warm.total}`;
+  if (!warm.running) {
+    log("ok", `vignettes prêtes : ${warm.done}/${warm.total}`);
+    if (state.view === "models") renderModels();
+    refreshSystem();
+    return;
+  }
+  warmTimer = setTimeout(async () => {
+    try {
+      const payload = await api("/api/thumbs/status");
+      watchWarm(payload.warm);
+    } catch (error) { /* le serveur peut être occupé, on retentera */ }
+  }, 1200);
+}
+
+async function startWarming() {
+  try {
+    const payload = await api("/api/thumbs/warm", { method: "POST", body: "{}" });
+    if (payload.warm?.running) {
+      log("ok", `préparation des vignettes : ${payload.warm.total} modèle(s)`);
+      watchWarm(payload.warm);
+    }
+  } catch (error) { log("error", `préchauffage impossible : ${error.message}`); }
+}
+
+/* ------------------------------------------------------------------ mémoire */
+async function refreshSystem() {
+  try {
+    const payload = await api("/api/system");
+    state.system = payload.cache;
+    renderMemory();
+    renderStatus();
+  } catch (error) {
+    log("error", `mémoire indisponible : ${error.message}`);
+  }
+}
+
+function renderMemory() {
+  const list = $("#memory-list");
+  const cache = state.system;
+  if (!list || !cache) return;
+  const thumbs = cache.thumbs || {};
+  const meshes = cache.meshes || {};
+  const percent = thumbs.limit_bytes
+    ? Math.min(100, (thumbs.bytes / thumbs.limit_bytes) * 100) : 0;
+  list.innerHTML = `
+    <li><span class="k">Mémoire du processus</span>
+      <b>${cache.rss_bytes ? humanBytes(cache.rss_bytes) : "inconnue"}</b></li>
+    <li><span class="k">Vignettes sur disque</span>
+      <b>${humanBytes(thumbs.bytes || 0)} · ${thumbs.entries || 0} fichier(s)</b></li>
+    <li><span class="k">Cache lu / écrit</span>
+      <b>${thumbs.hits || 0} / ${thumbs.misses || 0}</b></li>
+    <li><span class="k">Maillages en mémoire</span>
+      <b>${humanBytes(meshes.bytes || 0)} · ${meshes.entries || 0} modèle(s)</b></li>
+    <li><span class="k">Dernier scan</span>
+      <b>${cache.scan_seconds != null ? `${cache.scan_seconds} s` : "—"}
+        ${cache.scanned_at ? `<small class="muted">(${esc(cache.scanned_at.replace("T", " "))})</small>` : ""}</b></li>
+    <li style="display:block">
+      <span class="k">Remplissage du cache</span>
+      <div class="bar"><i style="width:${percent}%"></i></div>
+    </li>`;
+}
+
+async function clearCache() {
+  try {
+    const payload = await api("/api/cache/clear", { method: "POST", body: "{}" });
+    state.system = payload.cache;
+    renderMemory();
+    toast(`Cache vidé : ${payload.cleared.removed_entries} vignette(s), `
+      + `${humanBytes(payload.cleared.freed_bytes)} libérés`);
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function rescanProject() {
+  status("scan du projet…", "busy");
+  try {
+    const payload = await api("/api/scan", { method: "POST", body: "{}" });
+    state.project = payload.project;
+    state.settings = payload.project.settings || state.settings;
+    state.shown.models = 48;
+    state.shown.textures = 48;
+    renderStatus();
+    if (state.view === "models") await renderModels();
+    if (state.view === "textures") await renderTextures();
+    if (state.view === "home") renderHome();
+    toast(`${payload.scan.count} fichier(s) en ${payload.scan.scan_seconds} s`);
+  } catch (error) { toast(error.message, "error"); }
+}
+
+/* ------------------------------------------------------------------ fenêtre */
+function sessionOver() {
+  const overlay = document.createElement("div");
+  overlay.className = "session-over";
+  overlay.innerHTML = `
+    <div>
+      <h2>Session terminée</h2>
+      <p>Le serveur de l'atelier est arrêté. Ton travail est enregistré dans le dossier
+         de travail ; relance <code>python -m hookycreator</code> pour reprendre.</p>
+    </div>`;
+  document.body.append(overlay);
+  status("session terminée", "error");
+}
+
+async function quitApp() {
+  if (!window.confirm("Quitter l'atelier ? Le serveur local va s'arrêter.")) return;
+  try {
+    await api("/api/shutdown", { method: "POST", body: "{}" });
+  } catch (error) { /* le serveur peut couper avant la réponse */ }
+  sessionOver();
+}
+
+function toggleReduced() {
+  const root = document.documentElement;
+  const reduced = root.dataset.min === "1";
+  if (reduced) delete root.dataset.min;
+  else root.dataset.min = "1";
+  $("#win-min").title = reduced ? "Réduire l'interface (mode compact, sans rail)"
+                                : "Rétablir l'interface complète";
+  log("ok", reduced ? "interface complète" : "interface réduite (rail masqué)");
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      state.fullscreen = false;
+    } else {
+      await document.documentElement.requestFullscreen();
+      state.fullscreen = true;
+    }
+  } catch (error) {
+    toast("Le plein écran est refusé par le navigateur ici", "error");
+  }
+  $("#win-max").title = state.fullscreen ? "Quitter le plein écran" : "Plein écran";
+}
+
 /* ------------------------------------------------------------------ journal */
 function toggleConsole(force) {
   const node = $("#console");
@@ -1074,7 +1359,7 @@ async function refresh(options = {}) {
   if (state.view === "textures") await renderTextures();
   if (state.view === "mobs") await renderMobs();
   if (state.view === "blender") await renderBlends();
-  if (state.view === "settings") renderSettings();
+  if (state.view === "settings") { renderSettings(); refreshSystem(); }
   if (options.quiet === false) {
     const counts = payload.project.assets.length;
     toast(`Projet rafraîchi : ${counts} fichier(s)`);
@@ -1103,13 +1388,45 @@ function wire() {
 
   $("#search").oninput = (event) => {
     state.filter = event.target.value.trim().toLowerCase();
+    state.shown.models = 48;
     renderModels();
   };
   $("#search-tex").oninput = (event) => {
     state.filter = event.target.value.trim().toLowerCase();
+    state.shown.textures = 48;
     renderTextures();
   };
   $("#model-shots").onchange = renderModels;
+  $("#model-more-btn").onclick = () => {
+    state.shown.models += 48;
+    renderModels();
+  };
+  $("#texture-more-btn").onclick = () => {
+    state.shown.textures += 48;
+    renderTextures();
+  };
+  $("#selection-export").onclick = exportSelection;
+  $("#selection-clear").onclick = clearSelection;
+  $("#selection-all").onclick = () => {
+    selectionKeys().forEach((key) => state.selection.add(key));
+    refreshTileState();
+    updateSelectionBar();
+  };
+  $("#selection-invert").onclick = () => {
+    selectionKeys().forEach((key) => {
+      if (state.selection.has(key)) state.selection.delete(key);
+      else state.selection.add(key);
+    });
+    refreshTileState();
+    updateSelectionBar();
+  };
+  $("#win-close").onclick = quitApp;
+  $("#win-min").onclick = toggleReduced;
+  $("#win-max").onclick = toggleFullscreen;
+  document.addEventListener("fullscreenchange", () => {
+    state.fullscreen = Boolean(document.fullscreenElement);
+    $("#win-max").title = state.fullscreen ? "Quitter le plein écran" : "Plein écran";
+  });
   $("#inspector-close").onclick = hideInspector;
   $("#rail-console").onclick = () => toggleConsole();
   $("#console-clear").onclick = () => { state.logs = []; renderLogs(); };
@@ -1120,8 +1437,26 @@ function wire() {
     if (close) { event.stopPropagation(); closeTab(close.dataset.close); return; }
     const tab = event.target.closest(".tab");
     if (tab) { activateTab(tab.dataset.tab); return; }
+    const pick = event.target.closest("[data-pick]");
+    if (pick) {
+      event.stopPropagation();
+      toggleSelection(pick.dataset.pick);
+      state.anchor = pick.dataset.pick;
+      return;
+    }
     const tile = event.target.closest(".tile");
     if (tile) {
+      const key = tile.dataset.key;
+      if (key && (event.ctrlKey || event.metaKey)) {
+        toggleSelection(key);
+        state.anchor = key;
+        return;
+      }
+      if (key && event.shiftKey) {
+        selectRange(key);
+        return;
+      }
+      if (state.selection.size) clearSelection();
       if (tile.dataset.kind === "model") openModel(tile.dataset.rel);
       if (tile.dataset.kind === "texture") openTexture(tile.dataset.rel);
       if (tile.dataset.kind === "mob") openMob(tile.dataset.slug);
@@ -1188,9 +1523,19 @@ function wire() {
       return;
     }
     if (event.key === "F5") { event.preventDefault(); refresh({ quiet: false }); return; }
+    if (meta && event.key.toLowerCase() === "a") {
+      if (state.view === "models" || state.view === "textures") {
+        event.preventDefault();
+        selectionKeys().forEach((key) => state.selection.add(key));
+        refreshTileState();
+        updateSelectionBar();
+      }
+      return;
+    }
     if (event.key === "Escape") {
       closeMenus();
       closePalette();
+      if (state.selection.size) { clearSelection(); return; }
       hideInspector();
     }
   });
@@ -1212,6 +1557,8 @@ async function boot() {
   try {
     await refresh();
     log("ok", `Projet ouvert : ${state.project.root}`);
+    refreshSystem();
+    startWarming();
     status("prêt");
   } catch (error) {
     toast(error.message, "error");

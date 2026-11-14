@@ -12,7 +12,11 @@
 
   <!-- ============================================================ barre de titre -->
   <header class="titlebar">
-    <div class="win-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="win-dots">
+      <button class="dot close" id="win-close" title="Quitter l'atelier (arrête le serveur)"></button>
+      <button class="dot min" id="win-min" title="Réduire l'interface (mode compact, sans rail)"></button>
+      <button class="dot max" id="win-max" title="Plein écran"></button>
+    </div>
     <div class="brand"><span class="brand-mark"></span>HookyCreator</div>
 
     <nav class="menubar" id="menubar">
@@ -33,6 +37,15 @@
     </div>
   </header>
   <div class="menus" id="menus" hidden></div>
+
+  <!-- ============================================================ sélection -->
+  <div class="selection-bar" id="selection-bar" hidden>
+    <span id="selection-count">0 sélectionné</span>
+    <button class="btn primary tiny" id="selection-export">Exporter en ZIP</button>
+    <button class="btn ghost tiny" id="selection-all">Tout</button>
+    <button class="btn ghost tiny" id="selection-invert">Inverser</button>
+    <button class="btn ghost tiny" id="selection-clear">Vider</button>
+  </div>
 
   <!-- ============================================================ espace de travail -->
   <div class="workspace">
@@ -153,6 +166,9 @@
             </div>
           </div>
           <div class="grid" id="model-grid"></div>
+          <div class="more" id="model-more" hidden>
+            <button class="btn ghost" id="model-more-btn">Afficher plus</button>
+          </div>
         </section>
 
         <!-- ---------------------------------------------------------- textures -->
@@ -167,6 +183,9 @@
             </div>
           </div>
           <div class="grid" id="texture-grid"></div>
+          <div class="more" id="texture-more" hidden>
+            <button class="btn ghost" id="texture-more-btn">Afficher plus</button>
+          </div>
         </section>
 
         <!-- ---------------------------------------------------------- mobs -->
@@ -320,6 +339,22 @@
                   </select></label>
                 <label class="check"><input type="checkbox" id="set-export-textures">
                   joindre les PNG à l'export Blender</label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>Mémoire &amp; cache</h3></header>
+              <div class="panel-body">
+                <ul class="kv-list" id="memory-list"></ul>
+                <label class="field"><span>Cache de vignettes <b id="set-cache-out">256 Mo</b></span>
+                  <input type="range" id="set-cache" min="0" max="1024" step="32">
+                </label>
+                <div class="row">
+                  <button class="btn" id="cache-clear">Vider le cache</button>
+                  <button class="btn ghost" id="scan-now">Rescanner le projet</button>
+                </div>
+                <p class="hint">Les vignettes sont écrites sur disque et réutilisées : un
+                  dossier de mille modèles ne se redessine plus à chaque ouverture.</p>
               </div>
             </section>
 

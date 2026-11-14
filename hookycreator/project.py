@@ -23,6 +23,7 @@ from hookymod import bntx_encode, blender, render, util, zs
 from hookymod.mesh import MeshData
 
 from .settings import Settings, SettingsError
+from . import cache as cache_mod
 from . import vram
 
 MODEL_SUFFIXES = (".bfres.zs", ".bfres")
@@ -38,10 +39,12 @@ class Asset:
     kind: str                       # model | animation | texture | bytecode | archive
     size: int
     compressed: bool = False
+    mtime: int = 0                  # sert de version dans les URL de vignettes
 
     def as_json(self) -> dict:
         return {"rel": self.rel, "kind": self.kind, "size": self.size,
-                "compressed": self.compressed, "name": Path(self.rel).name}
+                "compressed": self.compressed, "name": Path(self.rel).name,
+                "mtime": self.mtime}
 
     @property
     def stem(self) -> str:
@@ -73,6 +76,14 @@ class Project:
         (self.work / "cache").mkdir(exist_ok=True)
         (self.work / "mobs").mkdir(exist_ok=True)
         self.settings = Settings.load(self.settings_path)
+        self.thumbs = cache_mod.ImageCache(self.work / "cache" / "thumbs",
+                                           self.settings.cache_mb)
+        self.scanned_at = ""
+        self.scan_seconds = 0.0
+        self._mesh_bytes = 0
+        self.warm: dict = {"running": False, "done": 0, "total": 0, "error": None}
+        self._warm_thread = None
+        self._dicts_lock = __import__("threading").Lock()
 
     # ------------------------------------------------------------------ réglages
     @property
@@ -87,7 +98,10 @@ class Project:
         except SettingsError as error:
             raise ProjectError(str(error)) from None
         self.settings.save(self.settings_path)
-        self._cache.pop(("meshes",), None)
+        self.thumbs.limit_bytes = self.settings.cache_mb * 1024 * 1024
+        self.thumbs.trim()
+        self._cache.clear()
+        self._mesh_bytes = 0
         return self.settings.as_json()
 
     # ------------------------------------------------------------------ fichiers
@@ -101,14 +115,24 @@ class Project:
         return candidate
 
     def _load_dicts(self) -> zs.ZstdDicts:
-        if self._dicts is None:
-            self._dicts = zs.ZstdDicts()
-            if zs.zstd_available():
-                for candidate in zs.find_dictionaries_near(self.root):
-                    try:
-                        self._dicts.load_file(candidate)
-                    except Exception:      # dictionnaire illisible : on continue
-                        pass
+        """Dictionnaires zstd, chargés **une seule fois** et jamais à moitié.
+
+        Deux vignettes qui se rendent en parallèle arrivaient ici en même temps :
+        la seconde repartait avec un objet encore vide et échouait sur « aucun
+        dictionnaire trouvé ». Le verrou publie donc l'objet seulement complet.
+        """
+        if self._dicts is not None:
+            return self._dicts
+        with self._dicts_lock:
+            if self._dicts is None:
+                dicts = zs.ZstdDicts()
+                if zs.zstd_available():
+                    for candidate in zs.find_dictionaries_near(self.root):
+                        try:
+                            dicts.load_file(candidate)
+                        except Exception:  # dictionnaire illisible : on continue
+                            pass
+                self._dicts = dicts
         return self._dicts
 
     # -- archives -----------------------------------------------------------
@@ -169,6 +193,8 @@ class Project:
 
     # ------------------------------------------------------------------ scan
     def scan(self) -> dict:
+        started = cache_mod.now_iso()
+        started_clock = __import__("time").perf_counter()
         assets: list[Asset] = []
         truncated = False
         for path in sorted(self.root.rglob("*")):
@@ -195,9 +221,13 @@ class Project:
                 kind = "archive"
             else:
                 continue
-            assets.append(Asset(rel=rel, kind=kind, size=path.stat().st_size,
-                                compressed=low.endswith(".zs")))
+            stat = path.stat()
+            assets.append(Asset(rel=rel, kind=kind, size=stat.st_size,
+                                compressed=low.endswith(".zs"),
+                                mtime=int(stat.st_mtime)))
         self.assets = assets
+        self.scanned_at = started
+        self.scan_seconds = round(__import__("time").perf_counter() - started_clock, 3)
         return {
             "root": str(self.root),
             "work": str(self.work),
@@ -208,6 +238,8 @@ class Project:
             "textures": sum(1 for a in assets if a.kind == "texture"),
             "bytecode": sum(1 for a in assets if a.kind == "bytecode"),
             "archives": sum(1 for a in assets if a.kind == "archive"),
+            "scanned_at": self.scanned_at,
+            "scan_seconds": self.scan_seconds,
         }
 
     def shown_path(self, path: Path) -> str:
@@ -224,6 +256,105 @@ class Project:
 
     def by_kind(self, kind: str) -> list[Asset]:
         return [a for a in self.assets if a.kind == kind]
+
+    # ------------------------------------------------------------------ cache
+    def _version(self, rel: str) -> tuple[int, int]:
+        """(taille, date) : la « version » qui invalide vignettes et caches."""
+        return cache_mod.file_stamp(self.asset(rel))
+
+    def _render_digest(self) -> str:
+        settings = self.settings
+        return cache_mod.digest(("rendu", settings.supersample, settings.cull,
+                                 settings.frustum, settings.max_faces,
+                                 settings.thumb_faces, settings.lod))
+
+    def _store_mesh(self, key, meshes) -> list[MeshData]:
+        cost = cache_mod.mesh_bytes(meshes)
+        budget = max(64 * 1024 * 1024, self.settings.budget_bytes // 2)
+        if self._mesh_bytes + cost > budget and self._cache:
+            # budget mémoire atteint : on jette les maillages décodés, pas le disque
+            for old_key in [k for k in self._cache if k[0] == "meshes"]:
+                self._cache.pop(old_key, None)
+            self._mesh_bytes = 0
+        self._cache[key] = meshes
+        self._mesh_bytes += cost
+        return meshes
+
+    def thumbnail_key(self, rel: str, width: int, height: int,
+                      yaw: float = 0.7, pitch: float = -0.35,
+                      views: int = 1, face_limit: int | None = None) -> str:
+        """Clé de cache d'une vignette (identique pour l'aperçu et le préchauffage)."""
+        return cache_mod.digest(("apercu", rel, self._version(rel), width, height,
+                                 round(yaw, 2), round(pitch, 2), views,
+                                 self.settings.thumb_faces if face_limit is None
+                                 else face_limit,
+                                 self._render_digest()))
+
+    def thumbnail_cached(self, rel: str, width: int, height: int) -> bool:
+        try:
+            key = self.thumbnail_key(rel, width, height)
+        except ProjectError:
+            return False
+        return self.thumbs.get(key) is not None
+
+    def warm_thumbnails(self, width: int = 320, height: int = 240,
+                        limit: int | None = None, workers: int = 2) -> dict:
+        """Prépare les vignettes en tâche de fond, sans bloquer l'interface.
+
+        Décoder un BFRES coûte près d'une seconde : plutôt que de le payer à
+        l'ouverture de la vue, on remplit le cache disque dès le démarrage, deux
+        modèles à la fois. Ce qui est déjà en cache est sauté.
+        """
+        if self.warm.get("running"):
+            return self.warm
+        models = [asset.rel for asset in self.by_kind("model")]
+        if limit:
+            models = models[:limit]
+        self.warm = {"running": True, "done": 0, "total": len(models), "error": None}
+        state = self.warm
+
+        def run() -> None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def one(rel: str) -> None:
+                try:
+                    if not self.thumbnail_cached(rel, width, height):
+                        self.model_preview(rel, width, height,
+                                           face_limit=self.settings.thumb_faces)
+                except Exception:            # une vignette ratée ne casse pas la série
+                    pass
+                finally:
+                    state["done"] = state.get("done", 0) + 1
+
+            try:
+                with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                    list(pool.map(one, models))
+            finally:
+                state["running"] = False
+
+        self._warm_thread = __import__("threading").Thread(target=run, daemon=True)
+        self._warm_thread.start()
+        return self.warm
+
+    def cache_stats(self) -> dict:
+        meshes = [k for k in self._cache if k[0] == "meshes"]
+        return {
+            "thumbs": self.thumbs.stats(),
+            "meshes": {"entries": len(meshes), "bytes": self._mesh_bytes,
+                       "budget_bytes": max(64 * 1024 * 1024,
+                                           self.settings.budget_bytes // 2)},
+            "rss_bytes": cache_mod.rss_bytes(),
+            "cache_mb": self.settings.cache_mb,
+            "scanned_at": self.scanned_at,
+            "scan_seconds": self.scan_seconds,
+            "warm": dict(self.warm),
+        }
+
+    def clear_cache(self) -> dict:
+        """Vide les vignettes du disque et les maillages gardés en mémoire."""
+        self._cache.clear()
+        self._mesh_bytes = 0
+        return self.thumbs.clear()
 
     # ------------------------------------------------------------------ textures
     def texture_file(self, rel: str) -> bntx_mod.BntxFile:
@@ -251,11 +382,15 @@ class Project:
                 "count": len(entries), "textures": entries}
 
     def texture_png(self, rel: str, index: int = 0, mip: int = 0) -> bytes:
+        key = cache_mod.digest(("texture", rel, self._version(rel), index, mip))
+        cached = self.thumbs.get(key)
+        if cached:
+            return cached
         file = self.texture_file(rel)
         texture = file.textures[index] if 0 <= index < len(file.textures) else None
         if texture is None:
             raise ProjectError(f"Texture {index} absente de {rel}.")
-        return texture.to_png(mip)
+        return self.thumbs.put(key, texture.to_png(mip))
 
     def import_texture(self, rel: str, index: int, image: bytes) -> dict:
         """Remplace les pixels d'une texture (même format, mêmes mips)."""
@@ -310,11 +445,12 @@ class Project:
         }
 
     def _model_meshes(self, rel: str) -> list[MeshData]:
-        key = ("meshes", rel)
+        size, mtime = self._version(rel)
+        key = ("meshes", rel, size, mtime)
         if key not in self._cache:
             data = self.read_asset(rel)
             file = bfres_mod.BfresFile.parse(data)
-            self._cache[key] = bfres_mod.meshes_from_file(file)
+            return self._store_mesh(key, bfres_mod.meshes_from_file(file))
         return self._cache[key]
 
     def model_meshes(self, rel: str) -> list[MeshData]:
@@ -335,6 +471,10 @@ class Project:
                       yaw: float = 0.7, pitch: float = -0.35,
                       views: int = 1, face_limit: int | None = None) -> bytes:
         """Rend un aperçu **dans le budget mémoire** réglé par l'utilisateur."""
+        key = self.thumbnail_key(rel, width, height, yaw, pitch, views, face_limit)
+        cached = self.thumbs.get(key)
+        if cached:
+            return cached
         meshes = self._model_meshes(rel)
         try:
             planned = vram.plan(self.settings, meshes, width, height, face_limit)
@@ -345,9 +485,11 @@ class Project:
                        frustum=self.settings.frustum,
                        supersample=planned.supersample)
         if views and views > 1:
-            return render.turntable_png(drawn, views=views, width=width,
-                                        height=height, **options)
-        return render.render_png(drawn, width, height, yaw, pitch, **options)
+            png = render.turntable_png(drawn, views=views, width=width,
+                                       height=height, **options)
+        else:
+            png = render.render_png(drawn, width, height, yaw, pitch, **options)
+        return self.thumbs.put(key, png)
 
     def export_model(self, rel: str, textures: bool = True) -> dict:
         meshes = self._model_meshes(rel)
@@ -438,6 +580,50 @@ class Project:
         return entry
 
     # ------------------------------------------------------------------ export
+    def export_selection(self, items: list[dict]) -> bytes:
+        """ZIP de la sélection : OBJ + glTF pour les modèles, PNG pour les textures."""
+        import io
+        import tempfile
+        import zipfile
+
+        if not isinstance(items, list) or not items:
+            raise ProjectError("Aucun élément sélectionné.")
+        if len(items) > 500:
+            raise ProjectError(f"{len(items)} éléments d'un coup, c'est trop "
+                               "(500 maximum) : découpe la sélection.")
+        buffer = io.BytesIO()
+        lines = ["Sélection exportée par HookyCreator", ""]
+        models = textures = 0
+        with tempfile.TemporaryDirectory() as folder, \
+                zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for item in items:
+                rel = str(item.get("rel") or "")
+                kind = str(item.get("kind") or "")
+                if not rel:
+                    continue
+                if kind == "texture":
+                    png = self.texture_png(rel, int(item.get("index", 0)))
+                    stem = Path(rel).name.split(".")[0]
+                    archive.writestr(f"textures/{stem}.png", png)
+                    lines.append(f"[texture] {rel}")
+                    textures += 1
+                    continue
+                if kind != "model":
+                    continue
+                stem = Path(rel).name.split(".")[0]
+                target = Path(folder) / stem
+                written = blender.export_bundle(self._model_meshes(rel), target, stem)
+                for produced in written.values():
+                    if produced.is_file():
+                        archive.write(produced, f"modeles/{stem}/{produced.name}")
+                lines.append(f"[modèle] {rel} ({len(written)} fichier(s))")
+                models += 1
+            lines.insert(1, f"{models} modèle(s), {textures} texture(s)")
+            archive.writestr("LISEZMOI.txt", "\n".join(lines) + "\n")
+        if not models and not textures:
+            raise ProjectError("Rien à exporter dans cette sélection.")
+        return buffer.getvalue()
+
     def build_mod(self, name: str = "HookyMod") -> dict:
         """Assemble un dossier de mod (layeredFS) avec tout ce qui est modifié."""
         clean = "".join(ch for ch in name if ch.isalnum() or ch in "_-").strip() or "HookyMod"
@@ -488,6 +674,9 @@ class Project:
             "dicts": len(self._load_dicts()),
             "zstd": zs.zstd_available(),
             "settings": self.settings.as_json(),
+            "cache": self.cache_stats(),
+            "scanned_at": self.scanned_at,
+            "scan_seconds": self.scan_seconds,
             "edited": sorted(
                 str(p.relative_to(self.work / "assets"))
                 for p in (self.work / "assets").rglob("*") if p.is_file()

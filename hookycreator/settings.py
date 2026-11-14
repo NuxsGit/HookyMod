@@ -31,6 +31,9 @@ LOD_MAX = 3
 ACCENTS = ("menthe", "azur", "ambre", "framboise")
 DENSITIES = ("confort", "compact")
 
+#: plafond du cache de vignettes sur disque (Mo)
+CACHE_MIN_MB, CACHE_MAX_MB, CACHE_DEFAULT_MB = 0, 4096, 256
+
 
 class SettingsError(ValueError):
     """Réglage refusé (valeur hors bornes ou type inattendu)."""
@@ -75,7 +78,8 @@ class Settings:
     accent: str = "menthe"                    # couleur d'accent
     density: str = "confort"                  # confort | compact
     export_textures: bool = True              # joindre les PNG à l'export Blender
-    thumb_faces: int | None = None            # plafond des vignettes (None = auto)
+    thumb_faces: int | None = 20_000          # plafond des vignettes (None = auto)
+    cache_mb: int = CACHE_DEFAULT_MB          # cache de vignettes sur disque
 
     # ------------------------------------------------------------------ état
     def clamp(self) -> "Settings":
@@ -96,6 +100,8 @@ class Settings:
             thumb_faces=(None if self.thumb_faces is None
                          else int(_number(self.thumb_faces, "thumb_faces",
                                           FACES_MIN, FACES_MAX))),
+            cache_mb=int(_number(self.cache_mb, "cache_mb",
+                                 CACHE_MIN_MB, CACHE_MAX_MB)),
         )
 
     @property
@@ -118,6 +124,9 @@ class Settings:
             "density": self.density,
             "export_textures": self.export_textures,
             "thumb_faces": self.thumb_faces,
+            "cache_mb": self.cache_mb,
+            "cache_min_mb": CACHE_MIN_MB,
+            "cache_max_mb": CACHE_MAX_MB,
             "accents": list(ACCENTS),
             "densities": list(DENSITIES),
         }
@@ -141,6 +150,7 @@ class Settings:
             "density": payload.get("density", base.density),
             "export_textures": payload.get("export_textures", base.export_textures),
             "thumb_faces": payload.get("thumb_faces", base.thumb_faces),
+            "cache_mb": payload.get("cache_mb", base.cache_mb),
         }
         for name in ("cull", "frustum", "adaptive", "export_textures"):
             values[name] = _flag(values[name], name)
