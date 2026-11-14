@@ -1482,6 +1482,14 @@ class Project:
                     continue
                 source = self.work / "export" / name
                 for produced in sorted(source.iterdir()):
+                    # Un ancien .blend peut être conservé après l'échec de
+                    # Blender : ne jamais le présenter dans le ZIP comme le
+                    # résultat de cet export. Les sauvegardes .blend1 sont
+                    # également exclues.
+                    suffix = produced.suffix.lower()
+                    if suffix == ".blend1" or (suffix == ".blend" and (
+                            result["method"] != "blender" or produced.name != f"{name}.blend")):
+                        continue
                     if produced.is_file():
                         archive.write(produced, f"{name}/{produced.name}")
                 if result["method"] == "blender":
@@ -1489,7 +1497,7 @@ class Project:
                     notes.append(f"{name} : {name}.blend écrit par Blender.")
                 else:
                     notes.append(
-                        f"{name} : pas de .blend (Blender introuvable) — depuis le "
+                        f"{name} : pas de nouveau .blend (Blender absent ou export échoué) — depuis le "
                         f"dossier {name}/, lance :")
                     notes.append(f"    blender --background --factory-startup "
                                  f"--python creer_blend.py -- {name}.gltf {name}.blend")

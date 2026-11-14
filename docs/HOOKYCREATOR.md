@@ -327,12 +327,16 @@ utilisateur : **il pilote Blender**.
    `blender --background --factory-startup --python creer_blend.py -- mon.gltf mon.blend`.
    Le script importe le glTF, **emballe les textures** dans le fichier
    (`pack_all`), puis enregistre le `.blend`.
-4. Le fichier est **vérifié** avant d'être annoncé : présent, non vide, plus
-   récent que l'export. Un `.blend` périmé est supprimé avant l'essai pour ne
-   jamais passer pour un résultat.
+4. Blender écrit d'abord dans un fichier temporaire du même dossier (pour garder
+   les chemins relatifs). Le fichier est **vérifié** avant d'être annoncé :
+   présent et non vide, puis déplacé vers le nom final.
+   Un ancien `.blend` reste intact si Blender échoue ou si son remplacement
+   est impossible ; il n'est pas considéré comme le résultat du nouvel essai.
 
 Si Blender est absent ou échoue, l'atelier ne prétend rien : il affiche la
-commande exacte à lancer, la propose à la copie, et laisse le script utilisable.
+commande à lancer, la propose à la copie, et laisse le script utilisable. Un
+ancien `.blend` conservé n'est pas ajouté au ZIP de cette sélection en cas
+d'échec.
 Le bouton **Exporter en .blend** de la barre de sélection produit un seul ZIP
 (`hookycreator-blender.zip`) avec un dossier par modèle — glTF, `.bin`, PNG,
 `creer_blend.py` et, quand Blender est là, le `.blend` — plus un `LIRE-MOI.txt`
