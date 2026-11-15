@@ -269,32 +269,56 @@ class ZstdDicts:
                     return decoded
         # Une limite native, une fonctionnalité non prise en charge ou un
         # moteur absent conservent exactement le comportement existant.
-        dctx = (zstd.ZstdDecompressor(dict_data=dictionary)
-                if dictionary else zstd.ZstdDecompressor())
+        options = {"dict_data": dictionary} if dictionary else {}
+        if max_output_size is not None:
+            # Une fenêtre zstd forgée peut elle aussi déclencher une allocation
+            # gigantesque même lorsque la sortie annoncée est minuscule.
+            options["max_window_size"] = max(1 << 20, max_output_size)
+        dctx = zstd.ZstdDecompressor(**options)
         try:
+            if max_output_size is not None:
+                # stream_reader borne chaque allocation de sortie. Il accepte
+                # cependant une fin tronquée : le second passage ci-dessous
+                # vérifie les fins de frames sans réaccumuler le résultat.
+                out = bytearray()
+                with dctx.stream_reader(io.BytesIO(raw), read_across_frames=True) as reader:
+                    while True:
+                        chunk = reader.read(min(1 << 20, max_output_size + 1 - len(out)))
+                        if not chunk:
+                            break
+                        out += chunk
+                        if len(out) > max_output_size:
+                            raise DecompressionLimit(
+                                f"Flux zstd trop volumineux (limite : {max_output_size} octets).")
             if self.require_complete or max_output_size is not None:
                 # stream_reader accepte silencieusement une fin tronquée et
                 # peut rendre des octets partiels. Vérifier la fin de chaque
                 # frame, y compris les frames skippables et concaténées.
-                out = bytearray()
-                offset = 0
+                if max_output_size is None:
+                    out = bytearray()
+                offset = checked = 0
                 while offset < len(raw):
                     decoder = dctx.decompressobj()
                     while offset < len(raw):
-                        # Un petit bloc limite l'allocation intermédiaire lorsque
-                        # quelques octets se décompressent en un grand tampon.
                         chunk = raw[offset:offset + (1 << 10)]
                         offset += len(chunk)
                         decoded = decoder.decompress(chunk)
-                        if max_output_size is not None and len(decoded) > max_output_size - len(out):
-                            raise DecompressionLimit(
-                                f"Flux zstd trop volumineux (limite : {max_output_size} octets).")
-                        out += decoded
+                        if max_output_size is None:
+                            out += decoded
+                        else:
+                            # La sortie totale a déjà été bornée au premier
+                            # passage ; ne pas la conserver une seconde fois.
+                            checked += len(decoded)
+                            if checked > max_output_size:
+                                raise DecompressionLimit(
+                                    f"Flux zstd trop volumineux (limite : {max_output_size} octets).")
                         if decoder.eof:
                             offset -= len(decoder.unused_data)
                             break
                     if not decoder.eof:
                         raise FormatError("Flux zstd tronqué : fin de frame absente.")
+                if max_output_size is not None and checked != len(out):
+                    raise FormatError("Flux zstd incohérent entre les deux lectures.")
                 return bytes(out)
             with dctx.stream_reader(io.BytesIO(raw), read_across_frames=True) as reader:
                 out = bytearray()

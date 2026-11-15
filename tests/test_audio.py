@@ -118,6 +118,16 @@ class AudioTests(unittest.TestCase):
         with self.assertRaises(zs.DecompressionLimit):
             dictionaries.decompress(frame, max_output_size=32)
 
+        # Une sortie de 1 Kio avec une fenêtre zstd de 128 Mio doit être
+        # refusée avant que le décodeur ne réserve une fenêtre disproportionnée.
+        params = zstd.ZstdCompressionParameters.from_level(
+            1, window_log=27, write_content_size=False)
+        encoder = zstd.ZstdCompressor(compression_params=params).compressobj()
+        huge_window = encoder.compress(b"x" * 1024) + encoder.flush()
+        self.assertGreater(zstd.get_frame_parameters(huge_window).window_size, 1 << 20)
+        with self.assertRaises(zs.FormatError):
+            dictionaries.decompress(huge_window, max_output_size=1024)
+
     def test_magic_recognises_real_container_families_without_claiming_support(self) -> None:
         self.assertEqual(identify.sniff(b"BWAV", "file.bwav")[0].kind, "bwav")
         self.assertEqual(identify.sniff(b"BARS", "file.bars")[0].kind, "bars")

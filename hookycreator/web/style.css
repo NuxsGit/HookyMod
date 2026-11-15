@@ -1026,8 +1026,12 @@ input[type="range"]::-moz-range-thumb {
   position: fixed;
   z-index: 85;
   right: 16px;
-  top: 54px;
+  /* Laisser accessible la croix de l'inspecteur, même lorsque le résultat
+     reste affiché. Le panneau peut défiler sur les petites fenêtres. */
+  top: 96px;
   width: min(400px, calc(100vw - 32px));
+  max-height: calc(100vh - 120px);
+  overflow: auto;
   padding: 14px;
   background: var(--panel-2);
   border: 1px solid var(--accent);

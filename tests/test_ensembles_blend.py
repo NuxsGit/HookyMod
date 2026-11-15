@@ -256,7 +256,8 @@ class BlendScriptTests(unittest.TestCase):
         bpy.ops.import_scene.gltf.return_value = {"FINISHED"}
         with patch.dict(sys.modules, {"bpy": bpy}), patch.object(sys, "argv", [str(script)]):
             runpy.run_path(str(script), run_name="__main__")
-        bpy.ops.import_scene.gltf.assert_called_once_with(filepath=str(folder / bad_name))
+        bpy.ops.import_scene.gltf.assert_called_once()
+        self.assertEqual(Path(bpy.ops.import_scene.gltf.call_args.kwargs["filepath"]), folder / bad_name)
         bpy.ops.wm.save_as_mainfile.assert_called_once_with(filepath=str(folder / 'un "nom".blend'))
         self.assertFalse(marker.exists())
 

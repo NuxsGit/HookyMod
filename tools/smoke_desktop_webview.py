@@ -174,8 +174,9 @@ def run(application: Path) -> None:
                 retry = completed_download(driver, str(first))
                 downloads.append(retry)
                 assert retry != first
-                close_panels(driver)
+                # Le résultat persistant ne doit pas masquer la fermeture de la fiche.
                 driver.click('#inspector-close')
+                close_panels(driver)
                 # Le bouton de sélection est transparent jusqu'au survol.
                 driver.script("document.querySelector('#model-grid .tile:not([hidden]) .pick').click()")
                 driver.click('#selection-export')
