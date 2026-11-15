@@ -46,6 +46,13 @@ let projectSnapshotRevision = null;
 let projectRequestSequence = 0;
 let appliedProjectRequest = 0;
 let modBuildPending = false;
+// Des sélecteurs ne sont remplis qu'après la validation progressive des assets.
+let restoredChoices = {};
+let restoredModelQuality = "";
+let uiSessionWriter = null;
+let uiSessionBoot = Promise.resolve();
+let sessionLoadFailed = false;
+let nativeCheckpointSerial = 0;
 
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -251,7 +258,9 @@ document.addEventListener("error", (event) => {
 /* ------------------------------------------------------------------ barre d'état */
 function renderStatus() {
   const assets = state.project?.assets || [];
-  const count = (kind) => assets.filter((asset) => asset.kind === kind).length;
+  const counts = {};
+  for (const asset of assets) counts[asset.kind] = (counts[asset.kind] || 0) + 1;
+  const count = (kind) => counts[kind] || 0;
   const auxiliary = count("animation") + count("auxiliary");
   const settings = state.settings || {};
   const node = $("#status-counts");
@@ -278,7 +287,7 @@ function renderStatus() {
   if (notice) { notice.hidden = !incomplete; notice.textContent = incomplete ? guidance : ""; }
   const budget = $("#status-budget");
   if (budget) {
-    const cache = state.project?.cache?.thumbs;
+    const cache = state.system?.thumbs || state.project?.cache?.thumbs;
     budget.textContent = `budget ${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go`
       + (cache ? ` · cache ${humanBytes(cache.bytes)}` : "");
   }
@@ -698,10 +707,15 @@ async function openModel(rel, options = {}) {
   };
   $("#model-quality").onchange = (event) => {
     const chosen = qualities.find((q) => q.id === event.target.value) || qualities[0];
+    restoredModelQuality = chosen.id;
     $("#model-shot").src = shot(chosen.faces);
     refreshBudget(chosen.faces);
+    uiSessionWriter?.schedule();
   };
-  refreshBudget(null);
+  const quality = qualities.find((q) => q.id === restoredModelQuality) || qualities[0];
+  $("#model-quality").value = quality.id;
+  if (quality.faces) $("#model-shot").src = shot(quality.faces);
+  refreshBudget(quality.faces);
   if (options.inspect === false) return;
 }
 
@@ -894,6 +908,7 @@ function fillMobSelects() {
       for (const option of textureSelect.options) option.selected = previous.has(option.value);
     }
   }
+  applyRestoredChoices();
 }
 
 function requestChooserChecks(includeTextures) {
@@ -1188,6 +1203,8 @@ let settingsInFlight = {};
 let settingsWaiters = [];
 let settingsSending = false;
 let settingsNotify = false;
+let settingsIdleWaiters = [];
+let settingsSaveFailed = false;
 
 function saveSettings(patch, options = {}) {
   state.settings = { ...settingsOrDefault(), ...patch };
@@ -1243,14 +1260,26 @@ async function flushSettings() {
     if (state.view === "mobs") await renderMobs();
     if (state.view === "blender") requestChooserChecks(false);
     if (notify) toast("Réglages enregistrés");
+    settingsSaveFailed = false;
     saved = true;
-  } catch (error) { toast(error.message, "error"); }
+  } catch (error) { settingsSaveFailed = true; toast(error.message, "error"); }
   finally {
     settingsSending = false;
     settingsInFlight = {};
     waiters.forEach((resolve) => resolve(saved));
     if (Object.keys(settingsPending).length && !settingsTimer) flushSettings();
+    settingsIdleWaiters.splice(0).forEach((resolve) => resolve());
   }
+}
+
+async function finishPendingSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = null;
+  while (settingsSending || Object.keys(settingsPending).length) {
+    if (settingsSending) await new Promise((resolve) => settingsIdleWaiters.push(resolve));
+    else await flushSettings();
+  }
+  return !settingsSaveFailed;
 }
 
 function wireSettings() {
@@ -1965,7 +1994,7 @@ async function stopPreparingThumbnails() {
 
 async function refreshSystem() {
   try {
-    const payload = await api("/api/system");
+    const payload = await api("/api/system", { background: true });
     state.system = payload.cache;
     state.engine = payload.engine;
     updateWarmStatus(payload.cache?.warm);
@@ -2085,11 +2114,30 @@ function sessionOver() {
 }
 
 async function quitApp() {
+  if (window.__HOOKY_DESKTOP__) {
+    // La fenêtre native intercepte ce chemin : aucun accès IPC n'est accordé
+    // au contenu distant, et la fermeture attend la sauvegarde confirmée.
+    location.assign("/__hooky/quit");
+    return;
+  }
   if (!window.confirm("Quitter l'atelier ? Le serveur local va s'arrêter.")) return;
+  document.body.inert = true;
+  let timeout;
+  const saved = await Promise.race([
+    saveUiCheckpoint(),
+    new Promise((resolve) => { timeout = setTimeout(() => resolve(false), 5000); }),
+  ]);
+  clearTimeout(timeout);
+  if (!saved && !window.confirm(
+    "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?")) {
+    document.body.inert = false;
+    return;
+  }
   try {
     await api("/api/shutdown", { method: "POST", body: "{}" });
   } catch (error) { /* le serveur peut couper avant la réponse */ }
   sessionOver();
+  document.body.inert = false;
 }
 
 function toggleReduced() {
@@ -2162,7 +2210,7 @@ function acceptProjectSnapshot(project, request) {
 
 async function refresh(options = {}) {
   const request = ++projectRequestSequence;
-  const payload = await api("/api/state");
+  const payload = await api(options.quick ? "/api/state?quick=1" : "/api/state");
   if (!acceptProjectSnapshot(payload.project, request)) return;
   state.ensembles = [];          // la liste dépend des fichiers : on la relit
   applyUiSettings(state.settings);
@@ -2439,6 +2487,227 @@ function wire() {
   }, 1000);
 }
 
+/* ------------------------------------------------------------------ reprise automatique */
+const SESSION_TEXT_FIELDS = ["search", "search-tex", "search-ens", "search-sound", "tex-role",
+  "mod-name", "mob-name", "mob-parent", "mob-resource-search", "blend-axis", "blend-scale",
+  "blend-only", "blend-target-search"];
+const SESSION_CHECK_FIELDS = ["model-shots", "ens-textures", "bulk-anim", "blend-fit"];
+let sessionTouchedDuringBoot = false;
+
+function applyRestoredChoices() {
+  for (const id of ["mob-model", "blend-target"]) {
+    const desired = restoredChoices[id];
+    if (!desired) continue;
+    const select = $(`#${id}`);
+    if (!select) continue;
+    if ([...select.options].some((option) => option.value === desired)) {
+      select.value = desired;
+      delete restoredChoices[id];
+    } else {
+      // Ne pas soumettre par accident le premier modèle encore en cours de
+      // validation à la place de celui que l'utilisateur avait choisi.
+      select.value = "";
+    }
+  }
+  const textures = $("#mob-textures");
+  if (textures && Array.isArray(restoredChoices["mob-textures"])) {
+    const pending = new Set(restoredChoices["mob-textures"]);
+    for (const option of textures.options) {
+      if (pending.delete(option.value)) option.selected = true;
+    }
+    restoredChoices["mob-textures"] = [...pending];
+    if (!pending.size) delete restoredChoices["mob-textures"];
+  }
+}
+
+function captureUiSession() {
+  const fields = {};
+  for (const id of SESSION_TEXT_FIELDS) {
+    const node = $(`#${id}`);
+    if (node) fields[id] = String(node.value || "").slice(0, 2048);
+  }
+  for (const id of SESSION_CHECK_FIELDS) {
+    const node = $(`#${id}`);
+    if (node) fields[id] = Boolean(node.checked);
+  }
+  const quality = $("#model-quality")?.value || restoredModelQuality;
+  if (quality) fields["model-quality"] = quality;
+  const choices = {
+    "mob-model": restoredChoices["mob-model"] || $("#mob-model")?.value || "",
+    "blend-target": restoredChoices["blend-target"] || $("#blend-target")?.value || "",
+    "blend-ref": state.blend.ref || "",
+    "mob-textures": [...new Set([
+      ...(restoredChoices["mob-textures"] || []),
+      ...[...($("#mob-textures")?.selectedOptions || [])].map((option) => option.value),
+    ])].slice(0, 5000),
+  };
+  const tabs = state.tabs.slice(0, 64).map((tab) => {
+    if (tab.view) return { type: "view", view: tab.view };
+    return tab.doc ? { ...tab.doc } : null;
+  }).filter(Boolean);
+  const shown = {};
+  for (const key of ["models", "textures", "ensembles", "sounds", "chooser"]) {
+    shown[key] = Math.max(48, Math.min(10000, Math.round(state.shown[key] || 48)));
+  }
+  return {
+    version: 1, view: state.view, tabs, active: state.tab,
+    selection: [...state.selection].slice(0, 5000), fields, choices, shown,
+    scroll: Math.max(0, Math.min(100000000, Math.round($("#views")?.scrollTop || 0))),
+    inspector: $("#inspector")?.hidden === false,
+    console: $("#console")?.hidden === false,
+    reduced: document.documentElement.dataset.min === "1",
+    thumbnails_paused: Boolean(thumbnailQueue.paused),
+  };
+}
+
+async function restoreUiSession(saved) {
+  if (!saved || saved.version !== 1 || !state.project) return;
+  const assets = new Map((state.project.assets || []).map((asset) => [`${asset.kind}:${asset.rel}`, asset]));
+  const mobs = new Map((state.project.mobs || []).map((mob) => [mob.slug, mob]));
+  const blendRefs = (saved.tabs || []).some((tab) => tab.type === "blend") || saved.choices?.["blend-ref"];
+  if (blendRefs) {
+    try { state.blends = (await api("/api/blend/list", { background: true })).blends || []; }
+    catch (error) { log("warn", `Liste Blender indisponible : ${error.message}`); }
+  }
+  if (sessionTouchedDuringBoot) return;
+  const blends = new Map((state.blends || []).map((entry) => [entry.ref, entry]));
+  for (const id of [...SESSION_TEXT_FIELDS, ...SESSION_CHECK_FIELDS]) {
+    const value = saved.fields?.[id];
+    const node = $(`#${id}`);
+    if (!node) continue;
+    if (SESSION_CHECK_FIELDS.includes(id) && typeof value === "boolean") node.checked = value;
+    else if (SESSION_TEXT_FIELDS.includes(id) && typeof value === "string") node.value = value;
+  }
+  restoredModelQuality = ["auto", "detail", "rapide"].includes(saved.fields?.["model-quality"])
+    ? saved.fields["model-quality"] : "";
+  for (const [kind, id] of Object.entries({ models: "search", textures: "search-tex",
+                                            ensembles: "search-ens", sounds: "search-sound" })) {
+    state.filters[kind] = ($(`#${id}`)?.value || "").trim().toLowerCase();
+  }
+  for (const key of ["models", "textures", "ensembles", "sounds", "chooser"]) {
+    const value = saved.shown?.[key];
+    if (Number.isInteger(value)) state.shown[key] = Math.max(48, Math.min(10000, value));
+  }
+  state.selection = new Set((saved.selection || []).filter((key) => assets.has(key)
+    && (key.startsWith("model:") || key.startsWith("texture:"))));
+  const choices = saved.choices || {};
+  restoredChoices = {};
+  if (assets.has(`model:${choices["mob-model"]}`)) restoredChoices["mob-model"] = choices["mob-model"];
+  if (assets.has(`model:${choices["blend-target"]}`)) restoredChoices["blend-target"] = choices["blend-target"];
+  restoredChoices["mob-textures"] = (choices["mob-textures"] || [])
+    .filter((rel) => assets.has(`texture:${rel}`));
+  state.blend.ref = blends.has(choices["blend-ref"]) ? choices["blend-ref"] : "";
+
+  state.tabs = [];
+  ensureViewTab("home", VIEW_LABELS.home).closable = false;
+  for (const tab of saved.tabs || []) {
+    if (tab.type === "view" && Object.hasOwn(VIEW_LABELS, tab.view)) {
+      ensureViewTab(tab.view, VIEW_LABELS[tab.view]);
+    } else if (["model", "texture", "sound"].includes(tab.type)) {
+      const asset = assets.get(`${tab.type}:${tab.rel}`);
+      if (asset) ensureTab({ id: `${tab.type}:${tab.rel}`, kind: tab.type, label: asset.name,
+                             doc: { type: tab.type, rel: tab.rel } });
+    } else if (tab.type === "mob" && mobs.has(tab.slug)) {
+      ensureTab({ id: `mob:${tab.slug}`, kind: "mob", label: mobs.get(tab.slug).name,
+                  doc: { type: "mob", slug: tab.slug } });
+    } else if (tab.type === "blend" && blends.has(tab.ref)) {
+      ensureTab({ id: `blend:${tab.ref}`, kind: "blend", label: blends.get(tab.ref).name,
+                  doc: { type: "blend", ref: tab.ref } });
+    }
+  }
+  const view = Object.hasOwn(VIEW_LABELS, saved.view) ? saved.view : "home";
+  ensureViewTab(view, VIEW_LABELS[view]);
+  showView(view, { tab: false });
+  const active = state.tabs.find((tab) => tab.id === saved.active)
+    || state.tabs.find((tab) => tab.id === `view:${view}`);
+  state.tab = active.id;
+  renderTabs();
+  updateSelectionBar();
+  toggleConsole(Boolean(saved.console));
+  if (saved.reduced) document.documentElement.dataset.min = "1";
+  else delete document.documentElement.dataset.min;
+  setThumbnailPause(Boolean(saved.thumbnails_paused));
+  applyRestoredChoices();
+  if (saved.inspector && active.doc && active.doc.type !== "blend") void openDoc(active.doc);
+  if (view === "blender" && state.blend.ref) void selectBlend(state.blend.ref);
+  // Les grilles synchrones sont en place à la prochaine image. Ne pas voler
+  // le défilement si l'utilisateur a déjà commencé à interagir.
+  const scroll = $("#views");
+  if (scroll && saved.scroll) requestAnimationFrame(() => {
+    if (!sessionTouchedDuringBoot) scroll.scrollTop = saved.scroll;
+  });
+}
+
+async function saveUiCheckpoint() {
+  try {
+    // Ne pas remplacer une sauvegarde existante avec l'interface encore en
+    // cours de chargement. Les réglages terminent avant la capture finale.
+    await uiSessionBoot;
+    const settingsSaved = await finishPendingSettings();
+    const sessionSaved = uiSessionWriter?.enabled
+      ? await uiSessionWriter.flush() : !sessionTouchedDuringBoot;
+    return settingsSaved && sessionSaved;
+  } catch (error) {
+    toast(`Sauvegarde de session impossible : ${error.message}`, "error");
+    return false;
+  }
+}
+
+function wireUiSession() {
+  uiSessionWriter = new UiSessionWriter(captureUiSession, {
+    onError: (error) => toast(`Sauvegarde de session impossible : ${error.message}`, "error"),
+  });
+  const schedule = (event) => {
+    // Un scroll provoqué par le rendu ou par scrollTop peut lui aussi être
+    // « trusted » ; seuls les gestes réels annulent la restauration initiale.
+    if (event?.isTrusted && event.type !== "scroll") {
+      sessionTouchedDuringBoot = true;
+      if (sessionLoadFailed && state.project && !uiSessionWriter.enabled) {
+        uiSessionWriter.enable();
+        sessionLoadFailed = false;
+      }
+    }
+    if (event?.type === "change" && ["mob-model", "mob-textures", "blend-target"].includes(event.target?.id)) {
+      delete restoredChoices[event.target.id];
+    }
+    uiSessionWriter.schedule(event?.type === "input" || event?.type === "scroll" ? 250 : 100);
+  };
+  for (const type of ["click", "input", "change", "keydown", "wheel", "touchstart"]) {
+    document.addEventListener(type, schedule, type === "wheel" || type === "touchstart" ? { passive: true } : undefined);
+  }
+  $("#views")?.addEventListener("scroll", schedule, { passive: true });
+  const observer = new MutationObserver(() => uiSessionWriter.schedule());
+  for (const selector of ["#tabs", "#inspector", "#console", "#selection-count"]) {
+    const node = $(selector);
+    if (node) observer.observe(node, { childList: true, subtree: true, attributes: true,
+                                      attributeFilter: ["hidden"] });
+  }
+  // La fenêtre native intercepte cette navigation sans ouvrir de page ni
+  // exposer d'API Tauri. Elle attend la confirmation avant d'arrêter le moteur.
+  window.__hookyCheckpoint = async (id) => {
+    const serial = ++nativeCheckpointSerial;
+    document.body.inert = true;
+    status("enregistrement de la session…", "busy");
+    const saved = await saveUiCheckpoint();
+    if (serial === nativeCheckpointSerial) {
+      location.assign(`/__hooky/checkpoint?id=${encodeURIComponent(id)}&saved=${saved ? 1 : 0}`);
+    }
+  };
+  window.__hookyResume = () => {
+    nativeCheckpointSerial += 1;
+    document.body.inert = false;
+    status("prêt");
+  };
+  const checkpoint = (keepalive) => {
+    void uiSessionWriter.flush({ keepalive });
+    void finishPendingSettings();
+  };
+  window.addEventListener("pagehide", () => checkpoint(true));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") checkpoint(false);
+  });
+}
+
 async function boot() {
   if (window.__HOOKY_DESKTOP__) {
     document.documentElement.dataset.desktop = "1";
@@ -2461,10 +2730,31 @@ async function boot() {
   ensureViewTab("home", "Accueil");
   state.tabs[0].closable = false;
   wire();
+  wireUiSession();
   renderTabs();
   showView("home");
   try {
-    await refresh();
+    // Charger la sauvegarde en parallèle de l'inventaire ; les statistiques
+    // détaillées des caches sont demandées après le premier affichage.
+    const saved = api("/api/ui-state", { background: true })
+      .then((payload) => ({ payload }), (error) => ({ error }));
+    await refresh({ quick: true });
+    const result = await saved;
+    if (result.error) {
+      // Éviter d'écraser une sauvegarde qu'on n'a pas réussi à lire. Dès que
+      // l'utilisateur modifie l'interface, les écritures sont réessayées.
+      sessionLoadFailed = true;
+      toast(`Reprise automatique indisponible : ${result.error.message}`, "error");
+      if (sessionTouchedDuringBoot) {
+        uiSessionWriter.enable();
+        sessionLoadFailed = false;
+        uiSessionWriter.schedule();
+      }
+    } else {
+      if (!sessionTouchedDuringBoot) await restoreUiSession(result.payload.state);
+      uiSessionWriter.enable();
+      if (sessionTouchedDuringBoot) uiSessionWriter.schedule();
+    }
     log("ok", `Projet ouvert : ${state.project.root}`);
     refreshSystem();
     if (state.project.scan_incomplete || state.project.scan_truncated) {
@@ -2477,4 +2767,4 @@ async function boot() {
   }
 }
 
-boot();
+uiSessionBoot = boot();

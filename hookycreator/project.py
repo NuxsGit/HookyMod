@@ -13,6 +13,7 @@ le jeu attend (layeredFS).
 from __future__ import annotations
 
 import bisect
+import copy
 import json
 import os
 import shutil
@@ -45,6 +46,8 @@ TEXTURE_SUFFIXES = (".bntx.zs", ".bntx")
 SOUND_SUFFIXES = (".bwav.zs", ".bwav")
 # Garde-fou configurable : 0 désactive le plafond. Une troncature est signalée.
 MAX_SCAN_FILES = 200_000
+# Cache mémoire de bundles complets, jamais de .blend produit par Blender.
+EXPORT_CACHE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -59,8 +62,10 @@ class Asset:
     role: str = ""                  # texture seulement : albedo, normal, roughness…
 
     def as_json(self) -> dict:
+        # Les chemins du scan sont déjà normalisés avec « / » sur toutes les
+        # plateformes. Éviter des dizaines de milliers d'objets Path au boot.
         data = {"rel": self.rel, "kind": self.kind, "size": self.size,
-                "compressed": self.compressed, "name": Path(self.rel).name,
+                "compressed": self.compressed, "name": self.rel.rsplit("/", 1)[-1],
                 "mtime": self.mtime}
         if self.role:
             data["role"] = self.role
@@ -68,7 +73,7 @@ class Asset:
 
     @property
     def stem(self) -> str:
-        name = Path(self.rel).name
+        name = self.rel.rsplit("/", 1)[-1]
         for suffix in (".zs",):
             if name.lower().endswith(suffix):
                 name = name[: -len(suffix)]
@@ -99,7 +104,7 @@ def _tokens(text: str) -> list[str]:
     return [token for token in _TOKEN_SPLIT.split(text.lower()) if token]
 
 
-def _texture_base(name: str) -> str:
+def _texture_base(name: str, role: str | None = None) -> str:
     """Nom d'une texture **sans** son espace de noms ni son suffixe de rôle.
 
     ``Mt_Weapon_Sword_Biggoron_Alb`` → ``weapon_sword_biggoron`` : c'est la clé
@@ -109,7 +114,7 @@ def _texture_base(name: str) -> str:
     tokens = _tokens(_png_stem(name))
     while tokens and tokens[0] in NAMESPACE_TOKENS:
         tokens.pop(0)
-    if len(tokens) > 1 and texture_maps.classify(name) != "autre":
+    if len(tokens) > 1 and (role or texture_maps.classify(name)) != "autre":
         tokens.pop()                     # le dernier jeton est le rôle (Alb, Nrm…)
     return "_".join(tokens)
 
@@ -301,6 +306,8 @@ class Project:
         self._sampler_flights = cache_mod.KeyedLocks()
         self._edit_flights = cache_mod.KeyedLocks()
         self._export_flights = cache_mod.KeyedLocks()
+        self._export_cache: OrderedDict[tuple, tuple] = OrderedDict()
+        self._export_cache_bytes = 0
         self._downloads_lock = threading.Lock()
         self._json_flights = cache_mod.KeyedLocks()
         # géométrie décodée : rouvrir un modèle ne doit pas repayer le décodage
@@ -316,6 +323,7 @@ class Project:
         # modèle relisait tout le projet (4 s pour 600 modèles, des minutes
         # sur un vrai dump)
         self._by_kind: dict[str, list[Asset]] = {}
+        self._model_export_counts: dict[str, int] = {}
         self._texture_names = _PrefixIndex()
         self._animation_names = _PrefixIndex()
         self._ensembles: list[dict] | None = None
@@ -425,11 +433,18 @@ class Project:
         edited = self._edited_path(source)
         return (edited, True) if edited.is_file() else (source, False)
 
-    def _current_version(self, rel: str) -> tuple[Path, tuple[int, int, bool]]:
+    def _current_version(self, rel: str) -> tuple[Path, tuple]:
         path, edited = self._current_asset(rel)
-        size, mtime = cache_mod.file_stamp(path)
-        # La copie et l'original peuvent avoir même taille et même date.
-        return path, (size, mtime, edited)
+        try:
+            stat = path.stat()
+            # La provenance distingue l'original et la copie ; ctime et identité
+            # détectent aussi les remplacements qui conservent taille et mtime
+            # lorsque le système de fichiers fournit ces informations.
+            stamp = (stat.st_size, stat.st_mtime_ns, edited,
+                     stat.st_ctime_ns, stat.st_dev, stat.st_ino)
+        except OSError:
+            stamp = (0, 0, edited, 0, 0, 0)
+        return path, stamp
 
     def _load_dicts(self) -> zs.ZstdDicts:
         """Dictionnaires zstd, chargés **une seule fois** et jamais à moitié.
@@ -648,11 +663,16 @@ class Project:
                     break
         assets.sort(key=lambda asset: asset.rel)
         by_kind, textures, animations = self._build_indexes(assets)
+        export_counts: dict[str, int] = {}
+        for asset in by_kind.get("model", ()):
+            name = (asset.rel.rsplit("/", 1)[-1].split(".")[0] or "modele").casefold()
+            export_counts[name] = export_counts.get(name, 0) + 1
         # Construire sans verrou, puis publier un instantané cohérent en une
         # fois : les autres vues peuvent continuer à lire l'ancien pendant le scan.
         with self._cache_lock:
             self.assets = assets
             self._by_kind = by_kind
+            self._model_export_counts = export_counts
             self._texture_names = textures
             self._animation_names = animations
             self._texture_index.clear()
@@ -700,7 +720,7 @@ class Project:
         textures = _PrefixIndex()
         animations = _PrefixIndex()
         for asset in by_kind.get("texture", ()):
-            textures.add(_texture_base(asset.stem), asset)
+            textures.add(_texture_base(asset.stem, asset.role), asset)
         for asset in by_kind.get("animation", ()):
             animations.add(_animation_key(Path(asset.rel).name), asset)
         textures.build()
@@ -739,8 +759,8 @@ class Project:
             return str(path)
 
     # ------------------------------------------------------------------ cache
-    def _version(self, rel: str) -> tuple[int, int, bool]:
-        """Taille, date et provenance de la version courante de l'asset."""
+    def _version(self, rel: str) -> tuple:
+        """Taille, dates, identité et provenance de la version courante de l'asset."""
         return self._current_version(rel)[1]
 
     def _render_digest(self) -> str:
@@ -998,6 +1018,8 @@ class Project:
             self._render_data.clear()
             self._samplers.clear()
             self._albedo_cache.clear()
+            self._export_cache.clear()
+            self._export_cache_bytes = 0
         removed = 0
         if self.geo_folder.is_dir():
             for path in self.geo_folder.glob("*.geo"):
@@ -1321,7 +1343,11 @@ class Project:
         # Si le fichier lui-même a changé pendant la lecture, ne pas publier sa
         # géométrie sous une ancienne clé. Les modifications internes sont
         # écrites atomiquement ; cela couvre aussi les écritures externes usuelles.
-        if cache_mod.file_stamp(source) == key[2][:2]:
+        try:
+            unchanged = self._current_version(rel) == (source, key[2])
+        except (ProjectError, OSError):
+            unchanged = False
+        if unchanged:
             try:
                 geo_mod.write(path, meshes, meta)
             except (OSError, AttributeError):
@@ -1719,15 +1745,85 @@ class Project:
     def _model_export_folder(self, rel: str) -> Path:
         """Garde l'ancien nom sauf si deux modèles auraient le même dossier."""
         name = Path(rel).name.split(".")[0] or "modele"
-        collisions = sum(1 for asset in self.by_kind("model")
-                         if (Path(asset.rel).name.split(".")[0] or "modele").casefold()
-                         == name.casefold())
+        with self._cache_lock:
+            collisions = self._model_export_counts.get(name.casefold(), 0)
         if collisions > 1:
             name += "--" + cache_mod.digest(rel)[:8]
         folder = self.work / "export" / name
         if not folder.resolve().is_relative_to(self.work):
             raise ProjectError("Le dossier d'export sort du dossier de travail.")
         return folder
+
+    def _export_signature(self, rel: str, textures: bool, stamp: tuple,
+                          folder_name: str, archive: bool) -> tuple | None:
+        """Clé liée aux sources réelles et à l'inventaire, jamais aux fichiers exportés."""
+        with self._cache_lock:
+            generation = self._generation
+        try:
+            if self._version(rel) != stamp:
+                return None
+            sources = []
+            if textures:
+                buckets = self.texture_maps_for(rel)
+                for role in ROLE_ORDER:
+                    for asset in buckets.get(role, []):
+                        # Un appariement très large ne doit pas coûter autant
+                        # que le scan pour simplement consulter le cache.
+                        if len(sources) >= 128:
+                            return None
+                        sources.append((role, asset.rel, self._version(asset.rel)))
+        except (ProjectError, OSError):
+            return None
+        with self._cache_lock:
+            if generation != self._generation:
+                return None
+        return (rel, folder_name, generation, stamp, bool(textures), bool(archive), tuple(sources))
+
+    def _cached_export(self, key: tuple | None):
+        if key is None:
+            return None
+        with self._cache_lock:
+            entry = self._export_cache.get(key)
+            if entry is not None:
+                self._export_cache.move_to_end(key)
+        if entry is None:
+            return None
+        files, found, zipped, _cost = entry
+        return files, copy.deepcopy(found), zipped
+
+    def _remember_export(self, key: tuple | None, paths: list[Path], found: dict,
+                         staged_zip: Path | None) -> None:
+        # Une carte illisible peut redevenir lisible sans changer sa date : ne
+        # jamais figer un export partiel, à l'exception d'une absence de cartes.
+        if key is None or (found["warnings"] and key[-1]):
+            return
+        try:
+            cost = sum(path.stat().st_size for path in paths)
+            if staged_zip is not None:
+                cost += staged_zip.stat().st_size
+            if cost > EXPORT_CACHE_BYTES:
+                return
+            files = tuple((path.name, path.read_bytes()) for path in paths)
+            zipped = staged_zip.read_bytes() if staged_zip is not None else None
+            actual = sum(len(data) for _, data in files) + len(zipped or b"")
+            if actual > EXPORT_CACHE_BYTES:
+                return
+        except OSError:
+            return  # un cache facultatif ne doit pas empêcher un export
+        rel, folder_name, generation, stamp, textures, archive, _ = key
+        if self._export_signature(rel, textures, stamp, folder_name, archive) != key:
+            return
+        with self._cache_lock:
+            if generation != self._generation:
+                return
+            old = self._export_cache.pop(key, None)
+            if old:
+                self._export_cache_bytes -= old[3]
+            while self._export_cache and self._export_cache_bytes + actual > EXPORT_CACHE_BYTES:
+                _old_key, old = self._export_cache.popitem(last=False)
+                self._export_cache_bytes -= old[3]
+            self._export_cache[key] = (files, copy.deepcopy(found), zipped, actual)
+            self._export_cache_bytes += actual
 
     def export_blend(self, rel: str, textures: bool = True, *, archive: bool = False) -> dict:
         """Export glTF et, si possible, vrai .blend ; sinon une recette explicite."""
@@ -1742,7 +1838,7 @@ class Project:
         import tempfile
         import zipfile
 
-        meshes, meta, _stamp = self._model_mesh_entry(rel)
+        meshes, meta, stamp = self._model_mesh_entry(rel)
         folder = self._model_export_folder(rel)
         # Un autre export du même dossier ne peut pas mélanger ses fichiers avec
         # celui-ci. La préparation isolée évite d'utiliser d'anciennes textures.
@@ -1751,20 +1847,29 @@ class Project:
                 with tempfile.TemporaryDirectory(prefix="model-export-", dir=self.work / "cache") as tmp:
                     stage = Path(tmp) / folder.name
                     stage.mkdir()
-                    if textures:
-                        found = self.export_maps_for(rel, stage)
-                    else:
-                        found = {"maps": {}, "files": [], "textures": 0, "warnings": []}
-                        self._write_textures_note(stage, folder.name, rel, [],
-                                                  ["Export des textures désactivé."])
-                    blender.export_bundle(meshes, stage, folder.name,
-                                          textures=self._albedo_index(rel, stage, found["files"]) if textures else {},
-                                          maps=found["maps"] or None)
+                    key = (None if make_blend else
+                           self._export_signature(rel, textures, stamp, folder.name, archive))
+                    cached = self._cached_export(key)
                     blend_result = None
                     executable = None
-                    if make_blend:
-                        executable = blendfile.find_blender(self.settings.blender_path)
-                        blend_result = blendfile.make_blend(stage, folder.name, blender=executable)
+                    if cached is not None:
+                        files, found, cached_zip = cached
+                        for name, data in files:
+                            (stage / name).write_bytes(data)
+                    else:
+                        cached_zip = None
+                        if textures:
+                            found = self.export_maps_for(rel, stage)
+                        else:
+                            found = {"maps": {}, "files": [], "textures": 0, "warnings": []}
+                            self._write_textures_note(stage, folder.name, rel, [],
+                                                      ["Export des textures désactivé."])
+                        blender.export_bundle(meshes, stage, folder.name,
+                                              textures=self._albedo_index(rel, stage, found["files"]) if textures else {},
+                                              maps=found["maps"] or None)
+                        if make_blend:
+                            executable = blendfile.find_blender(self.settings.blender_path)
+                            blend_result = blendfile.make_blend(stage, folder.name, blender=executable)
 
                     # Lister les fichiers physiques, dont MTL et scripts, et non
                     # seulement ceux renvoyés par le générateur glTF/OBJ.
@@ -1775,7 +1880,9 @@ class Project:
                         raise ProjectError("Export incomplet : le glTF ou son fichier .bin manque.")
                     archive_id = uuid.uuid4().hex if archive else ""
                     staged_zip = Path(tmp) / "result.zip"
-                    if archive:
+                    if archive and cached_zip is not None:
+                        staged_zip.write_bytes(cached_zip)
+                    elif archive:
                         with zipfile.ZipFile(staged_zip, "w", compression=zipfile.ZIP_DEFLATED,
                                              compresslevel=1, allowZip64=True) as output:
                             for path in produced:
@@ -1785,6 +1892,8 @@ class Project:
                                                in {".png", ".blend"} else zipfile.ZIP_DEFLATED)
                                 output.write(path, f"{folder.name}/{path.name}",
                                              compress_type=compression)
+                    if cached is None and not make_blend:
+                        self._remember_export(key, produced, found, staged_zip if archive else None)
                     folder.mkdir(parents=True, exist_ok=True)
                     produced_names = {path.name for path in produced}
                     stale_files = sorted(path.name for path in folder.iterdir()
@@ -2051,7 +2160,10 @@ class Project:
                 for produced in sorted(target.rglob("*")):
                     if produced.is_file():
                         relative = produced.relative_to(target)
-                        archive.write(produced, f"modeles/{unique}/{relative.as_posix()}")
+                        compression = (zipfile.ZIP_STORED if produced.suffix.lower()
+                                       in {".png", ".blend"} else zipfile.ZIP_DEFLATED)
+                        archive.write(produced, f"modeles/{unique}/{relative.as_posix()}",
+                                      compress_type=compression)
                 lines.append(f"[modèle] {rel} ({len(written)} fichier(s) + "
                              f"{maps['textures']} carte(s) de texture)")
                 models += 1
@@ -2197,6 +2309,8 @@ class Project:
             self._stats_cache = None
             self._ensembles = None
             self._json_cache.clear()
+            self._export_cache.clear()
+            self._export_cache_bytes = 0
 
     def cached_json(self, name: str, builder) -> bytes:
         """JSON d'une vue, sérialisé une fois par version du projet.
@@ -2239,7 +2353,7 @@ class Project:
             return {"settings": self.settings.as_json(),
                     "image_revision": f"{self._instance_id}-{self._generation}"}
 
-    def state(self) -> dict:
+    def state(self, *, quick: bool = False) -> dict:
         # Capturer ensemble la révision, les réglages et le dernier scan. La
         # conversion d'un gros inventaire reste hors verrou : un scan en cours
         # peut publier sa nouvelle liste sans mélanger les deux instantanés.
@@ -2260,7 +2374,10 @@ class Project:
             "dicts": len(self._load_dicts()),
             "zstd": zs.zstd_available(),
             "settings": settings.as_json(),
-            "cache": self.cache_stats(max_age=3.0),
+            # Le tout premier affichage n'a pas besoin d'énumérer des milliers
+            # de vignettes et fichiers .geo. /api/system fournit ces chiffres
+            # en arrière-plan ; /api/state historique reste complet par défaut.
+            "cache": None if quick else self.cache_stats(max_age=3.0),
             "scanned_at": scanned_at,
             "scan_seconds": scan_seconds,
             "scan_truncated": truncated,
@@ -2271,10 +2388,10 @@ class Project:
             "edited": self.edited_files(),
         }
 
-    def state_payload(self) -> bytes:
+    def state_payload(self, *, quick: bool = False) -> bytes:
         """``{"project": ...}`` en JSON, sérialisé une fois par version du projet."""
         def cache_key():
-            return (self._generation, json.dumps(self.settings.as_json(), sort_keys=True))
+            return (self._generation, json.dumps(self.settings.as_json(), sort_keys=True), quick)
 
         with self._cache_lock:
             key = cache_key()
@@ -2288,8 +2405,8 @@ class Project:
                 cached = self._state_json
             if cached and cached[0] == key:
                 return cached[1]
-            body = json.dumps({"project": self.state()},
-                              ensure_ascii=False).encode("utf-8")
+            snapshot = self.state(quick=True) if quick else self.state()
+            body = json.dumps({"project": snapshot}, ensure_ascii=False).encode("utf-8")
             with self._cache_lock:
                 if cache_key() == key:
                     self._state_json = (key, body)

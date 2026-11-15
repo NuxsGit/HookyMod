@@ -35,6 +35,15 @@ que les suffixes reconnus et ne suit pas les liens symboliques ; supprimer la
 limite ne rend pas les formats inconnus exploitables. Les dossiers de travail et
 de mods assemblés sont exclus des sources.
 
+## Reprendre son travail
+
+L'interface sauvegarde automatiquement la navigation, les onglets, filtres,
+sélections et brouillons dans le dossier de travail du projet. En fenêtre native,
+le dernier projet est rouvert au lancement ; en navigateur, relance le serveur
+avec le même projet et le même `--work` éventuel. Les réglages et les fichiers
+édités restent enregistrés séparément. Les limites de la reprise, la fermeture et
+les mesures de vitesse sont détaillées dans [`PERFORMANCE.md`](PERFORMANCE.md).
+
 ## Accélération Rust
 
 Ferme l'application, double-clique sur `Compiler_Rust.bat` (Windows), puis

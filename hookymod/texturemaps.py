@@ -165,30 +165,29 @@ def compose_metal_roughness(roughness_png: bytes | None,
     metal = _any_reader(metallic_png) if metallic_png else None
     # une taille différente n'est pas une erreur : la métallique est
     # rééchantillonnée au plus proche sur la grille de la rugosité
-    width, height, pixels = rough if rough else metal
-    output = bytearray(width * height * 4)
-    metal_pixels = None
+    width, height, _ = rough if rough else metal
+    # Affecter les canaux par tranches : les cartes ont habituellement la même
+    # taille et un million de pixels ne doivent pas passer par une boucle Python.
+    output = bytearray(b"\xff\xff\x00\xff" * (width * height))
+    if rough:
+        output[1::4] = rough[2][0::4]
     if metal:
         mw, mh, mp = metal
-        metal_pixels = (mw, mh, mp)
-    for y in range(height):
-        for x in range(width):
-            index = (y * width + x) * 4
-            if pixels:
-                green = pixels[index] if rough else 255
-            else:
-                green = 255
-            if metal_pixels:
-                mw, mh, mp = metal_pixels
-                sx = min(mw - 1, x * mw // width)
-                sy = min(mh - 1, y * mh // height)
-                blue = mp[(sy * mw + sx) * 4]
-            else:
-                blue = 0
-            output[index] = 255        # R : occlusion (non utilisée ici)
-            output[index + 1] = green
-            output[index + 2] = blue
-            output[index + 3] = 255
+        if (mw, mh) == (width, height):
+            output[2::4] = mp[0::4]
+        else:
+            # Même voisin le plus proche que précédemment : floor(x*mw/width),
+            # floor(y*mh/height). Ne garder qu'une ligne pour borner la mémoire.
+            columns = [x * mw // width * 4 for x in range(width)]
+            last_y, line = -1, b""
+            for y in range(height):
+                sy = y * mh // height
+                if sy != last_y:
+                    start = sy * mw * 4
+                    line = bytes(mp[start + x] for x in columns)
+                    last_y = sy
+                first = y * width * 4 + 2
+                output[first:first + width * 4:4] = line
     from hookymod import util
 
     return util.png_bytes(width, height, bytes(output))

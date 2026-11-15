@@ -9,13 +9,15 @@ Blender reste nécessaire pour produire automatiquement un vrai `.blend`.
 
 ## Utilisation
 
-1. Ouvre HookyCreator et choisis le dossier de ton jeu extrait (par exemple
+1. À la première ouverture, choisis le dossier de ton jeu extrait (par exemple
    `romfs` avec `Pack/ZsDic.pack.zs`), ou un dossier de fichiers extraits. Il
    doit être accessible en écriture : le travail est créé dans
-   `<projet>/hookycreator_work/`.
+   `<projet>/hookycreator_work/`. Aux ouvertures suivantes, le dernier projet
+   est rouvert automatiquement ; s'il n'existe plus, le sélecteur revient.
 2. Utilise **Projet → Ouvrir un projet…** pour changer de dossier ; le projet
-   courant reste ouvert si le suivant ne peut pas démarrer. Un scan volumineux
-   peut prendre du temps ; **Projet → Annuler l'ouverture** permet de l'annuler.
+   courant reste ouvert si le suivant ne peut pas démarrer. L'interface du projet
+   courant est enregistrée avant le changement. Un scan volumineux peut prendre
+   du temps ; **Projet → Annuler l'ouverture** permet de l'annuler.
 3. L'export d'un modèle indique le chemin absolu du dossier et démarre un ZIP.
    Dans la fenêtre native, les ZIP et sons sont enregistrés avec des noms uniques
    dans le dossier système **Téléchargements/HookyCreator/** (à défaut sous
@@ -25,6 +27,12 @@ Blender reste nécessaire pour produire automatiquement un vrai `.blend`.
 4. **Exporter en .blend** exige Blender installé ; indique son chemin dans
    Réglages s'il n'est pas détecté. Sinon le ZIP contient un glTF et un script,
    mais pas de nouveau `.blend`.
+
+La vue, les onglets, les filtres, la sélection, l'inspecteur et les brouillons
+sont sauvegardés par projet. Les réglages et les fichiers modifiés restent
+séparés. Une fermeture normale attend la confirmation de sauvegarde ; si elle
+échoue, l'application demande avant de quitter. Une interruption brutale reste
+sans garantie. Détails, limites et mesures : [`PERFORMANCE.md`](PERFORMANCE.md).
 
 Les formats non vérifiés ou non pris en charge ne sont pas montrés comme
 utilisables. Les sons sont expérimentaux et en lecture seule : voir
@@ -90,8 +98,8 @@ permission Tauri pour ouvrir arbitrairement des dossiers ou exécuter des comman
 
 Le workflow `.github/workflows/desktop.yml` construit le sidecar et la fenêtre
 sur Linux et Windows, puis exécute un parcours WebDriver avec des données
-synthétiques (session, fichiers masqués, export ZIP, sélection et son). Elle
-extrait le `.deb` ou installe silencieusement le NSIS, vérifie la présence des
+synthétiques (session, fichiers masqués, export ZIP, sélection, son, fermeture
+et reprise du projet). Elle extrait le `.deb` ou installe silencieusement le NSIS, vérifie la présence des
 exécutables et reteste le backend livré. Les installateurs de test sont conservés
 comme artefacts de CI lorsque le workflow réussit. Le dialogue de choix lui-même
 n'est pas automatisé : le mode debug

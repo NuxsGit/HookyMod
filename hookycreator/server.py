@@ -30,6 +30,7 @@ from hookymod import bntx, native, restbl, sarc, zs
 from hookymod.util import HookyError
 
 from . import blend as blend_mod
+from . import session as session_mod
 from .project import MAX_SCAN_FILES, Project, ProjectError
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -46,14 +47,14 @@ DESKTOP_READ_ROUTES = frozenset({
     "/api/texture/png", "/api/ensembles", "/api/blender", "/api/model/info",
     "/api/model/preview", "/api/model/uv", "/api/model/uv/info", "/api/mobs",
     "/api/bulk/status", "/api/blend/list", "/api/blend/inspect", "/api/blend/preview",
-    "/api/system", "/api/thumbs/status", "/api/export/download",
+    "/api/system", "/api/thumbs/status", "/api/export/download", "/api/ui-state",
 })
 DESKTOP_WRITE_ROUTES = frozenset({
     "/api/settings", "/api/texture/import", "/api/texture/export", "/api/model/blend",
     "/api/model/export", "/api/mobs", "/api/bulk/start", "/api/blend/inspect",
     "/api/blend/upload", "/api/blend/translate", "/api/mod/build", "/api/thumbs/warm",
     "/api/thumbs/stop", "/api/cache/clear", "/api/scan", "/api/export/selection",
-    "/api/shutdown",
+    "/api/shutdown", "/api/ui-state",
 })
 DESKTOP_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -103,6 +104,7 @@ class HookyCreatorServer:
                 raise ValueError("Jeton de session desktop invalide.")
         self.desktop_token = desktop_token
         self.project = Project(Path(root), Path(work) if work else None, scan_limit=scan_limit)
+        self.ui_session = session_mod.SessionStore(self.project.work, self.project.root)
         self.scan_summary = self.project.scan()
         self.host = host
         self.port = port
@@ -156,7 +158,18 @@ class HookyCreatorServer:
         project = self.project
 
         if route == "/api/state":
-            return project.state_payload(), "application/json"
+            return project.state_payload(quick=query.get("quick") == ["1"]), "application/json"
+
+        if route == "/api/ui-state":
+            if method == "GET":
+                return _json({"state": self.ui_session.load()})
+            if not isinstance(body, dict):
+                raise ProjectError("Sauvegarde d'interface invalide.")
+            try:
+                saved = self.ui_session.save(body.get("client"), body.get("sequence"), body.get("state"))
+            except session_mod.SessionError as exc:
+                raise ProjectError(str(exc)) from exc
+            return _json({"saved": saved})
 
         if route == "/api/settings":
             if method == "POST":
@@ -541,7 +554,9 @@ def _make_handler(server: HookyCreatorServer):
             if (compressible and len(body) >= 1024
                     and "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
                     and "Content-Encoding" not in headers):
-                body = gzip.compress(body, 6)
+                # Sur la boucle locale, privilégier la latence plutôt que les
+                # derniers pourcents de compression d'un grand inventaire.
+                body = gzip.compress(body, 1)
                 headers["Content-Encoding"] = "gzip"
                 headers["Vary"] = "Accept-Encoding"
             self.send_response(status)
@@ -672,7 +687,8 @@ def _make_handler(server: HookyCreatorServer):
             except ValueError:
                 self.close_connection = True
                 return self._error("Longueur de requête invalide.")
-            if length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024):
+            if (length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024)
+                    or (parsed.path == "/api/ui-state" and length > session_mod.MAX_BYTES)):
                 self.close_connection = True
                 return self._error("Requête trop volumineuse.", 413)
             if parsed.path == "/api/desktop/session" and server.desktop_token is not None:

@@ -68,25 +68,28 @@ def _png_decode(data: bytes):
         position += 1
         line = bytearray(raw[position:position + stride])
         position += stride
-        for i in range(stride):
-            left = line[i - channels] if i >= channels else 0
-            up = previous[i]
-            up_left = previous[i - channels] if i >= channels else 0
-            if filter_type == 1:
-                line[i] = (line[i] + left) & 0xFF
-            elif filter_type == 2:
-                line[i] = (line[i] + up) & 0xFF
-            elif filter_type == 3:
-                line[i] = (line[i] + (left + up) // 2) & 0xFF
-            elif filter_type == 4:
-                line[i] = (line[i] + _paeth(left, up, up_left)) & 0xFF
+        # Les PNG générés par HookyCreator utilisent le filtre 0 : aucune
+        # transformation par octet n'est nécessaire dans ce cas.
+        if filter_type:
+            for i in range(stride):
+                left = line[i - channels] if i >= channels else 0
+                up = previous[i]
+                up_left = previous[i - channels] if i >= channels else 0
+                if filter_type == 1:
+                    line[i] = (line[i] + left) & 0xFF
+                elif filter_type == 2:
+                    line[i] = (line[i] + up) & 0xFF
+                elif filter_type == 3:
+                    line[i] = (line[i] + (left + up) // 2) & 0xFF
+                elif filter_type == 4:
+                    line[i] = (line[i] + _paeth(left, up, up_left)) & 0xFF
         pixels[row * stride:(row + 1) * stride] = line
         previous = line
+    if colour == 6:
+        return width, height, bytes(pixels)
     rgba = bytearray(width * height * 4)
     for index in range(width * height):
-        if colour == 6:
-            rgba[index * 4:index * 4 + 4] = pixels[index * 4:index * 4 + 4]
-        elif colour == 2:
+        if colour == 2:
             r, g, b = pixels[index * 3:index * 3 + 3]
             rgba[index * 4:index * 4 + 4] = bytes((r, g, b, 255))
         else:
