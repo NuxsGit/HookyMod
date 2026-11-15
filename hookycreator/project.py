@@ -30,7 +30,9 @@ from hookymod import texturemaps as texture_maps
 from hookymod.texturemaps import ROLE_LABELS, ROLE_ORDER
 from hookymod.blender import _base_name
 from hookymod.mesh import MeshData
+from hookymod.util import HookyError
 
+from .asset_names import is_animation_bfres, is_auxiliary_bfres
 from .settings import Settings, SettingsError
 from . import cache as cache_mod
 from . import geo as geo_mod
@@ -47,7 +49,7 @@ class Asset:
     """Un fichier du projet, tel qu'il apparaît dans le navigateur."""
 
     rel: str
-    kind: str                       # model | animation | texture | bytecode | archive
+    kind: str                       # model | animation | auxiliary | texture | bytecode | archive
     size: int
     compressed: bool = False
     mtime: int = 0                  # sert de version dans les URL de vignettes
@@ -65,7 +67,7 @@ class Asset:
     def stem(self) -> str:
         name = Path(self.rel).name
         for suffix in (".zs",):
-            if name.endswith(suffix):
+            if name.lower().endswith(suffix):
                 name = name[: -len(suffix)]
         return name.rsplit(".", 1)[0]
 
@@ -435,7 +437,9 @@ class Project:
             return self._dicts
         with self._dicts_lock:
             if self._dicts is None:
-                dicts = zs.ZstdDicts()
+                # Une frame tronquée ne doit pas être interprétée comme un
+                # BFRES ou une archive partiellement décompressés.
+                dicts = zs.ZstdDicts(require_complete=True)
                 if zs.zstd_available():
                     for candidate in zs.find_dictionaries_near(self.root):
                         try:
@@ -453,32 +457,58 @@ class Project:
         raw = self._current_asset(rel)[0].read_bytes()
         return Level(name=Path(rel).name, raw=raw, dicts=self._load_dicts(), rel=rel)
 
-    def read_entry(self, rel: str) -> bytes:
-        """Contenu d'une entrée d'archive, écrite ``pack.zs!/dossier/fichier``."""
-        from hookymod.util import HookyError
+    def read_entry(self, rel: str, *, decompress: bool = False) -> bytes:
+        """Entrée d'archive, par exemple ``pack.zs!/dossier/fichier.bfres.zs``.
 
-        archive, _, inner = rel.partition("!/")
+        ``!/`` sépare les archives imbriquées ; un slash ordinaire peut faire
+        partie du nom d'une entrée SARC. Les chemins imbriqués historiques
+        sans second ``!/`` restent acceptés si le nom complet n'existe pas.
+        Par défaut les octets finaux restent bruts, comme auparavant.
+        """
+        archive, separator, inner = rel.partition("!/")
+        parts = inner.split("!/") if separator else []
+        if not parts or any(not part for part in parts):
+            raise ProjectError("Chemin d'entrée vide.")
         level = self.open_level(archive)
-        parts = [part for part in inner.split("/") if part]
-        for depth, part in enumerate(parts):
-            if not level.archive:
-                raise ProjectError(f"{archive} n'est pas une archive.")
-            index = next((i for i in range(len(level))
-                          if level.entry_name(i) == part), None)
-            if index is None:
-                raise ProjectError(f"Entrée introuvable : {part} dans {archive}")
-            if depth == len(parts) - 1:
+        current = archive
+        for depth, fragment in enumerate(parts):
+            part = fragment
+            while True:
+                if not level.archive:
+                    raise ProjectError(f"{current} n'est pas une archive.")
+                index = next((i for i in range(len(level))
+                              if level.entry_name(i) == part), None)
+                remainder = ""
+                if index is None and "/" in part:
+                    # Compatibilité avec ``pack!/archive/entrée`` : essayer
+                    # d'abord le nom SARC complet, puis l'ancienne notation.
+                    part, _, remainder = part.partition("/")
+                    index = next((i for i in range(len(level))
+                                  if level.entry_name(i) == part), None)
+                    if not remainder:
+                        raise ProjectError("Chemin d'entrée vide.")
+                if index is None:
+                    raise ProjectError(f"Entrée introuvable : {part} dans {current}")
+                last = depth == len(parts) - 1 and not remainder
                 try:
-                    return level.entry_blob(index)
+                    if last and not decompress:
+                        return level.entry_blob(index)
+                    child = level.open_entry(index)
                 except HookyError as exc:
-                    raise ProjectError(str(exc)) from exc
-            level = level.open_entry(index)
+                    raise ProjectError(f"Impossible d'ouvrir {part} dans {current} : {exc}") from exc
+                current = f"{current}!/{part}"
+                if last:
+                    return child.data
+                level = child
+                if not remainder:
+                    break
+                part = remainder
         raise ProjectError("Chemin d'entrée vide.")
 
     def read_asset(self, rel: str) -> bytes:
         """Contenu décompressé, en donnant priorité à la copie de travail."""
         if "!/" in rel:
-            return self.read_entry(rel)
+            return self.read_entry(rel, decompress=True)
         return self._read_asset_path(self._current_asset(rel)[0])
 
     def _read_asset_path(self, path: Path) -> bytes:
@@ -490,7 +520,10 @@ class Project:
         if dict_id == 0:
             # Frame sans dictionnaire (textures du jeu) : lecture directe.
             import zstandard
-            return zstandard.ZstdDecompressor().decompress(raw, max_output_size=1 << 28)
+            try:
+                return zstandard.ZstdDecompressor().decompress(raw, max_output_size=1 << 28)
+            except zstandard.ZstdError as exc:
+                raise ProjectError(f"Décompression zstd impossible : {exc}") from exc
         dicts = self._load_dicts()
         if not dicts:
             raise ProjectError(
@@ -566,12 +599,16 @@ class Project:
                     continue
                 name = entry.name
                 low = name.lower()
-                if ".anim." in low:
-                    # Les animations sont des BFRES sans maillage : les afficher
-                    # comme « modèle » promet une géométrie qui n'existe pas.
-                    kind = "animation"
-                elif low.endswith(MODEL_SUFFIXES):
-                    kind = "model"
+                if low.endswith(MODEL_SUFFIXES):
+                    # Le suffixe est une indication, pas une inspection du
+                    # contenu. Séparer les animations des autres BFRES auxiliaires
+                    # évite de compter les squelettes comme des animations liées.
+                    if is_animation_bfres(name):
+                        kind = "animation"
+                    elif is_auxiliary_bfres(name):
+                        kind = "auxiliary"
+                    else:
+                        kind = "model"
                 elif low.endswith(TEXTURE_SUFFIXES):
                     kind = "texture"
                 elif low.endswith((".byml", ".bgyml", ".bcett.byml")):
@@ -631,6 +668,7 @@ class Project:
             "scan_error_examples": error_examples,
             "models": sum(1 for a in assets if a.kind == "model"),
             "animations": sum(1 for a in assets if a.kind == "animation"),
+            "auxiliary": sum(1 for a in assets if a.kind == "auxiliary"),
             "textures": sum(1 for a in assets if a.kind == "texture"),
             "bytecode": sum(1 for a in assets if a.kind == "bytecode"),
             "archives": sum(1 for a in assets if a.kind == "archive"),
@@ -1174,9 +1212,20 @@ class Project:
             self.geo_misses += 1
         # Lire le chemin correspondant à la version choisie : une nouvelle
         # copie de travail peut apparaître pendant le décodage en arrière-plan.
-        data = self._read_asset_path(source)
-        file = bfres_mod.BfresFile.parse(data)
-        meshes = bfres_mod.meshes_from_file(file)
+        try:
+            data = self._read_asset_path(source)
+        except (ProjectError, HookyError, OSError) as exc:
+            raise ProjectError(f"Impossible de lire le modèle « {rel} » : {exc}") from exc
+        try:
+            file = bfres_mod.BfresFile.parse(data)
+            meshes = bfres_mod.meshes_from_file(file)
+        except HookyError as exc:
+            raise ProjectError(
+                f"Impossible d'ouvrir le modèle « {rel} » : {exc}\n\n"
+                "Ce BFRES peut contenir uniquement une animation ou un squelette, "
+                "être incomplet, ou utiliser une disposition non reconnue. "
+                "Essaie le fichier BFRES du modèle plutôt que .anim ou .Skeleton."
+            ) from exc
         report = getattr(file, "v10_report", None)
         meta = {
             "warnings": list(file.warnings[:12]),

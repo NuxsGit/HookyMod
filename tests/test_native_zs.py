@@ -9,6 +9,7 @@ import random
 import struct
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from unittest.mock import patch
 
 try:
@@ -41,6 +42,43 @@ class ZstdFallbackTests(unittest.TestCase):
             self.assertEqual(dicts.decompress(frame), content)
             self.assertTrue(declined.called)
         self.assertEqual(native.zstd_decompress(b""), None)
+
+    def test_strict_mode_rejects_truncated_frames_and_keeps_concatenation(self):
+        samples = [(f"ressource synthétique {i} géométrie ".encode() * 16)
+                   for i in range(64)]
+        trained = zstd.train_dictionary(1024, samples)
+        dictionaries = zs.ZstdDicts(require_complete=True)
+        dictionaries.add("trained.zsdic", trained.as_bytes())
+        content = b"".join(samples[:20])
+        skip = struct.pack("<II", 0x184D2A5A, 5) + b"notes"
+        # Tester aussi le repli C même si la bibliothèque Rust est présente.
+        for fallback in (True, False):
+            context = patch.object(native, "available", return_value=False) if fallback else nullcontext()
+            with context:
+                for use_dictionary in (False, True):
+                    for known_size in (False, True):
+                        with self.subTest(fallback=fallback, dictionary=use_dictionary,
+                                          known_size=known_size):
+                            options = {"write_content_size": known_size, "write_checksum": True}
+                            if use_dictionary:
+                                options["dict_data"] = trained
+                            frame = zstd.ZstdCompressor(**options).compress(content)
+                            self.assertEqual(dictionaries.decompress(frame + skip + frame),
+                                             content + content)
+                            for broken in (frame[:-1], frame[:-4], frame[:7],
+                                           frame + skip + frame[:-1], frame + skip[:-1],
+                                           frame + b"erreur"):
+                                with self.assertRaisesRegex(zs.FormatError, "zstd"):
+                                    dictionaries.decompress(broken)
+        # Franchir de nombreuses limites de blocs, y compris autour des frames.
+        rng = random.Random(461)
+        first, second = rng.randbytes(140_003), rng.randbytes(12_321)
+        packed = zstd.ZstdCompressor(write_content_size=False).compress(first) + skip + \
+                 zstd.ZstdCompressor(write_checksum=True).compress(second)
+        with patch.object(native, "available", return_value=False):
+            self.assertEqual(dictionaries.decompress(packed), first + second)
+            with self.assertRaisesRegex(zs.FormatError, "zstd"):
+                dictionaries.decompress(packed[:-1])
 
 
 @unittest.skipUnless(zstd is not None and native.available(),

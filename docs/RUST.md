@@ -142,8 +142,9 @@ plafond de mémoire total du processus, et peuvent refuser des fichiers valides
 plus volumineux. L'outil refuse les trames tronquées ou aux contrôles présents
 incorrects ; il ne garantit pas la détection de toutes les corruptions ni la
 validité de formats internes qu'il ne lit pas. Dans l'application, si la limite
-native est atteinte, le repli `zstandard` conserve ses propres limites et son
-comportement historique.
+native est atteinte, le repli `zstandard` conserve ses propres limites. Pour
+HookyCreator, les lectures via `ZstdDicts` exigent des frames complètes ; les
+autres utilisateurs de ce repli conservent son comportement historique.
 
 Pour SARC dans l'application, la lecture native accepte au plus 1 Gio en
 entrée et 128 Mio de métadonnées ; la reconstruction native est limitée à

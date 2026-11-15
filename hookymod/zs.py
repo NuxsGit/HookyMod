@@ -93,13 +93,18 @@ def dict_name_id(name: str) -> int:
 
 
 class ZstdDicts:
-    """Collection de dictionnaires zstd, indexés par identifiant de contenu."""
+    """Collection de dictionnaires zstd, indexés par identifiant de contenu.
 
-    def __init__(self) -> None:
+    ``require_complete`` refuse les frames tronquées, y compris en fin de flux
+    concaténé. Par défaut le repli garde le comportement historique du lecteur.
+    """
+
+    def __init__(self, *, require_complete: bool = False) -> None:
         self.by_id: dict[int, tuple[str, "zstd.ZstdCompressionDict"]] = {}
         self.by_name: dict[str, "zstd.ZstdCompressionDict"] = {}
         self.sources: list[Path] = []
         self.loaded_files: list[str] = []
+        self.require_complete = require_complete
 
     # ------------------------------------------------------------------ état
     def __len__(self) -> int:
@@ -232,8 +237,7 @@ class ZstdDicts:
             ) from last_error
         return self._run(raw, dictionary)
 
-    @staticmethod
-    def _run(raw: bytes, dictionary) -> bytes:
+    def _run(self, raw: bytes, dictionary) -> bytes:
         require_zstd()
         if native.available():
             # Forcer le dictionnaire choisi pour les éventuelles trames sans
@@ -253,6 +257,26 @@ class ZstdDicts:
         dctx = (zstd.ZstdDecompressor(dict_data=dictionary)
                 if dictionary else zstd.ZstdDecompressor())
         try:
+            if self.require_complete:
+                # stream_reader accepte silencieusement une fin tronquée et
+                # peut rendre des octets partiels. Vérifier la fin de chaque
+                # frame, y compris les frames skippables et concaténées.
+                out = bytearray()
+                offset = 0
+                while offset < len(raw):
+                    decoder = dctx.decompressobj()
+                    while offset < len(raw):
+                        # Un petit bloc limite l'allocation intermédiaire lorsque
+                        # quelques octets se décompressent en un grand tampon.
+                        chunk = raw[offset:offset + (1 << 10)]
+                        offset += len(chunk)
+                        out += decoder.decompress(chunk)
+                        if decoder.eof:
+                            offset -= len(decoder.unused_data)
+                            break
+                    if not decoder.eof:
+                        raise FormatError("Flux zstd tronqué : fin de frame absente.")
+                return bytes(out)
             with dctx.stream_reader(io.BytesIO(raw), read_across_frames=True) as reader:
                 out = bytearray()
                 while True:

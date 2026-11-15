@@ -170,21 +170,53 @@ class DataDrivenTests(unittest.TestCase):
         self.assertEqual(meshes[0].faces, triangles)
         self.assertEqual(len(meshes[0].positions), len(positions))
 
-    def test_absent_or_truncated_model_dictionary_does_not_invent_geometry(self):
-        original = make_v10(*self._grid())
-        for kind in ("absent", "tronqué"):
+    def test_v10_geometry_is_recovered_when_the_model_dictionary_is_unusable(self):
+        positions, uvs, triangles = self._grid()
+        original = make_v10(positions, uvs, triangles)
+        reference = bfres_v10.parse(original)[0][0]
+        for kind in ("absent", "hors limites", "tronqué", "vide"):
             data = bytearray(original)
             if kind == "absent":
                 struct.pack_into("<Q", data, 0x30, 0)
+            elif kind == "hors limites":
+                struct.pack_into("<Q", data, 0x30, len(data) + 128)
+            elif kind == "tronqué":
+                # Un en-tête de dictionnaire sans table, sans altérer les sommets.
+                struct.pack_into("<Q", data, 0x30, len(data))
+                data.extend(struct.pack("<II", 0, 1))
             else:
-                struct.pack_into("<Q", data, 0x30, len(data) - 8)
-                struct.pack_into("<II", data, len(data) - 8, 0, 1)
+                struct.pack_into("<II", data, 0x300, 0, 0)
+            with self.subTest(kind=kind):
+                file = bfres.BfresFile.parse(bytes(data))
+                self.assertIsNotNone(file.v10_report)
+                meshes = bfres.meshes_from_file(file)
+                self.assertEqual(len(meshes), 1)
+                self.assertEqual(meshes[0].faces, triangles)
+                self.assertEqual(meshes[0].positions, reference.positions)
+                self.assertEqual(meshes[0].uvs, reference.uvs)
+                self.assertTrue(any("dictionnaire de modèles" in msg.lower()
+                                    for msg in file.warnings))
+                self.assertTrue(any("FMDL" in msg for msg in file.warnings))
+
+    def test_missing_dictionary_does_not_promote_an_unrelated_shape(self):
+        original = make_v10(*self._grid())
+        for kind in ("pas de FMDL", "FVTX non référencé", "base GPU absente", "indices absents"):
+            data = bytearray(original)
+            struct.pack_into("<Q", data, 0x30, 0)
+            if kind == "pas de FMDL":
+                struct.pack_into("<Q", data, 0x28, 0)
+            elif kind == "FVTX non référencé":
+                struct.pack_into("<Q", data, 0xF0 + bfres_v10.FMDL_VERTEX_INFO, 0)
+            elif kind == "base GPU absente":
+                struct.pack_into("<Q", data, 0x170, 0)
+            else:
+                data[0x4000:0x5000] = bytes(0x1000)
             with self.subTest(kind=kind):
                 file = bfres.BfresFile.parse(bytes(data))
                 self.assertEqual(file.models, [])
                 self.assertIsNone(file.v10_report)
-                self.assertTrue(any("dictionnaire de modèles" in msg.lower()
-                                    for msg in file.warnings))
+                with self.assertRaisesRegex(bfres.HookyError, "Aucun maillage"):
+                    bfres.meshes_from_file(file)
 
     def test_garbage_vertex_buffer_is_refused(self):
         data = bytearray(make_v10(*self._grid()))

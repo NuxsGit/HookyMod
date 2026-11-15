@@ -51,21 +51,36 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(state["models"], 1)
         self.assertEqual(state["count"], 2)
 
-    def test_animations_are_not_counted_as_models(self):
-        """Un `.anim.bfres` n'a pas de maillage : le grille des modèles ne doit
-
-        pas le proposer (l'ancien scan le classait « model » par suffixe).
-        """
+    def test_animation_and_skeleton_files_are_not_counted_as_models(self):
+        """Les fichiers BFRES auxiliaires connus ne sont pas proposés comme maillages."""
         root = Path(tempfile.mkdtemp())
         (root / "Model").mkdir()
+        names = ("B_Animation.anim.bfres", "B_Animation.ANIMATION.BFRES.ZS",
+                 "B_Animation.Skeleton.bfres.zs", "C.camera.bfres", "D.light.bfres.zs")
         (root / "Model" / "B.bfres").write_bytes(synth.make_bfres())
-        (root / "Model" / "B_Animation.anim.bfres").write_bytes(b"FRES" + bytes(0x40))
+        for name in names:
+            (root / "Model" / name).write_bytes(b"FRES" + bytes(0x40))
+        # Un mot ordinaire dans le nom d'un modèle ne suffit pas pour l'exclure.
+        (root / "Model" / "Camera_Prop.Camera_Prop.bfres").write_bytes(synth.make_bfres())
         project = Project(root)
         state = project.scan()
-        self.assertEqual(state["models"], 1)
-        self.assertEqual(state["animations"], 1)
+        self.assertEqual(state["models"], 2)
+        self.assertEqual(state["animations"], 2)
+        self.assertEqual(state["auxiliary"], 3)
         kinds = {asset.rel: asset.kind for asset in project.assets}
-        self.assertEqual(kinds["Model/B_Animation.anim.bfres"], "animation")
+        for name in names[:2]:
+            self.assertEqual(kinds[f"Model/{name}"], "animation")
+        for name in names[2:]:
+            self.assertEqual(kinds[f"Model/{name}"], "auxiliary")
+        self.assertEqual(kinds["Model/Camera_Prop.Camera_Prop.bfres"], "model")
+        animations = project.animations_for("Model/B.bfres")
+        self.assertEqual([asset.rel for asset in animations], sorted(f"Model/{n}" for n in names[:2]))
+        self.assertIn("B_Animation.ANIMATION", [asset.stem for asset in animations])
+
+        from hookycreator import bulk
+        items = {item.label: item.kind for item in bulk.discover(project)}
+        for name in names:
+            self.assertEqual(items[f"Model/{name}"], kinds[f"Model/{name}"])
 
     def test_paths_outside_the_project_are_refused(self):
         with self.assertRaises(ProjectError):
@@ -235,10 +250,11 @@ class BulkClassificationTests(unittest.TestCase):
     def test_texture_is_recognised_by_magic(self) -> None:
         self.assertEqual(self._classify(b"BNTX" + bytes(8), "peu_importe.bin"), "texture")
 
-    def test_animation_names_are_never_models(self) -> None:
-        for name in ("Enemy_Spike.anim.bfres.zs", "Enemy_Stalfos_Animation.anim.bfres.zs",
-                     "Enemy_Stalfos_Animation.Skeleton.bfres.zs", "Dm_Zora_0000.camera.bfres.zs"):
+    def test_auxiliary_names_are_never_models(self) -> None:
+        for name in ("Enemy_Spike.anim.bfres.zs", "Enemy_Stalfos_Animation.anim.bfres.zs"):
             self.assertEqual(self._classify(b"FRES" + bytes(64), name), "animation", name)
+        for name in ("Enemy_Stalfos_Animation.Skeleton.bfres.zs", "Dm_Zora_0000.camera.bfres.zs"):
+            self.assertEqual(self._classify(b"FRES" + bytes(64), name), "auxiliary", name)
 
     def test_bfres_without_animation_name_is_a_model(self) -> None:
         self.assertEqual(self._classify(b"FRES" + bytes(64), "Enemy_Wolfos.bfres.zs"), "model")

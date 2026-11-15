@@ -46,11 +46,36 @@ class WebContractTests(unittest.TestCase):
         sections = set(re.findall(r'id="view-([a-z]+)"', self.html))
         rail = set(re.findall(r'data-view="([a-z]+)"', self.html))
         labels = set(re.findall(
-            r'^\s+(home|models|ensembles|textures|mobs|blender|settings):',
+            r'^\s+(home|edit|create|models|ensembles|textures|mobs|blender|settings):',
             self.js, re.M))
         self.assertEqual(sections, rail)
         self.assertTrue(sections <= labels | {"home"})
         self.assertIn("home", sections)
+
+    def test_editing_and_mod_creation_have_separate_workspaces(self) -> None:
+        self.assertIn('data-goto="edit"', self.html)
+        self.assertIn('data-goto="create"', self.html)
+        home = self.html.split('id="view-home"', 1)[1].split('id="view-edit"', 1)[0]
+        creation = self.html.split('id="view-create"', 1)[1].split('id="view-models"', 1)[0]
+        self.assertNotIn('id="mod-form"', home)
+        self.assertIn('id="mod-form"', creation)
+        self.assertIn('id="creation-status"', creation)
+        self.assertIn('sera entièrement remplacé', creation)
+        self.assertIn("pas la création automatique d'un acteur jouable", creation)
+        self.assertIn('showView("create"); $("#mod-name")?.focus()', self.js)
+        self.assertNotIn('$("#mod-form")?.requestSubmit()', self.js)
+
+    def test_unsupported_operations_are_described_without_promising_a_mod(self) -> None:
+        self.assertIn("BFRES auxiliaires (rapport)", self.html)
+        self.assertIn('kinds.push("animation", "auxiliary")', self.js)
+        self.assertIn("leurs sous-maillages ne sont pas réécrits", self.html)
+        self.assertIn("aucun acteur jouable", self.html)
+
+    def test_small_screens_keep_the_inspector_visible(self) -> None:
+        self.assertIn('.inspector:not([hidden])', self.css)
+        self.assertNotIn('.inspector { display: none; }', self.css)
+        app_grid = self.css.split('.app {', 1)[1].split('}', 1)[0]
+        self.assertIn('grid-template-columns: minmax(0, 1fr)', app_grid)
 
     def test_menus_have_entries(self) -> None:
         start = self.js.index("const MENUS = {")
@@ -152,7 +177,8 @@ class WebContractTests(unittest.TestCase):
         for script, message in (("thumbnail_queue_test.js", "ThumbnailQueue: OK"),
                                 ("settings_ui_test.js", "Settings UI: OK"),
                                 ("image_revision_ui_test.js", "Image revision UI: OK"),
-                                ("interaction_ui_test.js", "Interaction UI: OK")):
+                                ("interaction_ui_test.js", "Interaction UI: OK"),
+                                ("workspaces_ui_test.js", "Workspaces UI: OK")):
             with self.subTest(script=script):
                 result = subprocess.run(["node", str(ROOT / "tests" / script)],
                                         capture_output=True, text=True, timeout=30)

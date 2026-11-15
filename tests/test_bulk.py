@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -14,7 +15,8 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import synth  # noqa: E402
 from hookycreator import bulk  # noqa: E402
-from hookycreator.project import Project  # noqa: E402
+from hookycreator.project import Project, ProjectError  # noqa: E402
+from tests import test_bfres_v10 as v10_fixtures  # noqa: E402
 
 
 def _project() -> Project:
@@ -54,6 +56,102 @@ class DiscoveryTests(unittest.TestCase):
         project = _project()
         kinds = {item.label: item.kind for item in bulk.discover(project)}
         self.assertEqual(kinds["Model/A.anim.bfres"], "animation")
+
+    def test_nested_compressed_model_and_texture_can_be_exported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "dump"
+            root.mkdir()
+            model = bytearray(v10_fixtures.make_v10(*v10_fixtures.DataDrivenTests()._grid()))
+            struct.pack_into("<Q", model, 0x30, 0)
+            model = bytes(model)
+            texture = synth.make_bntx(8, 8, synth.rgba8_pixels(8, 8))
+            dictionary = synth.train_dict([b"asset %d" % i * 40 for i in range(64)], 1024)
+            (root / "Pack").mkdir()
+            dictionary_pack = root / "Pack" / "ZsDic.pack.zs"
+            dictionary_pack.write_bytes(synth.compress(synth.make_sarc([("zs.zsdic", dictionary)])))
+            compressed_model = synth.compress(model, dictionary)
+            inner = synth.make_sarc([
+                ("Model/Valide.bfres.zs", compressed_model),
+                ("Tex/Valide.bntx.zs", synth.compress(texture)),
+            ])
+            (root / "Assets.pack").write_bytes(synth.make_sarc([("Packs/Inner.pack", inner)]))
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            prefix = "Assets.pack!/Packs/Inner.pack!/"
+            self.assertEqual(project.read_entry(prefix + "Model/Valide.bfres.zs"), compressed_model)
+            self.assertEqual(project.read_asset(prefix + "Model/Valide.bfres.zs"), model)
+            self.assertEqual(project.read_asset(prefix + "Tex/Valide.bntx.zs"), texture)
+            report = bulk.export_all(project, Path(temp) / "out")
+            self.assertEqual((report["ok"], report["error"], report["skip"]), (2, 0, 0))
+            self.assertTrue(any((Path(temp) / "out" / "models").rglob("*.gltf")))
+            self.assertTrue(any((Path(temp) / "out" / "models").rglob("*.obj")))
+            self.assertTrue(any((Path(temp) / "out" / "textures").rglob("*.png")))
+
+            # Ancien séparateur « / » entre deux archives : le garder lisible.
+            (root / "Legacy.pack").write_bytes(synth.make_sarc([("Inner.pack", inner)]))
+            self.assertEqual(project.read_asset("Legacy.pack!/Inner.pack/Model/Valide.bfres.zs"),
+                             model)
+
+            dictionary_pack.unlink()
+            without_dict = Project(root, Path(temp) / "work-without-dict")
+            with self.assertRaisesRegex(ProjectError, "dictionnaire zstd"):
+                without_dict.read_asset(prefix + "Model/Valide.bfres.zs")
+
+    def test_truncated_zstd_in_a_pack_is_reported_without_returning_partial_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "dump"
+            (root / "Pack").mkdir(parents=True)
+            model = v10_fixtures.make_v10(*v10_fixtures.DataDrivenTests()._grid())
+            dictionary = synth.train_dict([b"asset %d" % i * 40 for i in range(64)], 1024)
+            (root / "Pack" / "ZsDic.pack.zs").write_bytes(
+                synth.compress(synth.make_sarc([("zs.zsdic", dictionary)])))
+            plain_frame = synth.compress(model)
+            dict_frame = synth.compress(model, dictionary)
+            (root / "Assets.pack").write_bytes(synth.make_sarc([
+                ("Model/Tronque.bfres.zs", plain_frame[:-4]),
+                ("Model/Tronque_Avec_Dict.bfres.zs", dict_frame[:-4]),
+            ]))
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            for name, raw in (("Tronque.bfres.zs", plain_frame[:-4]),
+                              ("Tronque_Avec_Dict.bfres.zs", dict_frame[:-4])):
+                with self.subTest(name=name):
+                    rel = f"Assets.pack!/Model/{name}"
+                    self.assertEqual(project.read_entry(rel), raw)
+                    with self.assertRaisesRegex(ProjectError, "zstd") as caught:
+                        project.read_asset(rel)
+                    self.assertIn(name, str(caught.exception))
+            report = bulk.export_all(project, Path(temp) / "out")
+            self.assertEqual(report["ok"], 0)
+            self.assertEqual(report["error"], 2)
+            self.assertTrue(all("zstd" in item["reason"].lower() for item in report["items"]))
+
+    def test_auxiliary_bfres_in_packs_are_only_reported_when_requested(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "dump"
+            root.mkdir()
+            auxiliary = b"FRES" + b"FSKA" + bytes(64)
+            inner = synth.make_sarc([("A.Skeleton.bfres.zs", synth.compress(auxiliary))])
+            (root / "Assets.pack").write_bytes(synth.make_sarc([
+                ("A.AnIm.BFRES", auxiliary),
+                ("Inner.pack", inner),
+                ("Camera_Prop.Camera_Prop.bfres", synth.make_bfres()),
+            ]))
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            kinds = {item.label: item.kind for item in bulk.discover(project)}
+            self.assertEqual(kinds["Assets.pack!/A.AnIm.BFRES"], "animation")
+            self.assertEqual(kinds["Assets.pack!/Inner.pack!/A.Skeleton.bfres.zs"], "auxiliary")
+            self.assertEqual(kinds["Assets.pack!/Camera_Prop.Camera_Prop.bfres"], "model")
+
+            default = bulk.export_all(project, Path(temp) / "out-default")
+            self.assertFalse(any(item["kind"] in ("animation", "auxiliary")
+                                 for item in default["items"]))
+            report = bulk.export_all(project, Path(temp) / "out-aux",
+                                     kinds=("animation", "auxiliary"))
+            self.assertEqual(report["started"], 2)
+            self.assertEqual(report["skip"], 2)
+            self.assertTrue(all("auxiliaire" in item["reason"] for item in report["items"]))
 
 
 class ExportTests(unittest.TestCase):

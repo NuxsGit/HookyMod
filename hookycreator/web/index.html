@@ -55,6 +55,11 @@
         <svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>
         <span>Accueil</span>
       </button>
+      <span class="rail-label">Modifier</span>
+      <button class="rail-btn" data-view="edit" title="Espace modification">
+        <svg viewBox="0 0 24 24"><path d="m4 16 11-11 4 4L8 20H4zM13 7l4 4"/></svg>
+        <span>Atelier</span>
+      </button>
       <button class="rail-btn" data-view="models" title="Modèles (Ctrl+2)">
         <svg viewBox="0 0 24 24"><path d="M12 3 21 8v8l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
         <span>Modèles</span>
@@ -67,14 +72,20 @@
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-4 4 3 4-4 5 5"/></svg>
         <span>Textures</span>
       </button>
-      <button class="rail-btn" data-view="mobs" title="Mobs (Ctrl+4)">
-        <svg viewBox="0 0 24 24"><path d="M5 20v-6a7 7 0 0 1 14 0v6"/><circle cx="9.5" cy="10" r="1.3"/><circle cx="14.5" cy="10" r="1.3"/><path d="M10 14h4"/></svg>
-        <span>Mobs</span>
-      </button>
       <button class="rail-btn" data-view="blender" title="Blender (Ctrl+5)">
         <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 12 21 6"/></svg>
         <span>Blender</span>
       </button>
+      <span class="rail-label">Créer</span>
+      <button class="rail-btn" data-view="create" title="Espace création de mod">
+        <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM12 12v5M9.5 14.5h5"/></svg>
+        <span>Mon mod</span>
+      </button>
+      <button class="rail-btn" data-view="mobs" title="Fiches de mobs (Ctrl+4)">
+        <svg viewBox="0 0 24 24"><path d="M5 20v-6a7 7 0 0 1 14 0v6"/><circle cx="9.5" cy="10" r="1.3"/><circle cx="14.5" cy="10" r="1.3"/><path d="M10 14h4"/></svg>
+        <span>Mobs</span>
+      </button>
+      <span class="rail-label">Outils</span>
       <button class="rail-btn" data-view="settings" title="Réglages (Ctrl+6)">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
         <span>Réglages</span>
@@ -102,18 +113,23 @@
             <div class="chips" id="stats"></div>
           </div>
 
-          <div class="quick">
-            <button class="quick-card" data-goto="models">
-              <b>Modèles</b><small>Voir, inspecter, exporter, traduire un .blend</small>
+          <div class="section-title"><h3>Choisis ton espace</h3><span>Deux étapes, un même projet</span></div>
+          <div class="spaces">
+            <button class="space-card space-edit" type="button" data-goto="edit">
+              <span class="space-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m4 16 11-11 4 4L8 20H4zM13 7l4 4"/></svg>
+              </span>
+              <span class="space-copy"><small>01 / ATELIER</small><b>Modifier l'existant</b>
+                <span>Explorer les modèles, retoucher les textures et travailler avec Blender.</span>
+                <em>Ouvrir la modification <span aria-hidden="true">→</span></em></span>
             </button>
-            <button class="quick-card" data-goto="textures">
-              <b>Textures</b><small>Remplacer une image par la tienne</small>
-            </button>
-            <button class="quick-card" data-goto="mobs">
-              <b>Nouveau mob</b><small>Dupliquer un modèle et changer ses textures</small>
-            </button>
-            <button class="quick-card" data-goto="blender">
-              <b>Traduire un .blend</b><small>Blender → modèle du jeu, sans Blender</small>
+            <button class="space-card space-create" type="button" data-goto="create">
+              <span class="space-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM12 12v5M9.5 14.5h5"/></svg>
+              </span>
+              <span class="space-copy"><small>02 / PROJET DE MOD</small><b>Créer un mod</b>
+                <span>Préparer des fiches et assembler les fichiers modifiés dans un dossier de mod.</span>
+                <em>Ouvrir la création <span aria-hidden="true">→</span></em></span>
             </button>
           </div>
 
@@ -125,11 +141,12 @@
             <section class="panel">
               <header class="panel-head">
                 <h3>Export complet</h3>
-                <label class="check"><input type="checkbox" id="bulk-anim"> animations</label>
+                <label class="check" title="Ces fichiers seront signalés comme ignorés dans le rapport">
+                  <input type="checkbox" id="bulk-anim"> BFRES auxiliaires (rapport)</label>
               </header>
               <div class="panel-body">
-                <p class="hint">Décompresse tout le projet en PNG et OBJ : utile pour
-                  vérifier d'un coup d'œil ce que l'atelier sait lire.</p>
+                <p class="hint">Exporte les textures reconnues en PNG et les modèles en glTF et OBJ,
+                  y compris dans les packs. Les BFRES auxiliaires ne sont pas encore exportés.</p>
                 <button class="btn primary" id="bulk-start">Lancer l'export complet</button>
                 <div class="progress" id="bulk-bar" hidden>
                   <div class="progress-fill" id="bulk-fill"></div>
@@ -138,25 +155,108 @@
                 <ul class="report" id="bulk-report"></ul>
               </div>
             </section>
-            <section class="panel">
-              <header class="panel-head">
-                <h3>Assembler le mod</h3>
-              </header>
-              <form class="panel-body" id="mod-form">
-                <label class="field">
-                  <span>Nom du mod</span>
-                  <input name="name" value="HookyMod" spellcheck="false">
-                </label>
-                <button class="btn" type="submit">Construire <code>mods/</code></button>
-                <ul class="kv-list" id="mod-log"></ul>
-              </form>
-            </section>
           </div>
 
           <section class="panel">
             <header class="panel-head"><h3>Dernières actions</h3></header>
             <ul class="log" id="home-log"></ul>
           </section>
+        </section>
+
+        <!-- ---------------------------------------------------------- modification -->
+        <section class="view" id="view-edit" hidden>
+          <div class="view-head workspace-head">
+            <div>
+              <p class="eyebrow">ESPACE 01 / MODIFICATION</p>
+              <h2>Modifier l'existant</h2>
+              <p class="muted">Explore les ressources du projet et travaille sur des copies,
+                sans écraser les fichiers source.</p>
+            </div>
+            <button class="btn ghost" type="button" data-goto="create">Vers la création du mod →</button>
+          </div>
+          <div class="section-title"><h3>Que veux-tu modifier ou explorer ?</h3></div>
+          <div class="quick tools-grid">
+            <button class="quick-card" type="button" data-goto="models">
+              <span class="tool-number">01</span><b>Modèles</b>
+              <small>Inspecter, prévisualiser et exporter la géométrie reconnue.</small>
+            </button>
+            <button class="quick-card" type="button" data-goto="ensembles">
+              <span class="tool-number">02</span><b>Ensembles</b>
+              <small>Retrouver les textures et animations associées aux modèles.</small>
+            </button>
+            <button class="quick-card" type="button" data-goto="textures">
+              <span class="tool-number">03</span><b>Textures</b>
+              <small>Exporter ou remplacer une image dans les formats pris en charge.</small>
+            </button>
+            <button class="quick-card" type="button" data-goto="blender">
+              <span class="tool-number">04</span><b>Blender → jeu</b>
+              <small>Analyser un .blend et injecter sa géométrie dans un modèle compatible.</small>
+            </button>
+          </div>
+          <div class="info-note">
+            <strong>Les originaux restent intacts.</strong>
+            Les modifications sont enregistrées dans le dossier de travail ;
+            assemble-les ensuite depuis l'espace création de mod.
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- création de mod -->
+        <section class="view" id="view-create" hidden>
+          <div class="view-head workspace-head">
+            <div>
+              <p class="eyebrow create-accent">ESPACE 02 / CRÉATION DE MOD</p>
+              <h2>Créer un mod</h2>
+              <p class="muted">Rassemble tes modifications et prépare un dossier de mod
+                à partir du projet ouvert.</p>
+            </div>
+            <button class="btn ghost" type="button" data-goto="edit">← Vers la modification</button>
+          </div>
+          <div class="workflow-grid">
+            <section class="panel workflow-step">
+              <header class="panel-head"><h3><span class="step-number">01</span> Fichiers du projet</h3></header>
+              <div class="panel-body">
+                <p class="muted">Les copies modifiées dans l'atelier seront incluses dans l'assemblage.</p>
+                <ul class="kv-list" id="creation-status"><li class="muted">Chargement du projet…</li></ul>
+                <button class="btn ghost" type="button" data-goto="edit">Ouvrir la modification →</button>
+              </div>
+            </section>
+            <section class="panel workflow-step">
+              <header class="panel-head"><h3><span class="step-number">02</span> Fiches de mobs</h3></header>
+              <div class="panel-body">
+                <p class="muted">Prépare une fiche et copie un modèle et des textures sous un nouveau nom.</p>
+                <p class="hint">C'est une préparation de fichiers, pas la création automatique d'un acteur jouable.</p>
+                <button class="btn ghost" type="button" data-goto="mobs">Gérer les fiches →</button>
+              </div>
+            </section>
+          </div>
+          <section class="panel build-panel">
+            <header class="panel-head"><h3><span class="step-number">03</span> Assembler le mod</h3></header>
+            <div class="build-layout">
+              <form class="panel-body" id="mod-form">
+                <label class="field">
+                  <span>Nom du mod</span>
+                  <input name="name" id="mod-name" value="HookyMod" spellcheck="false" required>
+                </label>
+                <p class="hint">Le nom du dossier conserve uniquement les lettres, chiffres, tirets et
+                  caractères <code>_</code> ; les espaces sont retirés. S'il ne reste rien,
+                  le nom utilisé est <code>HookyMod</code>.</p>
+                <p class="warning-note">Attention : le dossier <code>mods/&lt;nom nettoyé&gt;</code>,
+                  s'il existe déjà, sera entièrement remplacé, sans sauvegarde.</p>
+                <button class="btn primary" type="submit">Assembler dans <code>mods/</code></button>
+              </form>
+              <div class="panel-body build-result">
+                <strong>Résultat de l'assemblage</strong>
+                <p class="hint">Les copies sont rangées dans <code>romfs/</code>, avec un manifeste.
+                  L'assemblage ne met pas à jour la table RESTBL : vérifie les tailles et teste en jeu.</p>
+                <ul class="kv-list" id="mod-log" aria-live="polite"></ul>
+              </div>
+            </div>
+          </section>
+          <div class="warning-note game-limit">
+            <strong>Pour un nouveau mob, il reste du travail côté jeu.</strong>
+            La fiche ne crée ni paramètre d'acteur BYML ni placement sur la carte,
+            et ne met pas à jour RESTBL ou les noms internes du modèle.
+          </div>
         </section>
 
         <!-- ---------------------------------------------------------- modèles -->
@@ -182,8 +282,8 @@
           <div class="view-head">
             <div>
               <h2>Ensembles</h2>
-              <p class="muted" id="ensemble-count">Modèle, textures et animations réunis :
-                c'est ce qu'il faut regarder pour voir un mob ou un objet en entier.</p>
+              <p class="muted" id="ensemble-count">Modèles et fichiers associés, regroupés par nom.
+                L'aperçu n'anime pas les ressources.</p>
             </div>
             <div class="toolbar">
               <input type="search" class="search" id="search-ens" placeholder="Filtrer…">
@@ -230,10 +330,14 @@
         <section class="view" id="view-mobs" hidden>
           <div class="view-head">
             <div>
-              <h2>Mobs</h2>
-              <p class="muted">Un mob, c'est un modèle du jeu dupliqué sous un autre nom,
-                avec ses propres textures.</p>
+              <h2>Fiches de mobs</h2>
+              <p class="muted">Prépare une fiche en copiant des ressources existantes sous un nouveau nom.</p>
             </div>
+            <button class="btn ghost" type="button" data-goto="create">← Retour à la création du mod</button>
+          </div>
+          <div class="warning-note game-limit">
+            <strong>Fiche préparatoire uniquement.</strong> Les noms internes des ressources ne sont
+            pas modifiés et aucun acteur jouable, placement ni entrée RESTBL n'est créé automatiquement.
           </div>
           <div class="split">
             <section class="panel">
@@ -241,7 +345,7 @@
               <form class="panel-body" id="mob-form">
                 <label class="field"><span>Nom affiché</span>
                   <input name="name" id="mob-name" placeholder="Cheval de Link" required></label>
-                <label class="field"><span>Parent (facultatif)</span>
+                <label class="field"><span>Parent à noter sur la fiche (facultatif)</span>
                   <input name="parent" id="mob-parent" placeholder="Animal_Horse"></label>
                 <label class="field"><span>Modèle source</span>
                   <select id="mob-model" name="model"></select></label>
@@ -263,9 +367,15 @@
             <div>
               <h2>Blender → jeu</h2>
               <p class="muted">Le fichier <code>.blend</code> est lu par HookyMod lui-même
-                (aucun Blender installé) : on en sort la géométrie, puis on l'injecte
-                dans un modèle du jeu en gardant ses matériaux.</p>
+                (aucun Blender installé) : sa géométrie peut être injectée dans un modèle
+                compatible en gardant ses matériaux.</p>
             </div>
+          </div>
+          <div class="warning-note game-limit">
+            <strong>Lecture ne veut pas dire réécriture.</strong>
+            Les modèles 10.x reconnus par le lecteur d'aperçu ne sont pas encore réinjectables :
+            leurs sous-maillages ne sont pas réécrits. Pour les autres modèles compatibles,
+            la géométrie doit tenir dans les tampons d'origine.
           </div>
 
           <div class="split blend">
