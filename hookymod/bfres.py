@@ -642,14 +642,17 @@ class BfresFile:
             if file_size + 288 < len(data):
                 self.buffer_offset = file_size + 288
 
-        if not model_dict_offset or model_dict_offset >= len(data):
-            self.warnings.append("Aucun dictionnaire de modèles (BFRES sans modèle ?).")
-            return self
-        try:
-            entries = cur.dict_entries(model_dict_offset, model_offset)
-        except FormatError as exc:
-            self.warnings.append(f"Dictionnaire de modèles illisible : {exc}")
-            return self
+        entries = []
+        if not model_dict_offset or model_dict_offset + 8 > len(data):
+            self.warnings.append("Dictionnaire de modèles absent ou hors limites.")
+        else:
+            try:
+                entries = cur.dict_entries(model_dict_offset, model_offset)
+            except FormatError as exc:
+                self.warnings.append(f"Dictionnaire de modèles illisible : {exc}")
+            else:
+                if not entries:
+                    self.warnings.append("Dictionnaire de modèles vide ou sans valeurs lisibles.")
         for index, (name, offset) in enumerate(entries):
             if not offset or offset >= len(data):
                 continue
@@ -661,10 +664,14 @@ class BfresFile:
             if model is not None:
                 self.models.append(model)
         if not self.models and self.version_major >= 10:
-            self._parse_v10(data)
+            # En 10.x le pointeur FMDL de l'en-tête permet aussi de lire la
+            # géométrie. Ne pas retourner avant ce repli si le dictionnaire est
+            # absent ou illisible. Sans entrées, exiger en plus que le FMDL
+            # référence un FVTX validé, pour ne pas associer une table orpheline.
+            self._parse_v10(data, require_model_shape=not entries)
         return self
 
-    def _parse_v10(self, data: bytes) -> None:
+    def _parse_v10(self, data: bytes, *, require_model_shape: bool = False) -> None:
         """BFRES 10.x : géométrie décodée par :mod:`bfres_v10` (validée).
 
         La lecture v10 n'est pas documentée : si une seule vérification échoue,
@@ -675,7 +682,7 @@ class BfresFile:
         except ImportError:      # pragma: no cover - dépendance interne
             return
         try:
-            result = parse_v10(data)
+            result = parse_v10(data, require_model_shape=require_model_shape)
         except (struct.error, IndexError, ValueError, ZeroDivisionError) as exc:
             self.warnings.append(f"Lecture v10 impossible : {exc}")
             return
@@ -699,6 +706,10 @@ class BfresFile:
         model.skeleton_name = getattr(report, "skeleton_name", "") or model.skeleton_name
         self.models.append(model)
         self.v10_report = report
+        if require_model_shape:
+            self.warnings.append(
+                "BFRES 10.x : FMDL et table FVTX référencée validés ; extraction heuristique."
+            )
         self.warnings.extend(report.warnings)
 
     # -- objets

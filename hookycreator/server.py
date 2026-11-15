@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from hookymod import bntx, native, restbl, sarc, zs
+from hookymod.util import HookyError
 
 from . import blend as blend_mod
 from .project import MAX_SCAN_FILES, Project, ProjectError
@@ -493,7 +494,7 @@ def _make_handler(server: HookyCreatorServer):
                             body, kind = server.api("GET", parsed.path, query, {})
                     else:
                         body, kind = server.api("GET", parsed.path, query, {})
-                except ProjectError as exc:
+                except (ProjectError, HookyError) as exc:
                     return self._error(str(exc))
                 except Exception as exc:         # jamais de trace dans l'UI
                     return self._error(f"Erreur interne : {exc}", 500)
@@ -531,7 +532,7 @@ def _make_handler(server: HookyCreatorServer):
                     name = self.headers.get("X-Hooky-Filename") or "modele.blend"
                     return self._send(*_json(blend_mod.save_upload(
                         server.project, name, data)))
-                except ProjectError as exc:
+                except (ProjectError, HookyError) as exc:
                     return self._error(str(exc))
                 except Exception as exc:         # jamais de trace dans l'UI
                     return self._error(f"Erreur interne : {exc}", 500)
@@ -544,7 +545,7 @@ def _make_handler(server: HookyCreatorServer):
                 return self._error("Page inconnue", 404)
             try:
                 content, kind = server.api("POST", parsed.path, parse_qs(parsed.query), body)
-            except ProjectError as exc:
+            except (ProjectError, HookyError) as exc:
                 return self._error(str(exc))
             except KeyError as exc:
                 return self._error(f"Champ manquant : {exc}")

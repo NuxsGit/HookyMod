@@ -36,6 +36,7 @@ let ensembleRenderSequence = 0;
 let projectSnapshotRevision = null;
 let projectRequestSequence = 0;
 let appliedProjectRequest = 0;
+let modBuildPending = false;
 
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -173,7 +174,14 @@ function closeTab(id) {
 
 /* ------------------------------------------------------------------ vues */
 function showView(view, options = {}) {
-  if (state.view !== view) thumbnailQueue.release($(`#view-${state.view}`));
+  if (state.view !== view) {
+    thumbnailQueue.release($(`#view-${state.view}`));
+    const scroll = $("#views");
+    if (scroll) scroll.scrollTop = 0;
+    // Les espaces d'accueil doivent rester lisibles, surtout sur mobile où
+    // l'inspecteur est superposé. L'onglet du document reste disponible.
+    if (view === "edit" || view === "create") hideInspector();
+  }
   state.view = view;
   $$(".view").forEach((node) => { node.hidden = node.id !== `view-${view}`; });
   $$(".rail-btn[data-view]").forEach((node) => {
@@ -186,6 +194,7 @@ function showView(view, options = {}) {
     renderTabs();
   }
   if (view === "home") renderHome();
+  if (view === "create") renderCreation();
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
   if (view === "textures") renderTextures();
@@ -196,6 +205,8 @@ function showView(view, options = {}) {
 
 const VIEW_LABELS = {
   home: "Accueil",
+  edit: "Modification",
+  create: "Création de mod",
   models: "Modèles",
   ensembles: "Ensembles",
   textures: "Textures",
@@ -219,12 +230,13 @@ document.addEventListener("error", (event) => {
 function renderStatus() {
   const assets = state.project?.assets || [];
   const count = (kind) => assets.filter((asset) => asset.kind === kind).length;
+  const auxiliary = count("animation") + count("auxiliary");
   const settings = state.settings || {};
   const node = $("#status-counts");
   if (node) {
-    node.textContent = `${count("model")} modèles · ${count("animation")} anims · `
+    node.textContent = `${count("model")} modèles · ${auxiliary} ressources auxiliaires · `
       + `${count("texture")} textures · `
-      + `${state.project?.mobs?.length || 0} mobs`;
+      + `${state.project?.mobs?.length || 0} fiches de mobs`;
   }
   const scan = state.project || {};
   const incomplete = Boolean(scan.scan_incomplete || scan.scan_truncated || scan.scan_errors);
@@ -257,8 +269,8 @@ function renderStatus() {
     stats.innerHTML = `
       <span class="chip"><b>${count("texture")}</b> textures</span>
       <span class="chip"><b>${count("model")}</b> modèles</span>
-      <span class="chip"><b>${count("animation")}</b> anims</span>
-      <span class="chip"><b>${state.project?.mobs?.length || 0}</b> mobs</span>
+      <span class="chip"><b>${auxiliary}</b> BFRES auxiliaires</span>
+      <span class="chip"><b>${state.project?.mobs?.length || 0}</b> fiches de mobs</span>
       <span class="chip"><b>${state.project?.edited?.length || 0}</b> fichiers modifiés</span>
       <span class="chip" title="Budget mémoire des aperçus">budget
         <b>${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go</b></span>`;
@@ -281,12 +293,23 @@ function renderHome() {
       ["Racine", `<code>${esc(project.root)}</code>`],
       ["Dossier de travail", `<code>${esc(project.work)}</code>`],
       ["Fichiers modifiés", edited.length ? `${edited.length} en attente d'assemblage` : "aucun"],
-      ["Mobs créés", project.mobs.length || "aucun"],
+      ["Fiches de mobs", project.mobs.length || "aucune"],
       ["Réglages", `écrits dans <code>settings.json</code>`],
     ].map(([key, value]) => `<li><span class="k">${key}</span><span>${value}</span></li>`).join("");
   }
   renderLogs();
   renderStatus();
+}
+
+/* ------------------------------------------------------------------ création de mod */
+function renderCreation() {
+  const list = $("#creation-status");
+  if (!list || !state.project) return;
+  const edited = state.project.edited?.length || 0;
+  const mobs = state.project.mobs?.length || 0;
+  list.innerHTML = `
+    <li><span class="k">Copies modifiées</span><span>${edited}</span></li>
+    <li><span class="k">Fiches de mobs préparées</span><span>${mobs}</span></li>`;
 }
 
 /* ------------------------------------------------------------------ modèles */
@@ -509,7 +532,7 @@ async function openModel(rel, options = {}) {
     info = await api(`/api/model/info?path=${encodeURIComponent(rel)}`);
   } catch (error) {
     if (request === inspectionSequence) {
-      showInspector("Modèle", `<h3>Modèle indisponible</h3><p>${esc(error.message)}</p>`);
+      showInspector("Modèle", `<h3>Modèle indisponible</h3><p class="diagnostic">${esc(error.message)}</p>`);
       toast(error.message, "error");
     }
     return;
@@ -756,7 +779,7 @@ async function renderMobs() {
       <div class="meta">
         <strong>${esc(mob.name)}</strong>
         <small>parent : ${esc(mob.parent)}</small>
-        <small>${mob.files.length} fichier(s) prêt(s)</small>
+        <small>${mob.files.length} fichier(s) copié(s) · fiche préparatoire</small>
       </div>
     </article>`).join("") || `<p class="muted">Aucune fiche pour l'instant.</p>`;
 }
@@ -772,6 +795,7 @@ function openMob(slug) {
       <dt>Textures</dt><dd>${mob.texture_sources.map(esc).join(", ") || "—"}</dd>
       <dt>Fichiers</dt><dd>${mob.files.map((file) => esc(file.to)).join(", ") || "—"}</dd>
     </dl>
+    <p class="warning-note">Fiche préparatoire : aucun acteur jouable n'a été créé.</p>
     <strong>Reste à faire côté jeu</strong>
     <ul class="todo">${mob.todo.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`);
   ensureTab({ id: `mob:${slug}`, kind: "mob", label: mob.name, doc: { type: "mob", slug } });
@@ -1218,6 +1242,7 @@ function showInspector(title, html) {
   thumbnailQueue.release(body);
   $("#inspector-title").textContent = title;
   body.innerHTML = html;
+  body.scrollTop = 0;
   $("#inspector").hidden = false;
   $(".workspace").classList.add("with-inspector");
   thumbnailQueue.observe(body);
@@ -1404,7 +1429,7 @@ async function refreshBlender() {
 
 async function startBulk() {
   const kinds = ["texture", "model"];
-  if ($("#bulk-anim")?.checked) kinds.push("animation");
+  if ($("#bulk-anim")?.checked) kinds.push("animation", "auxiliary");
   try {
     await api("/api/bulk/start", { method: "POST", body: JSON.stringify({ kinds }) });
   } catch (error) { toast(error.message, "error"); return; }
@@ -1462,7 +1487,14 @@ async function pollBulk() {
 
 async function buildMod(event) {
   event.preventDefault();
+  if (modBuildPending) return;
   const name = new FormData(event.target).get("name");
+  if (!window.confirm("Assembler ce mod ?\n\nLe nom du dossier est nettoyé : seuls les lettres, "
+      + "chiffres, tirets et _ sont conservés (ou HookyMod s'il ne reste rien). "
+      + "Si ce dossier existe déjà dans mods/, il sera entièrement remplacé, sans sauvegarde.")) return;
+  modBuildPending = true;
+  const button = event.target.querySelector('button[type="submit"]');
+  if (button) button.disabled = true;
   try {
     const result = await api("/api/mod/build", {
       method: "POST",
@@ -1472,9 +1504,13 @@ async function buildMod(event) {
       <li><span class="k">Mod</span><span>${esc(result.mod)}</span></li>
       <li><span class="k">Dossier</span><code>${esc(result.path)}</code></li>
       <li><span class="k">Fichiers</span><span>${result.files}</span></li>
-      <li><span class="k">Mobs</span><span>${result.mobs}</span></li>`;
+      <li><span class="k">Fiches de mobs</span><span>${result.mobs}</span></li>`;
     toast(`Mod assemblé : ${result.path} (${result.files} fichier(s))`);
   } catch (error) { toast(error.message, "error"); }
+  finally {
+    modBuildPending = false;
+    if (button) button.disabled = false;
+  }
 }
 
 async function createMob(event) {
@@ -1505,7 +1541,7 @@ const MENUS = {
     { label: "Exporter la sélection (ZIP)", run: () => exportSelection() },
     { sep: true },
     { label: "Exporter tout le projet", run: () => { showView("home"); startBulk(); } },
-    { label: "Assembler le mod", run: () => { showView("home"); $("#mod-form")?.requestSubmit(); } },
+    { label: "Assembler le mod…", run: () => { showView("create"); $("#mod-name")?.focus(); } },
     { sep: true },
     { label: "Ouvrir le dossier de travail", run: () => toast(`Dossier : ${state.project?.work || "—"}`) },
     { sep: true },
@@ -1549,6 +1585,8 @@ const MENUS = {
   ],
   affichage: [
     { label: "Accueil", hint: "Ctrl+1", run: () => showView("home") },
+    { label: "Espace modification", run: () => showView("edit") },
+    { label: "Espace création de mod", run: () => showView("create") },
     { label: "Réglages", hint: "Ctrl+6", run: () => showView("settings") },
     { sep: true },
     { label: "Journal", hint: "Ctrl+J", run: toggleConsole },
@@ -1601,6 +1639,8 @@ function closeMenus() {
 function paletteCommands() {
   const commands = [
     { label: "Aller à l'accueil", group: "vue", run: () => showView("home") },
+    { label: "Espace modification", group: "vue", run: () => showView("edit") },
+    { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
     { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
     { label: "Aller aux mobs", group: "vue", run: () => showView("mobs") },
@@ -1608,7 +1648,7 @@ function paletteCommands() {
     { label: "Aller aux réglages", group: "vue", run: () => showView("settings") },
     { label: "Rafraîchir le projet", group: "action", run: () => refresh({ quiet: false }) },
     { label: "Exporter tout le projet", group: "action", run: () => { showView("home"); startBulk(); } },
-    { label: "Assembler le mod", group: "action", run: () => { showView("home"); $("#mod-form")?.requestSubmit(); } },
+    { label: "Assembler le mod…", group: "action", run: () => { showView("create"); $("#mod-name")?.focus(); } },
     { label: "Analyser le .blend sélectionné", group: "blender", run: () => inspectBlend() },
     { label: "Injecter le .blend dans le modèle cible", group: "blender", run: () => translateBlend() },
     { label: "Basculer le journal", group: "affichage", run: toggleConsole },
@@ -1847,6 +1887,7 @@ async function rescanProject() {
     if (state.view === "ensembles") await renderEnsembles();
     if (state.view === "textures") await renderTextures();
     if (state.view === "home") renderHome();
+    if (state.view === "create") renderCreation();
     if (payload.scan.incomplete || payload.scan.truncated) {
       toast("Scan incomplet : consulte les détails à l'accueil.", "error");
     } else {
@@ -1949,6 +1990,7 @@ async function refresh(options = {}) {
   applyUiSettings(state.settings);
   renderStatus();
   if (state.view === "home") renderHome();
+  if (state.view === "create") renderCreation();
   if (state.view === "models") await renderModels();
   if (state.view === "ensembles") await renderEnsembles();
   if (state.view === "textures") await renderTextures();

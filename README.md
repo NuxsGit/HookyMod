@@ -98,15 +98,18 @@ python -m hookycreator dump/romfs --open     # http://127.0.0.1:8765/
 python -m hookycreator export-all dump/romfs -o export_all   # assets reconnus : PNG + glTF/OBJ
 ```
 
-Application web locale (pas de Tkinter) pour préparer des modifications :
-textures remplacées, modèles envoyés vers Blender, fiches de mobs et assemblage
-d'un dossier `mods/<nom>/romfs/`. Les assets d'origine restent intacts et les
-aperçus utilisent la copie modifiée quand elle existe. Les fiches de mobs ne
-créent pas encore un acteur jouable. Les vignettes visibles se chargent
-progressivement ; le bouton **Pause vignettes** les suspend et la préparation
-complète du cache reste facultative dans les réglages. Un scan limité ou des
-fichiers illisibles sont signalés ; `--scan-limit 0` retire le plafond de scan
-(et peut nécessiter plus de mémoire). Détails et limites : `docs/HOOKYCREATOR.md`.
+Application web locale (pas de Tkinter) organisée en deux espaces :
+**Modification** pour explorer, exporter et retoucher les ressources existantes ;
+**Création de mod** pour préparer des fiches et assembler les copies dans
+`mods/<nom>/romfs/`. Les assets d'origine restent intacts et les aperçus
+utilisent la copie modifiée quand elle existe. Les fiches de mobs ne créent pas
+un acteur jouable. L'assemblage remplace le dossier de mod de même nom :
+l'interface demande confirmation, sans faire de sauvegarde. Les vignettes
+visibles se chargent progressivement ; le bouton **Pause vignettes** les suspend
+et la préparation complète du cache reste facultative dans les réglages. Un scan
+limité ou des fichiers illisibles sont signalés ; `--scan-limit 0` retire le
+plafond de scan (et peut nécessiter plus de mémoire). Détails et limites :
+`docs/HOOKYCREATOR.md`.
 
 **Moteur Rust (première étape du portage).** Sous Windows, ferme HookyCreator,
 puis double-clique sur `Compiler_Rust.bat` ou lance `py -3 tools\build_rust.py`.
@@ -260,7 +263,7 @@ tailles, outils existants) : [`docs/OUVRIR_LES_ASSETS.md`](docs/OUVRIR_LES_ASSET
 
 * Python **3.10+** with Tkinter (Windows/macOS installers include it; on Debian/Ubuntu:
   `sudo apt install python3-tk`).
-* `zstandard` (required for `.zs` files).
+* `zstandard` 0.23 or newer (required for `.zs` files).
 * `texture2ddecoder` for BC7 / BC6H /**ASTC** textures — indispensable pour les assets
   Switch 2 du remake (le décodeur intégré ne couvre que BC1-BC5 et les formats non
   compressés). `python -m hookymod.cli doctor` indique ce qui manque.

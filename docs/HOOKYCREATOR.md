@@ -1,9 +1,10 @@
 # HookyCreator — l'atelier de contenu
 
-Une application locale (navigateur) pour **ajouter du contenu** au jeu : des
-textures retouchées, des variantes de mobs, des modèles passés par Blender, et
-un dossier de mod prêt à charger. Distincte de l'explorateur (`hookymod/app.py`,
-sorte de Nintendo-Toolbox) : ici on ne regarde pas, on **fabrique**.
+Une application locale (navigateur) pour préparer des modifications : textures
+retouchées, modèles passés par Blender, fiches de mobs et dossier de mod.
+Distincte de l'explorateur (`hookymod/app.py`), elle travaille sur des copies.
+L'assemblage de fichiers ne garantit pas leur fonctionnement en jeu : notamment,
+une fiche de mob ne crée pas un nouvel acteur jouable.
 
 ```bash
 python -m hookycreator <dossier du projet>          # http://127.0.0.1:8765/
@@ -13,7 +14,9 @@ python -m hookycreator demo --port 9000             # autre port
 
 Le dossier du projet peut être un `romfs` complet (avec `Pack/ZsDic.pack.zs`)
 ou un simple dossier contenant trois-quatre assets extraits : les dictionnaires
-zstd sont cherchés dans le projet et ses parents.
+zstd sont cherchés dans le projet et ses parents. Après mise à jour du projet,
+relance `python -m pip install -r requirements.txt` : `zstandard` 0.23 ou plus
+récent est nécessaire pour rejeter certains flux zstd invalides.
 
 Le scan accepte jusqu'à **200 000 fichiers reconnus** par défaut (au lieu de
 40 000). Si cette limite est dépassée, ou si des entrées sont illisibles,
@@ -49,14 +52,37 @@ l'architecture actuelle. Détails,
 formats et tests :
 [`RUST.md`](RUST.md).
 
+## Deux espaces pour un même projet
+
+Depuis l'accueil ou le rail à gauche :
+
+1. **Modification** donne accès aux modèles, ensembles, textures et à l'outil
+   Blender. Les éditions vont dans le dossier de travail, pas dans les sources.
+2. **Création de mod** récapitule les copies modifiées et les fiches de mobs,
+   puis assemble le mod dans `mods/<nom>/romfs/`. L'export complet reste sur
+   l'accueil et tous les onglets, menus et raccourcis existants restent accessibles.
+
+Une fiche de mob copie des fichiers sous de nouveaux noms et conserve des notes ;
+elle ne change pas leurs noms internes et ne crée ni acteur BYML, ni placement
+sur la carte, ni entrée RESTBL. Ces étapes restent à faire côté jeu. L'assemblage
+n'assure donc pas qu'un nouveau mob soit jouable. Il ne met pas à jour RESTBL,
+même pour une ressource modifiée : il faut vérifier les tailles et tester en jeu.
+
+**Attention :** construire un mod supprime et recrée entièrement le dossier
+`mods/<nom>` existant, sans sauvegarde. Les espaces et caractères autres que les
+lettres, chiffres, `-` et `_` sont retirés du nom ; si rien ne reste, c'est
+`HookyMod`. L'interface demande confirmation, mais les appels directs à l'API
+ou à `Project.build_mod()` ne la demandent pas.
+
 ## Ce que fait chaque onglet
 
 | Onglet | Actions | État |
 |---|---|---|
 | **Textures** | aperçu décodé, infos (format, taille, mips, Orin), remplacer par une image (PNG/JPG), exporter en PNG | ✅ formats encodables (BC1/BC3/BC4/BC5, non compressés). ASTC/BC7 : refusé explicitement |
-| **Modèles** | aperçu 3D rendu côté serveur, planche de rotations, export glTF + OBJ (+ textures voisines) pour Blender | ✅ BFRES v9 et **v10** |
+| **Modèles** | aperçu 3D rendu côté serveur, planche de rotations, export glTF + OBJ (+ textures voisines) pour Blender | ✅ BFRES v9 et v10 reconnus, lecture partielle |
+| **Blender → jeu** | analyse d'un `.blend` et injection dans un BFRES compatible | ✅ modèles compatibles ; sous-maillages 10.x non réécrits, tampons de taille fixe |
 | **Mobs** | fiche de mob : modèle + textures copiés sous un nouveau nom, liste de ce qui reste à faire côté jeu | ✅ préparation des fichiers |
-| **Mod** | assemble `mods/<nom>/romfs/…` (chemins d'origine) + `hookycreator.json` | ✅ |
+| **Création de mod** | assemble `mods/<nom>/romfs/…` (chemins d'origine) + `hookycreator.json` | ✅ assemblage de fichiers, sans garantie en jeu |
 | **Tout exploiter** | parcourt aussi l'intérieur des packs (`.pack.zs`, SARC) et exporte les textures et modèles reconnus (PNG, glTF + OBJ) avec un `rapport.json` | ✅ avec limites ci-dessous |
 
 ## Tout exploiter (lots)
@@ -70,9 +96,11 @@ python -m hookycreator export-all dump/romfs -o export_all     # en ligne de com
 
 * les **packs** (`.pack.zs`, `.sarc`, imbriqués jusqu'à 3 niveaux) sont ouverts :
   une texture qui vit dans une archive est trouvée et exportée comme les autres ;
-* classement par **contenu** (magic `BNTX`/`FRES`) et, à défaut, par nom — les
-  fichiers d'animation (`.anim.bfres`) sont reconnus comme tels ;
-* chaque élément découvert obtient un statut : `ok`, `skip` (avec la raison :
+* classement par **contenu** (magic `BNTX`/`FRES`) et, pour les BFRES
+  auxiliaires connus, par suffixe. La case « BFRES auxiliaires (rapport) » les
+  inclut dans le rapport comme ignorés ; ils ne sont pas convertis. En ligne de
+  commande, ajouter `--kinds texture,model,animation,auxiliary` pour les signaler ;
+* chaque élément sélectionné et découvert obtient un statut : `ok`, `skip` (avec la raison :
   format non décodable, animation pas encore lue…) ou `error`. Le tout est écrit
   dans `rapport.json` à côté des fichiers ; certaines archives illisibles ou
   trop imbriquées peuvent ne pas être découvertes ;
@@ -134,6 +162,29 @@ format, offset, pas) au lieu de supposer une disposition. Conséquence :
   corrélées aux aires 3D) ;
 * ce qui n'est pas reconnu est **refusé et expliqué** dans `warnings` : blocs
   d'indices ignorés, LOD inférieurs inclus, attributs non décodés.
+
+Si le dictionnaire **interne des modèles** est absent, vide ou illisible, le
+lecteur 10.x tente le pointeur FMDL de l'en-tête. Ce repli exige que ce FMDL
+référence une table FVTX validée, ainsi que les contrôles habituels sur les
+indices et la géométrie ; il signale le dictionnaire manquant dans les remarques.
+Les autres tables FVTX sont repérées par balayage et leur rattachement au FMDL
+n'est pas vérifié. Ces contrôles restent heuristiques et ne garantissent pas
+que tous les BFRES seront lus correctement. Ce dictionnaire interne n'est pas
+le dictionnaire **zstd** nécessaire à la décompression de certains fichiers `.zs`.
+Les frames zstd uniques tronquées sont signalées comme telles, y compris avec
+un dictionnaire ou dans un pack ; sans checksum, toutes les corruptions ne sont
+pas détectables.
+
+Le scan écarte de la grille des modèles les suffixes connus `.anim.bfres`,
+`.animation.bfres`, `.Skeleton.bfres`, `.camera.bfres` et `.light.bfres`
+(avec ou sans `.zs`), regroupés comme ressources BFRES auxiliaires. Seuls les
+suffixes d'animation sont associés comme animations aux modèles. Ce tri par nom
+est une indication, pas une inspection du contenu : un BFRES autrement nommé
+peut aussi ne pas contenir de maillage. L'erreur de l'inspecteur précise alors
+le fichier et les causes possibles, plutôt que d'annoncer une « erreur interne ».
+Essaie le BFRES du modèle plutôt que son animation ou son squelette ; si le
+modèle reste illisible, conserve son nom et les remarques affichées pour le
+diagnostic.
 
 Détail des mesures et méthode : `docs/trainIA/README.md`.
 

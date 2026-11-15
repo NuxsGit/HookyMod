@@ -21,7 +21,7 @@ def _export_all(argv: list[str]) -> int:
     parser.add_argument("root", help="dossier du projet (romfs, packs compris)")
     parser.add_argument("--out", "-o", default="export_all", help="dossier de sortie")
     parser.add_argument("--kinds", default="texture,model",
-                        help="types à exporter (texture, model, animation)")
+                        help="types à exporter/signaler (texture, model, animation, auxiliary)")
     parser.add_argument("--limit", type=int, help="s'arrêter après N éléments (essai)")
     parser.add_argument("--work", help="dossier de travail (dictionnaires, cache)")
     parser.add_argument("--scan-limit", type=int, default=MAX_SCAN_FILES,

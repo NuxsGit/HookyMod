@@ -26,6 +26,8 @@ from hookymod import blender, render
 from hookymod.container import Level, is_navigable
 from hookymod.util import HookyError
 
+from .asset_names import is_animation_bfres, is_auxiliary_bfres
+
 #: suffixes qui cachent une archive (contient un SARC ou une frame zstd + SARC)
 ARCHIVE_SUFFIXES = (".pack.zs", ".pack", ".sarc", ".szs", ".sarc.zs")
 #: profondeur maximale d'ouverture d'archives imbriquées
@@ -37,7 +39,7 @@ class Item:
     """Un asset exploitable, qu'il soit posé dans le dossier ou dans un pack."""
 
     label: str                  # chemin lisible (peut contenir « !/ »)
-    kind: str                   # texture | model | other
+    kind: str                   # texture | model | animation | auxiliary | other
     size: int = 0
     archive: str = ""           # pack d'origine (vide si fichier seul)
     editable: bool = False      # on sait réécrire ce type d'asset
@@ -47,23 +49,20 @@ class Item:
                 "archive": self.archive, "editable": self.editable}
 
 
-#: mots qui trahissent un BFRES sans maillage (animations, squelettes, coquilles)
-ANIM_NAMES = (".anim.", "animation", "skeleton", ".camera.", ".light.")
-
-
 def _classify(data: bytes, name: str) -> str:
     """Classe par contenu quand c'est fiable, par nom quand le contenu se tait.
 
-    Les BFRES de ce jeu ne portent pas les magies ``FMDL``/``FSHP`` en clair :
-    les sections sont atteintes par des offsets relatifs. On ne peut donc pas
-    décider « modèle » sur la présence d'une magie ; en revanche un fichier
-    ``*.anim.bfres`` ou ``*.Skeleton.bfres`` ne contiendra jamais de faces.
+    Les noms ``*.anim.bfres`` ou ``*.Skeleton.bfres`` signalent généralement
+    des ressources auxiliaires plutôt qu'un modèle. Ce tri reste heuristique :
+    il ne garantit pas qu'un BFRES classé modèle contienne de la géométrie.
     """
     if data[:4] == b"BNTX":
         return "texture"
     low = name.lower()
-    if any(word in low for word in ANIM_NAMES):
+    if is_animation_bfres(name):
         return "animation"
+    if is_auxiliary_bfres(name):
+        return "auxiliary"
     if data[:4] == b"FRES":
         return "model"
     if low.endswith((".bntx", ".bntx.zs")):
@@ -88,7 +87,7 @@ def _walk(level: Level, prefix: str, depth: int, items: list[Item], seen: int = 
             continue
         seen += 1
         kind = _classify(blob, name)
-        if kind in ("texture", "model") and not is_archive_name(name):
+        if kind in ("texture", "model", "animation", "auxiliary") and not is_archive_name(name):
             items.append(Item(label=label, kind=kind, size=len(blob), archive=prefix))
             continue
         if is_archive_name(name) or is_navigable(blob):
@@ -110,8 +109,14 @@ def discover(project, include_archives: bool = True, *, assets=None) -> list[Ite
     """Liste les fichiers seuls **et** le contenu des packs d'un inventaire donné."""
     items: list[Item] = []
     for asset in project.assets if assets is None else assets:
-        if ".anim." in asset.rel.lower():
-            items.append(Item(label=asset.rel, kind="animation", size=asset.size))
+        if is_animation_bfres(asset.rel):
+            kind = "animation"
+        elif is_auxiliary_bfres(asset.rel):
+            kind = "auxiliary"
+        else:
+            kind = asset.kind
+        if kind in ("animation", "auxiliary"):
+            items.append(Item(label=asset.rel, kind=kind, size=asset.size))
             continue
         if asset.kind in ("model", "texture"):
             items.append(Item(label=asset.rel, kind=asset.kind, size=asset.size,
@@ -177,10 +182,10 @@ def export_all(project, out_dir, kinds: tuple[str, ...] = ("texture", "model"),
                 entry["files"] = written
                 entry["format"] = file.textures[0].format_name
                 report["textures"] += len(written)
-            elif item.kind == "animation":
+            elif item.kind in ("animation", "auxiliary"):
                 raise HookyError(
-                    "BFRES d'animations : les pistes ne sont pas encore lues "
-                    "(seule la géométrie l'est)."
+                    "BFRES auxiliaire (animation, squelette, caméra ou lumière) : "
+                    "la lecture de ces données n'est pas encore prise en charge."
                 )
             else:
                 data = project.read_asset(item.label)

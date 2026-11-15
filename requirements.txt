@@ -1,5 +1,6 @@
-# Dépendance obligatoire : lecture/écriture des fichiers .zs (zstd)
-zstandard>=0.21
+# Dépendance obligatoire : lecture/écriture des fichiers .zs (zstd).
+# Les versions antérieures à 0.23 peuvent accepter des bits réservés invalides.
+zstandard>=0.23
 
 # Recommandé : le remake Switch 2 utilise de l'ASTC (et du BC7) que le décodeur
 # intégré ne couvre pas. Sans ce paquet, ces textures s'affichent en erreur

@@ -80,6 +80,7 @@ code, .mono { font-family: var(--mono); font-size: 11.5px; }
 /* ------------------------------------------------------------------ structure */
 .app {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 42px 1fr 26px;
   height: 100vh;
   height: 100dvh;
@@ -255,7 +256,7 @@ kbd {
   flex-direction: column;
   gap: 3px;
   padding: 8px 6px;
-  /* sept entrées : sur une fenêtre basse, le rail défile au lieu de rogner */
+  /* Sur une fenêtre basse, le rail défile au lieu de rogner ses entrées. */
   overflow-y: auto;
   scrollbar-width: thin;
   background: linear-gradient(180deg, #0a101a, #070c13);
@@ -287,6 +288,17 @@ kbd {
   stroke-linecap: round;
 }
 .rail-btn:hover { color: var(--text); background: var(--panel-2); }
+.rail-label {
+  margin: 8px 0 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-transform: uppercase;
+}
 .rail-btn[aria-current="page"] {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -540,6 +552,105 @@ input[type="range"]::-moz-range-thumb {
 }
 .chip b { color: var(--text); font-variant-numeric: tabular-nums; }
 
+/* Deux espaces d'entrée : modifier les ressources, puis assembler le mod. */
+.section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 -2px;
+}
+.section-title span { color: var(--faint); font-size: 11px; }
+.spaces, .workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 12px;
+}
+.space-card {
+  --space-color: var(--accent);
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  min-height: 165px;
+  padding: 21px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--space-color) 22%, var(--line));
+  border-radius: var(--radius-lg);
+  background: radial-gradient(280px 180px at 100% 0%,
+      color-mix(in srgb, var(--space-color) 13%, transparent), transparent),
+    linear-gradient(140deg, var(--panel-2), var(--panel));
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.space-create { --space-color: #a9a4ff; }
+.space-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--space-color) 65%, var(--line));
+  box-shadow: 0 10px 30px #0003;
+}
+.space-card:focus-visible { outline: 2px solid var(--space-color); outline-offset: 3px; }
+.space-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 43px;
+  width: 43px;
+  height: 43px;
+  color: var(--space-color);
+  background: color-mix(in srgb, var(--space-color) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--space-color) 30%, transparent);
+  border-radius: 12px;
+}
+.space-icon svg {
+  width: 23px; height: 23px;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.space-copy { display: flex; flex-direction: column; gap: 7px; }
+.space-copy small, .eyebrow {
+  color: var(--space-color, var(--accent));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.space-copy b { font-size: 16px; }
+.space-copy > span { color: var(--muted); font-size: 12px; line-height: 1.5; max-width: 46ch; }
+.space-copy em { color: var(--space-color); font-size: 11.5px; font-style: normal; font-weight: 650; margin-top: 4px; }
+.workspace-head h2 { font-size: 21px; }
+.view-head p.eyebrow { margin: 0 0 7px; }
+.eyebrow.create-accent { color: #b4aeff; }
+.tool-number { display: block; color: var(--accent); font-family: var(--mono); font-size: 10px; margin-bottom: 10px; }
+.tools-grid .quick-card { min-height: 125px; }
+.info-note, .warning-note { font-size: 12px; line-height: 1.55; }
+.info-note {
+  padding: 14px 16px;
+  color: var(--muted);
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+  border-radius: 4px var(--radius) var(--radius) 4px;
+}
+.info-note strong { color: var(--text); }
+.step-number {
+  display: inline-grid; place-items: center;
+  width: 24px; height: 24px; margin-right: 7px;
+  border-radius: 7px; background: #a9a4ff1c; color: #bcb7ff;
+  font-family: var(--mono); font-size: 10px;
+}
+.workflow-step .panel-body { min-height: 165px; align-items: flex-start; }
+.workflow-step .kv-list { width: 100%; }
+.workflow-step .btn { margin-top: auto; }
+.build-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+.build-result { background: color-mix(in srgb, var(--panel-2) 38%, transparent); }
+.warning-note { color: #ebc999; }
+.game-limit {
+  padding: 13px 16px;
+  border: 1px solid color-mix(in srgb, var(--warn) 25%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 6%, var(--panel));
+}
+.game-limit strong { display: block; margin-bottom: 3px; color: var(--warn); }
+
 .quick {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -742,6 +853,7 @@ input[type="range"]::-moz-range-thumb {
 .inspector-body { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 
 .inspector-body h3 { font-size: 15px; }
+.inspector-body .diagnostic { white-space: pre-line; line-height: 1.5; }
 .inspector-body .sub {
   color: var(--faint);
   font-size: 11px;
@@ -933,8 +1045,30 @@ input[type="range"]::-moz-range-thumb {
 }
 
 @media (max-width: 900px) {
+  .titlebar .project-name, #status-project, #status-counts { display: none; }
   .workspace.with-inspector { grid-template-columns: 62px minmax(0, 1fr) 0; }
-  .inspector { display: none; }
+  /* L'inspecteur ne doit pas disparaître sur une fenêtre étroite : c'est lui
+     qui contient les aperçus et les commandes des modèles / textures. */
+  .inspector:not([hidden]) {
+    display: grid;
+    position: fixed;
+    z-index: 45;
+    top: 42px;
+    right: 0;
+    bottom: 26px;
+    width: min(380px, calc(100vw - 62px));
+    box-shadow: -12px 0 35px #0008;
+  }
+}
+@media (max-width: 700px) {
+  .menubar { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .menubar::-webkit-scrollbar { display: none; }
+  .titlebar-right { flex-shrink: 0; }
+  #status-budget { display: none; }
+}
+@media (max-width: 550px) {
+  .titlebar { gap: 8px; }
+  .brand { gap: 0; font-size: 0; }
 }
 
 

@@ -926,12 +926,14 @@ def _merge_runs(runs: list[tuple[int, int, list]],
 
 
 # --------------------------------------------------------------------------- lecture
-def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
+def parse(data: bytes, *, require_model_shape: bool = False) -> tuple[list[MeshData], V10Report] | None:
     """Maillages d'un BFRES 10.x, ou ``None`` si la structure n'est pas reconnue.
 
     Le retour est volontairement « tout ou rien » : soit les tables du fichier
     vérifient leurs hypothèses, soit on ne renvoie rien et l'appelant dit
-    pourquoi.
+    pourquoi. Sans dictionnaire de modèles exploitable, l'appelant peut exiger
+    que le FMDL référence lui-même un FVTX validé : le balayage seul pourrait
+    autrement ramasser une table de sommets orpheline.
     """
     if len(data) < 0x200 or data[:4] != b"FRES":
         return None
@@ -961,6 +963,15 @@ def parse(data: bytes) -> tuple[list[MeshData], V10Report] | None:
         report.warnings.append(
             "Aucune forme lisible : table d'attributs (FVTX) absente ou incohérente.")
         return None
+    if require_model_shape:
+        field = model_offset + FMDL_VERTEX_INFO
+        if field + 8 > len(data):
+            return None
+        model_fvtx = _u64(data, field)
+        if not any(shape.offset == model_fvtx for shape in shapes):
+            # Le balayage global a trouvé un FVTX, mais rien ne démontre qu'il
+            # appartient au FMDL référencé par l'en-tête.
+            return None
     report.shapes = [shape.summary() for shape in shapes]
     first = shapes[0]
     report.attributes = [a.describe() for a in first.attributes]
