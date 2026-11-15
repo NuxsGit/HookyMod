@@ -12,6 +12,23 @@ Vec3 = tuple[float, float, float]
 Vec2 = tuple[float, float]
 
 
+def triangle_has_area(a: Vec3, b: Vec3, c: Vec3) -> bool:
+    """Teste une aire non nulle sans débordement pour des coordonnées finies.
+
+    Les arêtes sont mises à l'échelle avant le produit vectoriel : une unité
+    minuscule ne doit pas être confondue avec une face d'aire nulle.
+    """
+    edges = tuple(b[i] - a[i] for i in range(3)) + tuple(c[i] - a[i] for i in range(3))
+    if not all(math.isfinite(value) for value in edges):
+        return False
+    scale = max(abs(value) for value in edges)
+    if scale == 0:
+        return False
+    ux, uy, uz, vx, vy, vz = (value / scale for value in edges)
+    return (uy * vz - uz * vy != 0 or uz * vx - ux * vz != 0
+            or ux * vy - uy * vx != 0)
+
+
 @dataclass
 class MeshData:
     """Un maillage triangulaire prêt à afficher / exporter."""
@@ -123,24 +140,26 @@ def merge_meshes(meshes: list[MeshData], name: str = "model") -> MeshData:
 
 
 def _fmt(value: float) -> str:
-    return f"{value:.6g}"
+    return f"{value:.9g}"
 
 
 def export_obj(meshes: list[MeshData], path, mtl: bool = True,
                scale: float = 1.0, up_axis: str = "y",
                albedo_map: dict[str, str] | None = None,
-               normal_map: str = "") -> Path:
+               normal_map: str | dict[str, str] = "",
+               strict_materials: bool = False) -> Path:
     """Écrit un fichier OBJ (+ MTL) lisible par Blender, Maya, etc.
 
-    Blender importe l'OBJ avec ``bpy.wm.obj_import`` : c'est la voie la plus
-    fiable pour convertir un BFRES en .blend sans add-on.
+    L'OBJ est un format d'échange ouvert par de nombreux logiciels 3D.
 
     La version précédente appelait un formateur **trois fois par sommet** :
     15 millions d'appels pour une armure, 13,7 s d'écriture. Ici un sommet
     coûte une seule chaîne formatée, et les faces sont formatées en bloc.
 
     :param albedo_map: ``{matériau: fichier PNG}`` → ``map_Kd`` dans le MTL.
-    :param normal_map: fichier PNG de normale → ``norm`` (normale) dans le MTL.
+    :param normal_map: fichier PNG de normale → ``map_Bump`` dans le MTL.
+        Blender l'interprète comme carte de normales ; les autres logiciels
+        peuvent l'interpréter comme carte de relief, à vérifier après import.
     """
     path = Path(path)
     chunks: list[str] = ["# Exporté par HookyMod / Asset Explorer", ""]
@@ -162,39 +181,45 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
             continue
         name = (mesh.name or f"mesh_{index}").replace(" ", "_")
         chunks.append(f"g {name}")
-        material = mesh.material or f"mat_{index}"
+        material = mesh.material or mesh.name or f"mat_{index}"
         color = palette[index % len(palette)]
         if use_mtl:
             chunks.append(f"usemtl {material}")
+            albedo_file = ((albedo_map or {}).get(material, "") if strict_materials
+                           else _albedo_for(material, albedo_map or {}))
+            # Kd multiplie map_Kd : garder le blanc, sans teinter l'image.
+            if albedo_file:
+                color = (1., 1., 1.)
             mtl_lines += [f"newmtl {material}",
                           f"Kd {color[0]:.3f} {color[1]:.3f} {color[2]:.3f}",
                           "Ka 0.1 0.1 0.1", "Ks 0.0 0.0 0.0", "d 1.0",
                           "illum 2"]
-            albedo_file = _albedo_for(material, albedo_map or {})
             if albedo_file:
                 mtl_lines.append(f"map_Kd {albedo_file}")
-            if normal_map:
-                # Wavefront : « norm » = carte de normales ; Blender l'importe
-                # comme une image, à brancher sur Normal Map (voir TEXTURES.md)
-                mtl_lines.append(f"norm {normal_map}")
+            normal_file = normal_map.get(material, "") if isinstance(normal_map, dict) else normal_map
+            if normal_file:
+                # Blender ignore « norm » ; il relie map_Bump à Normal Map.
+                # D'autres lecteurs peuvent y voir un relief : documenté dans
+                # la notice, à vérifier dans le logiciel cible.
+                mtl_lines.append(f"map_Bump {normal_file}")
             mtl_lines.append("")
 
         if z_up:
             for x, y, z in mesh.positions:
-                chunks.append(f"v {x * scale:.6g} {-z * scale:.6g} {y * scale:.6g}")
+                chunks.append(f"v {x * scale:.9g} {-z * scale:.9g} {y * scale:.9g}")
         else:
             for x, y, z in mesh.positions:
-                chunks.append(f"v {x * scale:.6g} {y * scale:.6g} {z * scale:.6g}")
+                chunks.append(f"v {x * scale:.9g} {y * scale:.9g} {z * scale:.9g}")
         has_uv = bool(mesh.uvs) and len(mesh.uvs) == len(mesh.positions)
         has_n = bool(mesh.normals) and len(mesh.normals) == len(mesh.positions)
         if has_uv:
-            chunks += [f"vt {u:.6g} {1.0 - v:.6g}" for u, v in mesh.uvs]
+            chunks += [f"vt {u:.9g} {1.0 - v:.9g}" for u, v in mesh.uvs]
         if has_n:
             if z_up:
-                chunks += [f"vn {nx:.6g} {-nz:.6g} {ny:.6g}"
+                chunks += [f"vn {nx:.9g} {-nz:.9g} {ny:.9g}"
                            for nx, ny, nz in mesh.normals]
             else:
-                chunks += [f"vn {nx:.6g} {ny:.6g} {nz:.6g}"
+                chunks += [f"vn {nx:.9g} {ny:.9g} {nz:.9g}"
                            for nx, ny, nz in mesh.normals]
 
         vbase = vertex_offset + 1

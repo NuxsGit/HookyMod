@@ -83,6 +83,24 @@ def sanitize_name(name: str) -> str:
     return "/".join(parts) or "sans_nom"
 
 
+_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "123456789¹²³"
+}
+
+
+def safe_filename_stem(name: str, fallback: str = "asset", limit: int = 120) -> str:
+    """Nom de fichier plat, portable et borné, même issu d'un conteneur non fiable."""
+    cleaned = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
+    # Les systèmes usuels limitent aussi la longueur en octets, pas seulement
+    # en caractères ; garder de la marge pour l'extension et un suffixe unique.
+    cleaned = cleaned.strip("_")[:limit].encode("utf-8")[:180].decode("utf-8", "ignore").rstrip(".")
+    if not cleaned or cleaned in {".", ".."}:
+        return fallback
+    if cleaned.split(".", 1)[0].upper() in _WINDOWS_DEVICES:
+        cleaned = "_" + cleaned
+    return cleaned
+
+
 class KeyedLocks:
     """Un verrou par clé active, sans conserver les clés après utilisation."""
 

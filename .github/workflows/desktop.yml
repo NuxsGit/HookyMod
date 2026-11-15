@@ -91,8 +91,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  blender:
-    name: Export avec Blender réel / Linux
+  model-formats:
+    name: Formats OBJ / glTF et interopérabilité / Linux
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -102,10 +102,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install Blender and test dependencies
+      - name: Install format test dependencies and Blender consumer
         run: |
           sudo apt-get update
           sudo apt-get install -y blender python3-numpy
-          python -m pip install -r requirements.txt pytest pillow
-      - name: Create and reopen a real blend and time the HTTP export
-        run: python .github/scripts/run_ci_command.py -- python -m pytest -q -s tests/test_real_blender.py tests/test_benchmark_workflow.py
+          python -m pip install -r requirements.txt pytest pytest-subtests pillow
+          blender --background --factory-startup --python-exit-code 7 --python-expr "import bpy, numpy; print(bpy.app.version_string, numpy.__version__)"
+      - name: Check bounded parsing, material associations and working-copy injection
+        run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_modelio.py tests/test_model_import.py tests/test_bfres_v10_struct.py tests/test_material_bindings.py tests/test_translate.py tests/test_benchmark_workflow.py
+      - name: Open the standard exports in Blender
+        run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_real_blender.py

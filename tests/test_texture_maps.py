@@ -6,8 +6,8 @@ métal. Ces tests vérifient que :
 
 * chaque suffixe du jeu est reconnu (``_Alb``, ``_Nrm``, ``_Rgh``, ``_Mtl``,
   ``_AO``, ``_Emi``) et qu'un nom inconnu n'est **pas** rangé au hasard ;
-* toutes les cartes partent dans l'export, plus ``TEXTURES.md`` et
-  ``assembler_shaders.py`` ;
+* les cartes candidates partent dans l'export, plus ``TEXTURES.md`` ;
+  les associations non vérifiées restent clairement signalées ;
 * le glTF porte les textures là où glTF les attend (baseColor, normal,
   metallicRoughness avec rugosité en G et métal en B, occlusion, émission) ;
 * l'OMT d'OBJ (`MTL`) référence l'albédo et la normale.
@@ -142,16 +142,15 @@ class ExportMapsTests(unittest.TestCase):
         self.assertIn("Base Color", text)
         self.assertIn("Normal Map", text)
         self.assertIn("Non-Color", text)
-        self.assertIn("assembler_shaders.py", text)
+        self.assertIn("association heuristique", text)
+        self.assertIn("branchement manuel", text)
+        self.assertIn("absentes,", text)
 
-    def test_shader_script_is_dropped_next_to_the_textures(self) -> None:
+    def test_export_does_not_generate_a_shader_script(self) -> None:
+        # Les anciens scripts raccordaient les cartes à tous les matériaux,
+        # ce qui peut présenter des associations incorrectes comme certaines.
         self.project.export_maps_for(MODEL, self.folder)
-        script = self.folder / "assembler_shaders.py"
-        self.assertTrue(script.is_file())
-        source = script.read_text(encoding="utf-8")
-        compile(source, "assembler_shaders.py", "exec")      # au moins valide
-        self.assertIn("ShaderNodeBsdfPrincipled", source)
-        self.assertIn("Non-Color", source)
+        self.assertFalse((self.folder / "assembler_shaders.py").exists())
 
     def test_export_model_reports_the_maps_by_role(self) -> None:
         result = self.project.export_model(MODEL)
@@ -236,7 +235,7 @@ class GltfWiringTests(unittest.TestCase):
                              normal_map="Heros_Nrm.png")
         mtl = Path(written).with_suffix(".mtl").read_text(encoding="utf-8")
         self.assertIn("map_Kd Heros_Alb.png", mtl)
-        self.assertIn("norm Heros_Nrm.png", mtl)
+        self.assertIn("map_Bump Heros_Nrm.png", mtl)
 
 
 class StateRoleTests(unittest.TestCase):

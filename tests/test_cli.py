@@ -104,7 +104,8 @@ class CliTests(unittest.TestCase):
                                      "-o", str(target)])
         self.assertEqual(code, 0)
         text = target.read_text()
-        self.assertIn("f 1//1 2//2 3//3", text)
+        self.assertIn("f 1 2 3", text)
+        self.assertNotIn("\nvn ", text)
 
     def test_patch_entry_content(self):
         target = self.root / "patched_entry.zs"

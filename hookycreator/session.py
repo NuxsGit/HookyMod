@@ -23,12 +23,14 @@ MAX_TEXT = 2048
 MAX_TABS = 64
 MAX_SELECTION = 5000
 VIEWS = frozenset({"home", "edit", "create", "models", "ensembles", "textures",
-                   "sounds", "mobs", "blender", "settings"})
+                   "sounds", "mobs", "import", "settings"})
 TEXT_FIELDS = frozenset({"search", "search-tex", "search-ens", "search-sound", "tex-role",
                          "mod-name", "mob-name", "mob-parent", "mob-resource-search",
-                         "blend-axis", "blend-scale", "blend-only", "blend-target-search",
-                         "model-quality"})
-CHECK_FIELDS = frozenset({"model-shots", "ens-textures", "bulk-anim", "blend-fit"})
+                         "model-axis", "model-scale", "model-target-search", "model-quality"})
+CHECK_FIELDS = frozenset({"model-shots", "ens-textures", "bulk-anim", "model-fit"})
+# Migration des sessions créées avant le remplacement de l'ancien parcours.
+LEGACY_FIELDS = {"blend-axis": "model-axis", "blend-scale": "model-scale",
+                 "blend-target-search": "model-target-search", "blend-fit": "model-fit"}
 
 
 class SessionError(ValueError):
@@ -60,6 +62,8 @@ def validate_state(value: object) -> dict:
             or value["version"] != VERSION):
         raise SessionError("Version de sauvegarde d'interface inconnue.")
     view = _text(value.get("view", "home"))
+    if view == "blender":
+        view = "import"
     if view not in VIEWS:
         raise SessionError("Vue inconnue dans la sauvegarde.")
     tabs = []
@@ -69,15 +73,25 @@ def validate_state(value: object) -> dict:
         kind = _text(tab.get("type"), allow_empty=False)
         if kind == "view":
             name = _text(tab.get("view"), allow_empty=False)
+            if name == "blender":
+                name = "import"
             if name not in VIEWS:
                 raise SessionError("Vue d'onglet inconnue.")
             tabs.append({"type": kind, "view": name})
         elif kind in {"model", "texture", "sound"}:
-            tabs.append({"type": kind, "rel": _text(tab.get("rel"), allow_empty=False)})
+            entry = {"type": kind, "rel": _text(tab.get("rel"), allow_empty=False)}
+            if kind == "texture" and "index" in tab:
+                index = tab["index"]
+                if type(index) is not int or not 0 <= index <= 65535:
+                    raise SessionError("Index de texture invalide dans la sauvegarde.")
+                entry["index"] = index
+            tabs.append(entry)
         elif kind == "mob":
             tabs.append({"type": kind, "slug": _text(tab.get("slug"), allow_empty=False)})
         elif kind == "blend":
-            tabs.append({"type": kind, "ref": _text(tab.get("ref"), allow_empty=False)})
+            # Les anciens documents ne peuvent plus être rouverts. Conserver
+            # le reste de la session plutôt que de rejeter toute la sauvegarde.
+            _text(tab.get("ref"), allow_empty=False)
         else:
             raise SessionError("Type d'onglet inconnu.")
     selection = [_text(item, allow_empty=False)
@@ -85,13 +99,24 @@ def validate_state(value: object) -> dict:
     fields = value.get("fields", {})
     if not isinstance(fields, dict):
         raise SessionError("Champs d'interface invalides.")
+    fields = dict(fields)
+    for old, new in LEGACY_FIELDS.items():
+        if old in fields and new not in fields:
+            fields[new] = fields[old]
+    # L'ancien sélecteur d'axes utilisait « y_up » pour une autre convention.
+    # Ne pas l'interpréter silencieusement comme un réglage du nouveau lecteur.
+    if fields.get("model-axis") == "y_up":
+        fields["model-axis"] = "z_up"
     clean_fields = {key: _text(fields[key]) for key in TEXT_FIELDS if key in fields}
     clean_fields.update({key: _flag(fields[key]) for key in CHECK_FIELDS if key in fields})
     choices = value.get("choices", {})
     if not isinstance(choices, dict):
         raise SessionError("Choix d'interface invalides.")
+    choices = dict(choices)
+    if "blend-target" in choices and "model-target" not in choices:
+        choices["model-target"] = choices["blend-target"]
     clean_choices = {key: _text(choices[key])
-                     for key in ("mob-model", "blend-target", "blend-ref") if key in choices}
+                     for key in ("mob-model", "model-target") if key in choices}
     if "mob-textures" in choices:
         clean_choices["mob-textures"] = [
             _text(item, allow_empty=False) for item in _list(choices["mob-textures"], MAX_SELECTION)]
@@ -107,8 +132,11 @@ def validate_state(value: object) -> dict:
         if type(count) is not int or not 48 <= count <= 10_000:
             raise SessionError("Nombre d'éléments affichés invalide.")
         clean_shown[key] = count
+    active = _text(value.get("active", "view:home"))
+    if active == "view:blender":
+        active = "view:import"
     return {"version": VERSION, "view": view, "tabs": tabs,
-            "active": _text(value.get("active", "view:home")),
+            "active": active,
             "selection": selection, "fields": clean_fields, "choices": clean_choices,
             "scroll": scroll, "shown": clean_shown,
             "inspector": _flag(value.get("inspector", False)),

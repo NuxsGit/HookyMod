@@ -394,7 +394,7 @@ fn on_download(
                         if selection {
                             "hookycreator-selection".into()
                         } else {
-                            "hookycreator-blender".into()
+                            "hookycreator-modele".into()
                         },
                         "zip",
                     )

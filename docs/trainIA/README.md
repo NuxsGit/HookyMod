@@ -1,8 +1,14 @@
-# Traducteur BFRES 10.x — ce qui est mesuré, ce qui est vérifié
+# Notes historiques sur le lecteur BFRES 10.x
 
-Ce dossier documente **comment HookyMod apprend** le format des modèles du
-remake. Il n'y a pas de spécification publique du BFRES 10.x : tout ce qui suit
-a été mesuré sur des fichiers réels, puis verrouillé par des tests.
+> **Archive de recherche** : les résultats ci-dessous concernent un ancien
+> lecteur heuristique et ne décrivent pas le lecteur structuré actuel. Ils ne
+> constituent pas une validation de fidélité visuelle ou de fonctionnement en
+> jeu. Les anciens aperçus ne sont pas conservés ici. Pour les limites actuelles,
+> voir [le guide de l'atelier](../HOOKYCREATOR.md) et
+> [les mesures récentes](../PERFORMANCE.md).
+
+Ce dossier conserve les hypothèses et observations de la phase heuristique,
+mesurées sur des fichiers réels et confrontées à des fixtures synthétiques.
 
 Corpus de mesure (fourni par l'utilisateur, jamais versionné) :
 
@@ -99,12 +105,11 @@ Chaque bloc est attribué à la forme dont les positions donnent la meilleure
 
 ## 7. Limites connues (assumées, signalées dans le rapport)
 
-1. La table `FSHP` (plages d'index exactes par sous-maillage et par LOD) n'est
-   pas encore lue : l'attribution des blocs se fait par validation géométrique,
-   et le rapport indique combien de blocs ont été ignorés.
-2. Plusieurs LOD d'une même forme peuvent être inclus : la géométrie reste
-   juste mais plus dense que nécessaire, et le rapport le dit
-   (« sous-maillage(s) de LOD inférieur inclus »).
+1. À cette époque, la table `FSHP` n'était pas lue : l'attribution des blocs se
+   faisait par validation géométrique. Le lecteur structuré actuel lit certaines
+   tables `FSHP` et se limite au LOD 0 ; le repli heuristique reste distinct.
+2. Le repli pouvait inclure plusieurs LOD d'une même forme. Cela ne prouve pas
+   que la géométrie obtenue était complète ou correcte.
 3. Les formats d'attributs inconnus ne sont pas devinés : l'attribut est ignoré
    et le rapport liste les attributs réellement lus.
 

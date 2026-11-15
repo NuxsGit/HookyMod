@@ -17,7 +17,6 @@ import copy
 import json
 import os
 import shutil
-import sys
 import threading
 import time
 import uuid
@@ -28,16 +27,17 @@ from pathlib import Path
 from hookymod import audio as audio_mod
 from hookymod import bfres as bfres_mod
 from hookymod import bntx as bntx_mod
-from hookymod import blendfile, bntx_encode, blender, native, render, zs
+from hookymod import bntx_encode, blender, native, render, zs
 from hookymod import texturemaps as texture_maps
 from hookymod.texturemaps import ROLE_LABELS, ROLE_ORDER
 from hookymod.blender import _base_name
 from hookymod.mesh import MeshData
-from hookymod.util import HookyError
+from hookymod.util import HookyError, safe_filename_stem, write_atomic
 
 from .asset_names import is_animation_bfres, is_auxiliary_bfres
 from .settings import Settings, SettingsError
 from . import cache as cache_mod
+from . import export_folders
 from . import geo as geo_mod
 from . import vram
 
@@ -46,8 +46,10 @@ TEXTURE_SUFFIXES = (".bntx.zs", ".bntx")
 SOUND_SUFFIXES = (".bwav.zs", ".bwav")
 # Garde-fou configurable : 0 désactive le plafond. Une troncature est signalée.
 MAX_SCAN_FILES = 200_000
-# Cache mémoire de bundles complets, jamais de .blend produit par Blender.
+# Cache mémoire de bundles complets glTF / OBJ.
 EXPORT_CACHE_BYTES = 64 * 1024 * 1024
+# Des instances Project distinctes peuvent partager un dossier de travail.
+_EXPORT_FLIGHTS = cache_mod.KeyedLocks()
 
 
 @dataclass
@@ -78,6 +80,36 @@ class Asset:
             if name.lower().endswith(suffix):
                 name = name[: -len(suffix)]
         return name.rsplit(".", 1)[0]
+
+
+def _model_export_stem(rel: str) -> str:
+    """Nom portable commun aux exports individuels et aux sélections."""
+    name = rel.rsplit("/", 1)[-1].split(".", 1)[0]
+    return safe_filename_stem(name, fallback="modele")
+
+
+def _model_export_names(assets: list[Asset]) -> dict[str, str]:
+    """Attribue des dossiers distincts, même si un suffixe ressemble à un nom réel."""
+    entries = [(asset.rel, _model_export_stem(asset.rel)) for asset in assets]
+    counts: dict[str, int] = {}
+    for _rel, stem in entries:
+        key = stem.casefold()
+        counts[key] = counts.get(key, 0) + 1
+    # Réserver d'abord tous les noms naturels, y compris les groupes de
+    # doublons, afin qu'un suffixe de hachage ne les usurpe pas.
+    reserved = set(counts)
+    result = {rel: stem for rel, stem in entries if counts[stem.casefold()] == 1}
+    used = {stem.casefold() for stem in result.values()}
+    for rel, stem in entries:
+        if rel in result:
+            continue
+        base = f"{stem}--{cache_mod.digest(rel)[:8]}"
+        name, number = base, 2
+        while name.casefold() in reserved or name.casefold() in used:
+            name, number = f"{base}-{number}", number + 1
+        used.add(name.casefold())
+        result[rel] = name
+    return result
 
 
 #: suffixes que le jeu ajoute au nom du modèle pour nommer ses animations
@@ -305,7 +337,7 @@ class Project:
         self._flatten_flights = cache_mod.KeyedLocks()
         self._sampler_flights = cache_mod.KeyedLocks()
         self._edit_flights = cache_mod.KeyedLocks()
-        self._export_flights = cache_mod.KeyedLocks()
+        self._export_flights = _EXPORT_FLIGHTS
         self._export_cache: OrderedDict[tuple, tuple] = OrderedDict()
         self._export_cache_bytes = 0
         self._downloads_lock = threading.Lock()
@@ -318,13 +350,18 @@ class Project:
         self._reports: dict[tuple, dict] = {}
         self._texture_index: dict[str, list] = {}
         self._map_index: dict[str, dict] = {}
+        self._texture_reference_cache: OrderedDict[tuple, tuple] = OrderedDict()
         self._animation_cache: dict[str, list] = {}
         # index « nom → assets » construits à l'ouverture : sans eux, chaque
         # modèle relisait tout le projet (4 s pour 600 modèles, des minutes
         # sur un vrai dump)
         self._by_kind: dict[str, list[Asset]] = {}
-        self._model_export_counts: dict[str, int] = {}
+        self._model_export_names: dict[str, str] = {}
+        self._model_export_reserved: set[str] = set()
+        self._model_export_folders: export_folders.ExportFolders | None = None
+        self._texture_export_folders: export_folders.ExportFolders | None = None
         self._texture_names = _PrefixIndex()
+        self._texture_full_names: dict[str, list[Asset]] = {}
         self._animation_names = _PrefixIndex()
         self._ensembles: list[dict] | None = None
         # état sérialisé : l'interface le demande souvent, et reconstruire
@@ -663,20 +700,24 @@ class Project:
                     break
         assets.sort(key=lambda asset: asset.rel)
         by_kind, textures, animations = self._build_indexes(assets)
-        export_counts: dict[str, int] = {}
-        for asset in by_kind.get("model", ()):
-            name = (asset.rel.rsplit("/", 1)[-1].split(".")[0] or "modele").casefold()
-            export_counts[name] = export_counts.get(name, 0) + 1
+        export_names = _model_export_names(by_kind.get("model", []))
+        export_reserved = {name.casefold() for name in export_names.values()}
+        full_texture_names: dict[str, list[Asset]] = {}
+        for texture in by_kind.get("texture", ()):
+            full_texture_names.setdefault(_png_stem(texture.stem).casefold(), []).append(texture)
         # Construire sans verrou, puis publier un instantané cohérent en une
         # fois : les autres vues peuvent continuer à lire l'ancien pendant le scan.
         with self._cache_lock:
             self.assets = assets
             self._by_kind = by_kind
-            self._model_export_counts = export_counts
+            self._model_export_names = export_names
+            self._model_export_reserved = export_reserved
             self._texture_names = textures
+            self._texture_full_names = full_texture_names
             self._animation_names = animations
             self._texture_index.clear()
             self._map_index.clear()
+            self._texture_reference_cache.clear()
             self._animation_cache.clear()
             self.scanned_at = started
             self.scan_seconds = round(time.perf_counter() - started_clock, 3)
@@ -767,7 +808,7 @@ class Project:
         settings = self.settings
         # « couleurs v2 » : une couleur par matériau (les vignettes d'avant,
         # colorées par sous-maillage, ne doivent pas être réutilisées)
-        return cache_mod.digest(("rendu", "couleurs-v2", settings.supersample,
+        return cache_mod.digest(("rendu", "couleurs-v3", settings.supersample,
                                  settings.cull, settings.frustum,
                                  settings.max_faces, settings.thumb_faces,
                                  settings.preview_faces, settings.vram_gb,
@@ -788,22 +829,45 @@ class Project:
             self._mesh_bytes += cost
         return meshes
 
+    def _albedo_bindings(self, rel: str):
+        meshes, meta, _ = self._model_mesh_entry(rel)
+        references = meta.get("material_textures") or {}
+        bindings = []
+        if references:
+            resolved, _warnings = self._material_reference_sources(references)
+            for material, roles in resolved.items():
+                choices = {(asset.rel, index): (asset, index)
+                           for asset, index, _name in roles.get("albedo", [])}
+                if len(choices) == 1:
+                    asset, index = next(iter(choices.values()))
+                    bindings.append((material, asset, index, self._version(asset.rel)))
+        else:
+            # Sans référence FMAT, ne colorer que le seul matériau d'un modèle
+            # qui n'a qu'un seul candidat albédo.
+            materials = {mesh.material or "" for mesh in meshes}
+            assets = self.texture_assets_for(rel)
+            if len(materials) == 1 and len(assets) == 1:
+                asset = assets[0]
+                bindings.append((next(iter(materials)), asset, 0, self._version(asset.rel)))
+        return bindings
+
     def _albedo_assets_and_stamps(self, rel: str):
-        assets = self.texture_assets_for(rel)[:8]
-        return [(asset, self._version(asset.rel)) for asset in assets]
+        return [(asset, version) for _material, asset, _index, version in self._albedo_bindings(rel)]
 
     def albedo_samplers(self, rel: str) -> dict:
-        """Échantillonneurs des albédos, partagés entre les modèles qui les utilisent."""
-        assets = self._albedo_assets_and_stamps(rel)
-        stamp = tuple((asset.rel, version) for asset, version in assets)
+        """Échantillonne les albédos résolus pour chaque matériau, sans repli global ambigu."""
+        bindings = self._albedo_bindings(rel)
+        stamp = tuple((material, asset.rel, index, version) for material, asset, index, version in bindings)
         with self._cache_lock:
             cached = self._samplers.get(rel)
             if cached is not None and cached[0] == stamp:
                 self._samplers.move_to_end(rel)
                 return cached[1]
         samplers: dict = {}
-        for asset, version in assets:
-            key = (asset.rel, version)
+        meshes, meta, _ = self._model_mesh_entry(rel)
+        structured_references = bool(meta.get("material_textures"))
+        for material, asset, index, version in bindings:
+            key = (asset.rel, index, version)
             try:
                 with self._sampler_flights.hold(key):
                     with self._cache_lock:
@@ -812,11 +876,11 @@ class Project:
                             self._albedo_cache.move_to_end(key)
                     if sampler is None:
                         file = self.texture_file(asset.rel)
-                        if not file.textures:
+                        texture = next((item for item in file.textures if item.index == index), None)
+                        if texture is None:
                             continue
-                        # BNTX fournit déjà du RGBA : pas de détour par un PNG
-                        # pleine taille à encoder, écrire puis redécoder.
-                        sampler = _make_sampler(file.textures[0].decode(0))
+                        # BNTX fournit déjà du RGBA : pas de détour par un PNG.
+                        sampler = _make_sampler(texture.decode(0))
                         if self._version(asset.rel) == version:
                             with self._cache_lock:
                                 self._albedo_cache[key] = sampler
@@ -825,10 +889,17 @@ class Project:
                                     self._albedo_cache.popitem(last=False)
             except Exception:          # texture illisible : on garde la palette
                 continue
-            samplers[_base_name(asset.stem)] = sampler
-            samplers[asset.stem] = sampler
-            samplers.setdefault("", sampler)
-        now = tuple((asset.rel, version) for asset, version in self._albedo_assets_and_stamps(rel))
+            samplers[material] = sampler
+            # Les alias historiques ne doivent pas écraser le nom d'un autre
+            # matériau quand les références FMAT existent.
+            if not structured_references:
+                samplers[_base_name(asset.stem)] = sampler
+                samplers[asset.stem] = sampler
+        materials = {mesh.material or "" for mesh in meshes}
+        if len(materials) == 1 and next(iter(materials)) in samplers:
+            samplers[""] = samplers[next(iter(materials))]
+        now = tuple((material, asset.rel, index, version)
+                    for material, asset, index, version in self._albedo_bindings(rel))
         if now == stamp:
             with self._cache_lock:
                 self._samplers[rel] = (stamp, samplers)
@@ -848,8 +919,8 @@ class Project:
         """
         textures = ""
         if textured:
-            stamps = [(asset.rel, self._version(asset.rel))
-                      for asset in self.texture_assets_for(rel)]
+            stamps = [(material, asset.rel, index, version)
+                      for material, asset, index, version in self._albedo_bindings(rel)]
             textures = cache_mod.digest(("textures", stamps))
         return cache_mod.digest(("apercu", rel, self._version(rel), width, height,
                                  round(yaw, 2), round(pitch, 2), views,
@@ -1058,9 +1129,11 @@ class Project:
                 # Valider aussi le chemin de rendu, pas seulement l'en-tête BFRES.
                 self.model_preview(rel, 160, 120, face_limit=2000, textured=False)
                 injectable = meta.get("injectable")
-                if injectable is None:  # ancien cache de géométrie, sans cette information
-                    from .blend import why_not_injectable
-                    injectable = not why_not_injectable(self.read_asset(rel))
+                if injectable is None or injectable:
+                    # La présence d'une forme ne suffit pas : la réécriture OBJ/glTF
+                    # ne sait pas préserver toutes les structures BFRES.
+                    from .model_target import why_not_model_target
+                    injectable = not why_not_model_target(self.read_asset(rel))
             elif kind == "texture":
                 # max_size=None force le niveau 0, également utilisé à l'export.
                 self.texture_png(rel, 0)
@@ -1166,6 +1239,33 @@ class Project:
                 self.thumbs.put(key, png)
             return png
 
+    def export_texture(self, rel: str, index: int = 0) -> dict:
+        """PNG séparé par conteneur et par index, sans écraser un autre export."""
+        png = self.texture_png(rel, index)
+        source = self.asset(rel).relative_to(self.root).as_posix()
+        stem = safe_filename_stem(Asset(source, "texture", 0).stem, fallback="texture")
+        base = self.work / "export_textures"
+        resolved = base.resolve()
+        if resolved == self.work or not resolved.is_relative_to(self.work):
+            raise ProjectError("Le dossier d'export sort du dossier de travail.")
+        with self._cache_lock:
+            if self._texture_export_folders is None:
+                self._texture_export_folders = export_folders.ExportFolders(base, self.root, "texture")
+            registry = self._texture_export_folders
+        try:
+            folder = registry.claim(source, stem, f"{stem}--{cache_mod.digest(source)[:8]}")
+            target = folder / f"{folder.name}--{index}.png"
+            with self._export_flights.hold(os.path.normcase(str(folder.resolve()))):
+                current_base = base.resolve()
+                if (current_base == self.work or not current_base.is_relative_to(self.work)
+                        or not folder.resolve().is_relative_to(current_base)
+                        or not registry.owns(folder, source)):
+                    raise ProjectError("Le dossier d'export a changé ou n'appartient plus à cette texture.")
+                write_atomic(target, png)
+        except OSError as exc:
+            raise ProjectError(f"Impossible d'écrire le PNG : {exc}") from exc
+        return {"file": self.shown_path(target), "absolute_file": str(target), "index": index}
+
     def import_texture(self, rel: str, index: int, image: bytes) -> dict:
         """Remplace les pixels d'une texture (même format, mêmes mips)."""
         # Deux imports simultanés d'un même BNTX ne doivent pas se perdre.
@@ -1217,6 +1317,27 @@ class Project:
         points = [point for mesh in meshes for point in mesh.positions]
         lowest = [min(point[i] for point in points) for i in range(3)]
         highest = [max(point[i] for point in points) for i in range(3)]
+        references = meta.get("material_textures") or {}
+        listing = []
+        reference_warnings = []
+        if references:
+            resolved, reference_warnings = self._material_reference_sources(references)
+            seen = set()
+            for material, roles in resolved.items():
+                for role, entries in roles.items():
+                    for asset, index, reference in entries:
+                        identity = (material, asset.rel, index)
+                        if identity not in seen:
+                            seen.add(identity)
+                            listing.append({"rel": asset.rel, "name": reference, "index": index,
+                                            "size": asset.size, "mtime": asset.mtime,
+                                            "role": role, "label": ROLE_LABELS.get(role, "?"),
+                                            "material": material, "match": "référence"})
+        else:
+            listing = [{"rel": asset.rel, "name": asset.stem, "index": 0,
+                        "size": asset.size, "mtime": asset.mtime, "role": role,
+                        "label": ROLE_LABELS.get(role, "?"), "match": "candidat"}
+                       for role, assets in self.texture_maps_for(rel).items() for asset in assets[:4]]
         return {
             "rel": rel,
             "revision": cache_mod.digest(stamp, tuple(
@@ -1230,17 +1351,13 @@ class Project:
             "vertices": sum(len(m.positions) for m in meshes),
             "materials": meta.get("materials") or sorted({m.material for m in meshes if m.material}),
             "bounds": [round(highest[i] - lowest[i], 4) for i in range(3)],
-            "warnings": meta.get("warnings", [])[:8],
-            "textures": [{"rel": asset.rel, "name": asset.stem,
-                          "size": asset.size, "mtime": asset.mtime,
-                          "role": role,
-                          "label": ROLE_LABELS.get(role, "?")}
-                         for role, assets in self.texture_maps_for(rel).items()
-                         for asset in assets[:4]][:24],
+            "warnings": (meta.get("warnings", []) + reference_warnings)[:24],
+            "textures": listing[:128],
+            "texture_match": "références du matériau" if references else "candidats par nom",
             "animations": [{"rel": asset.rel, "name": asset.stem,
                             "size": asset.size}
                            for asset in self.animations_for(rel)][:32],
-            "textured": bool(self.texture_assets_for(rel)
+            "textured": bool(self._albedo_bindings(rel)
                              and self.settings.textured_previews),
         }
 
@@ -1332,10 +1449,14 @@ class Project:
             ) from exc
         report = getattr(file, "v10_report", None)
         meta = {
-            "warnings": list(file.warnings[:12]),
+            "warnings": list(file.warnings[:12]) + (
+                [f"{len(file.warnings) - 12} remarque(s) de décodage supplémentaires omises."]
+                if len(file.warnings) > 12 else []),
             "version": f"{file.version >> 16}.{(file.version >> 8) & 0xFF}.{file.version & 0xFF}",
             "model": (file.models[0].name if file.models else ""),
             "materials": [m.name for m in file.models[0].materials] if file.models else [],
+            "material_textures": getattr(report, "material_textures", {}) if report else {},
+            "structured": bool(getattr(report, "structured", False)) if report else False,
             "injectable": any(model.shapes for model in file.models),
             "dropped": getattr(report, "dropped", 0) if report else 0,
             "submeshes": getattr(report, "submeshes", len(meshes)) if report else len(meshes),
@@ -1356,7 +1477,7 @@ class Project:
         return meshes, meta
 
     def model_meshes(self, rel: str) -> list[MeshData]:
-        """Maillages d'un modèle (public : l'import .blend s'en sert pour l'échelle)."""
+        """Maillages d'un modèle, utilisés notamment pour l'adaptation d'échelle."""
         return self._model_meshes(rel)
 
     def preview_plan(self, rel: str, width: int = 640, height: int = 480,
@@ -1558,8 +1679,125 @@ class Project:
                 self._map_index[rel] = buckets
         return buckets
 
+    def _material_reference_sources(self, references: dict[str, list[str]]) -> tuple[dict, list[str]]:
+        """Résout uniquement les noms explicites FMAT ; ne choisit jamais entre doublons."""
+        with self._cache_lock:
+            index = self._texture_full_names
+        resolved: dict[str, dict[str, list[tuple[Asset, int, str]]]] = {}
+        warnings: list[str] = []
+        lookup: dict[str, tuple[Asset, int] | None] = {}
+        for material, names in references.items():
+            roles: dict[str, list[tuple[Asset, int, str]]] = {}
+            for reference in dict.fromkeys(names):
+                key = _png_stem(reference).casefold()
+                role = texture_maps.classify(reference)
+                if key not in lookup:
+                    candidates = index.get(key, [])
+                    chosen = None
+                    if len(candidates) == 1:
+                        asset = candidates[0]
+                        try:
+                            cache_key = (asset.rel, self._version(asset.rel))
+                            with self._cache_lock:
+                                entries = self._texture_reference_cache.get(cache_key)
+                            if entries is None:
+                                container = self.texture_file(asset.rel)
+                                entries = tuple((texture.index, texture.name) for texture in container.textures)
+                                with self._cache_lock:
+                                    self._texture_reference_cache[cache_key] = entries
+                                    self._texture_reference_cache.move_to_end(cache_key)
+                                    while len(self._texture_reference_cache) > 256:
+                                        self._texture_reference_cache.popitem(last=False)
+                            exact = [index for index, name in entries if _png_stem(name or "").casefold() == key]
+                            # Un fichier portant exactement le nom demandé et
+                            # contenant une seule image est également non ambigu.
+                            if len(exact) == 1:
+                                chosen = (asset, exact[0])
+                            elif not exact and len(entries) == 1:
+                                chosen = (asset, entries[0][0])
+                        except (ProjectError, HookyError, OSError, ValueError, IndexError):
+                            pass
+                    lookup[key] = chosen
+                    if chosen is None:
+                        detail = "plusieurs fichiers" if len(candidates) > 1 else "absente ou illisible"
+                        warnings.append(f"Texture référencée {reference} : {detail}, non reliée.")
+                chosen = lookup[key]
+                if chosen:
+                    roles.setdefault(role, []).append((*chosen, reference))
+            resolved[material] = roles
+        return resolved, warnings
+
+    def _export_referenced_maps(self, rel: str, folder: Path, references: dict, limit: int) -> dict:
+        resolved, warnings = self._material_reference_sources(references)
+        files: list[dict] = []
+        exported: dict[tuple[str, int], str] = {}
+        used: set[str] = set()
+        material_maps: dict[str, dict[str, str]] = {}
+
+        def unique(stem: str, identity: str) -> str:
+            # Les noms viennent d'un fichier non fiable, jamais d'un chemin.
+            stem = safe_filename_stem(stem, fallback="texture")
+            name = f"{stem}.png"
+            if name.casefold() in used:
+                suffix = cache_mod.digest(identity)[:8]
+                name = f"{stem}--{suffix}.png"
+                number = 2
+                while name.casefold() in used:
+                    name = f"{stem}--{suffix}-{number}.png"
+                    number += 1
+            used.add(name.casefold())
+            return name
+
+        for material, roles in resolved.items():
+            bound: dict[str, str] = {}
+            for role, items in roles.items():
+                available = []
+                for asset, index, reference in items:
+                    identity = (asset.rel, index)
+                    if identity not in exported:
+                        if len(exported) >= limit:
+                            if not any("limite" in warning for warning in warnings):
+                                warnings.append(f"Limite de {limit} textures atteinte ; export incomplet.")
+                            continue
+                        try:
+                            png = self.texture_png(asset.rel, index)
+                            name = unique(_png_stem(reference), f"{asset.rel}:{index}")
+                            (folder / name).write_bytes(png)
+                        except (ProjectError, HookyError, OSError, IndexError, ValueError) as error:
+                            warnings.append(f"{reference} illisible : {error}")
+                            continue
+                        exported[identity] = name
+                        files.append({"role": role, "label": ROLE_LABELS.get(role, "?"), "file": name,
+                                      "source": asset.rel, "index": index, "materials": []})
+                    name = exported[identity]
+                    available.append(name)
+                    next(item for item in files if item["file"] == name)["materials"].append(material)
+                choices = list(dict.fromkeys(available))
+                if len(choices) == 1:
+                    bound[role] = choices[0]
+                elif len(choices) > 1:
+                    warnings.append(f"{material} : plusieurs cartes {role}, branchement automatique omis.")
+            # Les canaux glTF G/B exigent une image combinée distincte par matériau.
+            if "metalrough" not in bound and ("roughness" in bound or "metallic" in bound):
+                try:
+                    rough = (folder / bound["roughness"]).read_bytes() if "roughness" in bound else None
+                    metal = (folder / bound["metallic"]).read_bytes() if "metallic" in bound else None
+                    packed = texture_maps.compose_metal_roughness(rough, metal)
+                    if packed:
+                        name = unique(f"{material}_MetalRough", f"{rel}:{material}:metalrough")
+                        (folder / name).write_bytes(packed)
+                        bound["metalrough"] = name
+                        files.append({"role": "metalrough", "label": "MR", "file": name,
+                                      "source": "cartes combinées", "materials": [material]})
+                except (HookyError, OSError, ValueError) as error:
+                    warnings.append(f"{material} : combinaison métal/rugosité impossible : {error}")
+            material_maps[material] = bound
+        self._write_textures_note(folder, _display_name(Path(rel).name.split(".")[0]), rel, files, warnings)
+        return {"maps": {}, "material_maps": material_maps, "files": files,
+                "textures": len(files), "warnings": warnings, "cacheable": not warnings}
+
     def export_maps_for(self, rel: str, folder: Path,
-                        limit: int = 24) -> dict:
+                        limit: int = 128) -> dict:
         """Écrit **toutes** les cartes du modèle en PNG, plus ``TEXTURES.md``.
 
         :return: ``{maps: {rôle: fichier}, files: [...], textures: n,
@@ -1567,6 +1805,10 @@ class Project:
         """
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
+        meshes, meta, _stamp = self._model_mesh_entry(rel)
+        references = meta.get("material_textures")
+        if references:
+            return self._export_referenced_maps(rel, folder, references, limit)
         buckets = self.texture_maps_for(rel)
         base = _display_name(Path(rel).name.split(".")[0])
         maps: dict[str, str] = {}
@@ -1577,6 +1819,7 @@ class Project:
         written = 0
 
         def unique_name(stem: str, identity: str) -> str:
+            stem = safe_filename_stem(stem, fallback="texture")
             name = f"{stem}.png"
             if name.casefold() in used:
                 name = f"{stem}--{cache_mod.digest(identity)[:8]}.png"
@@ -1623,32 +1866,45 @@ class Project:
                 files.append({"role": "metalrough", "label": "MR", "file": name,
                               "source": " + ".join(parts)})
 
+        cacheable = not warnings
+        material_maps: dict[str, dict[str, str]] = {}
+        materials = {mesh.material or mesh.name for mesh in meshes}
         if not maps:
-            warnings.append("aucune texture ne porte le nom de ce modèle : "
-                            "rien à brancher (le modèle sort sans couleur)")
+            warnings.append("Aucune texture candidate trouvée : le modèle sort sans image.")
         else:
-            blendfile.write_shader_script(folder, base)   # branchement dans Blender
+            warnings.append("Références de matériaux indisponibles : textures candidates par nom, association heuristique.")
+            if len(materials) == 1:
+                bound = {}
+                for role in ROLE_ORDER:
+                    choices = [item["file"] for item in files if item["role"] == role]
+                    if len(choices) == 1:
+                        bound[role] = choices[0]
+                    elif len(choices) > 1:
+                        warnings.append(f"Plusieurs cartes {role} candidates : liaison automatique omise.")
+                if (len(buckets.get("roughness", [])) > 1 or len(buckets.get("metallic", [])) > 1):
+                    bound.pop("metalrough", None)
+                material_maps[next(iter(materials))] = bound
+            else:
+                warnings.append("Plusieurs matériaux sans référence explicite : aucune carte n'est branchée automatiquement.")
         self._write_textures_note(folder, base, rel, files, warnings)
-        return {"maps": maps, "files": files, "textures": len(files),
-                "warnings": warnings}
+        return {"maps": maps, "material_maps": material_maps, "files": files,
+                "textures": len(files), "warnings": warnings, "cacheable": cacheable}
 
     def _write_textures_note(self, folder: Path, base: str, rel: str,
                              files: list[dict], warnings: list[str]) -> Path:
         """``TEXTURES.md`` : quelle image va sur quelle entrée de shader."""
         lines = [f"# Textures de {base}", "",
                  f"Modèle : `{rel}`", "",
-                 "Chaque fichier va sur **une** entrée du shader. Dans Blender, ouvre le",
-                 "matériau → Principled BSDF, puis glisse l'image sur l'entrée indiquée.", ""]
-        if files:
-            lines += ["Pour ne pas le faire à la main : **`assembler_shaders.py`** (dans ce",
-                      "dossier) branche tout d'un coup — onglet Scripting ▸ Open ▸ Run Script,",
-                      "ou `blender --background --python assembler_shaders.py`.", ""]
-        lines += ["| Fichier | Rôle | Entrée Blender |", "| --- | --- | --- |"]
+                 "Les références non ambiguës peuvent être reliées par matériau dans le glTF.",
+                 "Les rôles sont déduits des noms ; vérifie-les avant utilisation.",
+                 "Les images non reliées restent disponibles pour un branchement manuel.", ""]
+        lines += ["| Fichier | Rôle | Matériaux référents | Entrée possible |", "| --- | --- | --- | --- |"]
         for item in files:
             help_text = texture_maps.ROLE_HELP.get(item["role"], "")
-            lines.append(f"| `{item['file']}` | {item['label']} | {help_text} |")
+            materials = ", ".join(item.get("materials", [])) or "—"
+            lines.append(f"| `{item['file']}` | {item['label']} | {materials} | {help_text} |")
         if not files:
-            lines.append("| — | — | aucune texture exportée |")
+            lines.append("| — | — | — | aucune texture exportée |")
             if warnings:
                 lines += ["", "## Remarques", ""] + [f"* {w}" for w in warnings]
             path = Path(folder) / "TEXTURES.md"
@@ -1663,12 +1919,12 @@ class Project:
                   "* normale : nœud **Normal Map**, force (`Strength`) 1.0 ;",
                   "* métal : 1.0 quand la carte `Mtl` est blanche à cet endroit, sinon 0 ;",
                   "* rugosité : `Roughness` reçoit la carte directement ;",
-                  "* si tu n'as **que** l'albédo (pas de `Nrm`, `Rgh`…) : ce n'est pas une",
-                  "  erreur, le modèle n'a pas plus de cartes — garde `Roughness` ≈ 0.5.",
+                  "* si seul l'albédo est présent, d'autres cartes peuvent être absentes,",
+                  "  illisibles ou non résolues ; vérifie les remarques avant de conclure.",
                   "",
                   "## Rugosité + métal : deux façons", "",
-                  "* **Deux images** (`Rgh` sur Roughness, `Mtl` sur Metallic) : le plus",
-                  "  lisible dans Blender, c'est ce que fait `assembler_shaders.py` ;",
+                  "* **Deux images** (`Rgh` sur Roughness, `Mtl` sur Metallic) :",
+                  "  branche-les manuellement si nécessaire ;",
                   "* **Une image** `*_MetalRough.png` : c'est l'emballage glTF/Unity —",
                   "  **G = rugosité, B = métal**, R et A ignorés. Pour l'utiliser dans",
                   "  Blender : nœud `Separate Color`, puis G → Roughness et B → Metallic.",
@@ -1708,13 +1964,21 @@ class Project:
 
     # ------------------------------------------------------------------ UV
     def _uv_texture(self, rel: str):
-        """Albédo le plus probable du modèle, ou ``None`` (jamais une erreur)."""
-        for asset in self.texture_assets_for(rel):
-            try:
-                return asset, self.texture_png(asset.rel, 0)
-            except Exception:      # texture illisible : on juge les UV seuls
-                continue
-        return None, None
+        """Atlas unique pour toutes les formes, ou damier si la liaison est ambiguë."""
+        meshes, _meta, _ = self._model_mesh_entry(rel)
+        materials = {mesh.material or "" for mesh in meshes if mesh.uvs}
+        bindings = self._albedo_bindings(rel)
+        by_material = {material: (asset, index) for material, asset, index, _version in bindings}
+        if not materials or not materials.issubset(by_material):
+            return None, None
+        distinct = {(by_material[name][0].rel, by_material[name][1]) for name in materials}
+        if len(distinct) != 1:
+            return None, None
+        asset, index = by_material[next(iter(materials))]
+        try:
+            return asset, self.texture_png(asset.rel, index)
+        except (ProjectError, HookyError, OSError, ValueError, IndexError):
+            return None, None
 
     def uv_info(self, rel: str) -> dict:
         """Diagnostic des UV : ce qui se voit (bornes, débordements, étirement)."""
@@ -1743,14 +2007,24 @@ class Project:
         return result
 
     def _model_export_folder(self, rel: str) -> Path:
-        """Garde l'ancien nom sauf si deux modèles auraient le même dossier."""
-        name = Path(rel).name.split(".")[0] or "modele"
+        """Noms portables, attribués à la source même après un nouveau scan."""
+        source = self.asset(rel).relative_to(self.root).as_posix()
+        base = self.work / "export"
+        resolved = base.resolve()
+        if resolved == self.work or not resolved.is_relative_to(self.work):
+            raise ProjectError("Le dossier d'export sort du dossier de travail.")
         with self._cache_lock:
-            collisions = self._model_export_counts.get(name.casefold(), 0)
-        if collisions > 1:
-            name += "--" + cache_mod.digest(rel)[:8]
-        folder = self.work / "export" / name
-        if not folder.resolve().is_relative_to(self.work):
+            name = self._model_export_names.get(source)
+            stem = _model_export_stem(source)
+            if self._model_export_folders is None:
+                self._model_export_folders = export_folders.ExportFolders(base, self.root, "model")
+            try:
+                folder = self._model_export_folders.claim(
+                    source, name or stem, f"{stem}--{cache_mod.digest(source)[:8]}",
+                    reserved=self._model_export_reserved, preferred_is_reserved=name is not None)
+            except (OSError, ValueError) as exc:
+                raise ProjectError(f"Impossible de réserver un dossier d'export : {exc}") from exc
+        if not folder.resolve().is_relative_to(resolved):
             raise ProjectError("Le dossier d'export sort du dossier de travail.")
         return folder
 
@@ -1764,14 +2038,21 @@ class Project:
                 return None
             sources = []
             if textures:
-                buckets = self.texture_maps_for(rel)
-                for role in ROLE_ORDER:
-                    for asset in buckets.get(role, []):
-                        # Un appariement très large ne doit pas coûter autant
-                        # que le scan pour simplement consulter le cache.
-                        if len(sources) >= 128:
-                            return None
-                        sources.append((role, asset.rel, self._version(asset.rel)))
+                _meshes, meta, _model_stamp = self._model_mesh_entry(rel)
+                references = meta.get("material_textures") or {}
+                if references:
+                    with self._cache_lock:
+                        exact_index = self._texture_full_names
+                    candidates = [(texture_maps.classify(name), asset)
+                                  for names in references.values() for name in names
+                                  for asset in exact_index.get(_png_stem(name).casefold(), [])]
+                else:
+                    buckets = self.texture_maps_for(rel)
+                    candidates = [(role, asset) for role in ROLE_ORDER for asset in buckets.get(role, [])]
+                for role, asset in candidates:
+                    if len(sources) >= 512:
+                        return None
+                    sources.append((role, asset.rel, self._version(asset.rel)))
         except (ProjectError, OSError):
             return None
         with self._cache_lock:
@@ -1795,7 +2076,7 @@ class Project:
                          staged_zip: Path | None) -> None:
         # Une carte illisible peut redevenir lisible sans changer sa date : ne
         # jamais figer un export partiel, à l'exception d'une absence de cartes.
-        if key is None or (found["warnings"] and key[-1]):
+        if key is None or (not found.get("cacheable", not found["warnings"]) and key[-1]):
             return
         try:
             cost = sum(path.stat().st_size for path in paths)
@@ -1825,33 +2106,26 @@ class Project:
             self._export_cache[key] = (files, copy.deepcopy(found), zipped, actual)
             self._export_cache_bytes += actual
 
-    def export_blend(self, rel: str, textures: bool = True, *, archive: bool = False) -> dict:
-        """Export glTF et, si possible, vrai .blend ; sinon une recette explicite."""
-        return self._export_model_bundle(rel, textures, make_blend=True, archive=archive)
-
     def export_model(self, rel: str, textures: bool = True, *, archive: bool = False) -> dict:
         """Exporte la géométrie et les cartes ; le ZIP optionnel ne contient que cet export."""
-        return self._export_model_bundle(rel, textures, make_blend=False, archive=archive)
+        return self._export_model_bundle(rel, textures, archive=archive)
 
-    def _export_model_bundle(self, rel: str, textures: bool, *,
-                             make_blend: bool, archive: bool) -> dict:
+    def _export_model_bundle(self, rel: str, textures: bool, *, archive: bool) -> dict:
         import tempfile
         import zipfile
 
         meshes, meta, stamp = self._model_mesh_entry(rel)
+        source = self.asset(rel).relative_to(self.root).as_posix()
         folder = self._model_export_folder(rel)
         # Un autre export du même dossier ne peut pas mélanger ses fichiers avec
         # celui-ci. La préparation isolée évite d'utiliser d'anciennes textures.
-        with self._export_flights.hold(str(folder)):
+        with self._export_flights.hold(os.path.normcase(str(folder.resolve()))):
             try:
                 with tempfile.TemporaryDirectory(prefix="model-export-", dir=self.work / "cache") as tmp:
                     stage = Path(tmp) / folder.name
                     stage.mkdir()
-                    key = (None if make_blend else
-                           self._export_signature(rel, textures, stamp, folder.name, archive))
+                    key = self._export_signature(rel, textures, stamp, folder.name, archive)
                     cached = self._cached_export(key)
-                    blend_result = None
-                    executable = None
                     if cached is not None:
                         files, found, cached_zip = cached
                         for name, data in files:
@@ -1861,20 +2135,16 @@ class Project:
                         if textures:
                             found = self.export_maps_for(rel, stage)
                         else:
-                            found = {"maps": {}, "files": [], "textures": 0, "warnings": []}
-                            self._write_textures_note(stage, folder.name, rel, [],
-                                                      ["Export des textures désactivé."])
+                            found = {"maps": {}, "material_maps": {}, "files": [], "textures": 0,
+                                     "warnings": ["Export des textures désactivé."]}
+                            self._write_textures_note(stage, folder.name, rel, [], found["warnings"])
                         blender.export_bundle(meshes, stage, folder.name,
-                                              textures=self._albedo_index(rel, stage, found["files"]) if textures else {},
-                                              maps=found["maps"] or None)
-                        if make_blend:
-                            executable = blendfile.find_blender(self.settings.blender_path)
-                            blend_result = blendfile.make_blend(stage, folder.name, blender=executable)
+                                              material_maps=found.get("material_maps", {}),
+                                              warnings=meta.get("warnings", []) + found["warnings"])
 
-                    # Lister les fichiers physiques, dont MTL et scripts, et non
+                    # Lister les fichiers physiques, dont MTL et PNG, et non
                     # seulement ceux renvoyés par le générateur glTF/OBJ.
-                    produced = sorted(path for path in stage.iterdir()
-                                      if path.is_file() and not path.name.endswith(".blend1"))
+                    produced = sorted(path for path in stage.iterdir() if path.is_file())
                     if not produced or not (stage / f"{folder.name}.gltf").is_file() \
                             or not (stage / f"{folder.name}.bin").is_file():
                         raise ProjectError("Export incomplet : le glTF ou son fichier .bin manque.")
@@ -1886,20 +2156,25 @@ class Project:
                         with zipfile.ZipFile(staged_zip, "w", compression=zipfile.ZIP_DEFLATED,
                                              compresslevel=1, allowZip64=True) as output:
                             for path in produced:
-                                # Les PNG et .blend sont déjà comprimés ; les
-                                # recompresser coûte du CPU sans gain notable.
+                                # Les PNG sont déjà comprimés.
                                 compression = (zipfile.ZIP_STORED if path.suffix.lower()
-                                               in {".png", ".blend"} else zipfile.ZIP_DEFLATED)
+                                               == ".png" else zipfile.ZIP_DEFLATED)
                                 output.write(path, f"{folder.name}/{path.name}",
                                              compress_type=compression)
-                    if cached is None and not make_blend:
+                    if cached is None:
                         self._remember_export(key, produced, found, staged_zip if archive else None)
-                    folder.mkdir(parents=True, exist_ok=True)
+                    base = (self.work / "export").resolve()
+                    if (base == self.work or not base.is_relative_to(self.work)
+                            or not folder.resolve().is_relative_to(base)
+                            or self._model_export_folders is None
+                            or not self._model_export_folders.owns(folder, source)):
+                        raise ProjectError("Le dossier d'export a changé ou n'appartient plus à ce modèle.")
                     produced_names = {path.name for path in produced}
                     stale_files = sorted(path.name for path in folder.iterdir()
-                                         if path.is_file() and path.name not in produced_names)
-                    # Remplacer chaque fichier atomiquement ; un ancien .blend
-                    # n'est pas touché si Blender a échoué ou est absent.
+                                         if path.is_file() and path.name not in produced_names
+                                         and path.name != export_folders.OWNER_FILE)
+                    # Remplacer chaque fichier atomiquement ; les anciens fichiers
+                    # sans homologue ne sont pas effacés et restent signalés.
                     for path in produced:
                         os.replace(path, folder / path.name)
                     if archive:
@@ -1918,29 +2193,12 @@ class Project:
                     "textures": found["textures"], "maps": found["files"],
                     "faces": sum(len(mesh.faces) for mesh in meshes),
                     "submeshes": len(meshes), "stale_files": stale_files,
-                    "warnings": meta.get("warnings", [])[:6] + found["warnings"]
+                    "warnings": meta.get("warnings", []) + found["warnings"]
                     + (["Le dossier contient aussi des fichiers plus anciens ; "
                         "le ZIP ne contient que cet export."] if stale_files else [])}
         if archive_id:
             response["download_url"] = f"/api/export/download?id={archive_id}"
-            response["download_name"] = f"{folder.name}-blender.zip"
-        if blend_result is not None:
-            # La commande doit viser le dossier final, jamais le temporaire supprimé.
-            command = blendfile._display_command(blendfile._blender_command(
-                executable or "blender", folder / blendfile.SCRIPT_NAME,
-                folder / f"{folder.name}.gltf", folder / f"{folder.name}.blend"))
-            message = blend_result["message"]
-            if blend_result.get("command"):
-                message = message.replace(blend_result["command"], command)
-            response.update({
-                "method": blend_result["method"],
-                "blend": self.shown_path(folder / f"{folder.name}.blend")
-                if blend_result["blend"] else "",
-                "script": blendfile.SCRIPT_NAME, "command": command,
-                "message": message, "output": (blend_result.get("output") or "")[-1500:],
-                "blender": str(executable) if executable else "",
-                "platform_note": blendfile.platform_note(),
-            })
+            response["download_name"] = f"{folder.name}-modeles.zip"
         return response
 
     @staticmethod
@@ -2136,12 +2394,17 @@ class Project:
                 if key in seen:
                     continue
                 seen.add(key)
-                stem = Path(rel).name.split(".")[0] or "asset"
+                stem = _model_export_stem(rel) if kind == "model" else safe_filename_stem(
+                    rel.rsplit("/", 1)[-1].split(".", 1)[0])
                 # Deux fichiers homonymes de répertoires différents ne doivent
-                # ni fusionner leurs dossiers ni créer des entrées ZIP dupliquées.
+                # ni fusionner leurs dossiers ni créer des entrées ZIP dupliquées,
+                # même si un nom réel imite le suffixe de hachage.
                 unique = stem
                 if (kind, unique.casefold()) in used:
-                    unique = f"{stem}--{cache_mod.digest(rel, index)[:8]}"
+                    base = f"{stem}--{cache_mod.digest(rel, index)[:8]}"
+                    unique, number = base, 2
+                    while (kind, unique.casefold()) in used:
+                        unique, number = f"{base}-{number}", number + 1
                 used.add((kind, unique.casefold()))
                 if kind == "texture":
                     png = self.texture_png(rel, index)
@@ -2150,18 +2413,18 @@ class Project:
                     textures += 1
                     continue
                 target = Path(folder) / unique
+                meshes, meta, _ = self._model_mesh_entry(rel)
                 maps = self.export_maps_for(rel, target)
                 written = blender.export_bundle(
-                    self._model_meshes(rel), target, stem,
-                    textures=self._albedo_index(rel, target, maps["files"]),
-                    maps=maps["maps"] or None)
+                    meshes, target, stem, material_maps=maps.get("material_maps", {}),
+                    warnings=meta.get("warnings", []) + maps["warnings"])
                 # tout ce que l'export a produit : le .bin du glTF et les PNG
                 # compris (sans le .bin, Blender refuse le glTF)
                 for produced in sorted(target.rglob("*")):
                     if produced.is_file():
                         relative = produced.relative_to(target)
                         compression = (zipfile.ZIP_STORED if produced.suffix.lower()
-                                       in {".png", ".blend"} else zipfile.ZIP_DEFLATED)
+                                       == ".png" else zipfile.ZIP_DEFLATED)
                         archive.write(produced, f"modeles/{unique}/{relative.as_posix()}",
                                       compress_type=compression)
                 lines.append(f"[modèle] {rel} ({len(written)} fichier(s) + "
@@ -2171,74 +2434,6 @@ class Project:
             archive.writestr("LISEZMOI.txt", "\n".join(lines) + "\n")
         if not models and not textures:
             raise ProjectError("Rien à exporter dans cette sélection.")
-        return buffer.getvalue()
-
-    def export_selection_blend(self, items: list[dict]) -> bytes:
-        """Un seul ZIP pour toute la sélection : un ``.blend`` par modèle.
-
-        Un modèle sans ``.blend`` (Blender absent) apporte quand même son script
-        ``creer_blend.py`` et sa commande, consignée dans ``LIRE-MOI.txt`` : le
-        ZIP est toujours utilisable, et jamais présenté comme complet s'il ne
-        l'est pas.
-        """
-        import io
-        import zipfile
-
-        if not isinstance(items, list):
-            raise ProjectError("Sélection invalide.")
-        models = list(dict.fromkeys(str(item.get("rel") or "") for item in items
-                                   if str(item.get("kind") or "") == "model" and item.get("rel")))
-        if not models:
-            raise ProjectError("Sélectionne au moins un modèle pour un export .blend.")
-        if len(models) > 50:
-            raise ProjectError(f"{len(models)} modèles d'un coup, c'est trop "
-                               "(50 maximum) : découpe la sélection.")
-        buffer = io.BytesIO()
-        notes = ["HookyCreator — export .blend", "",
-                 "Chaque dossier contient le modèle prêt pour Blender :",
-                 "  <modele>.gltf + <modele>.bin  →  à ouvrir, ou à passer au script",
-                 "  creer_blend.py                →  fabrique <modele>.blend",
-                 "  <modele>.blend                →  présent seulement si Blender a été",
-                 "                                   trouvé au moment de l'export",
-                 ""]
-        blends = 0
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            for rel in models:
-                name = self._model_export_folder(rel).name
-                try:
-                    # L'archive isolée garantit que deux exports simultanés ne
-                    # mélangent jamais leurs textures ou un ancien .blend.
-                    result = self.export_blend(rel, archive=True)
-                    download = self.export_download(result["download_url"].split("=", 1)[1])
-                    try:
-                        with zipfile.ZipFile(download) as current:
-                            for info in current.infolist():
-                                with current.open(info) as source, archive.open(info, "w") as target:
-                                    shutil.copyfileobj(source, target, length=1024 * 1024)
-                    finally:
-                        download.unlink(missing_ok=True)
-                except (ProjectError, OSError, zipfile.BadZipFile) as error:
-                    notes.append(f"{name} : échec ({error})")
-                    continue
-                if result["method"] == "blender":
-                    blends += 1
-                    notes.append(f"{name} : {name}.blend écrit par Blender.")
-                else:
-                    notes.append(
-                        f"{name} : pas de nouveau .blend (Blender absent ou export échoué) — depuis le "
-                        f"dossier {name}/, lance :")
-                    # Le script connaît déjà les deux noms et les échappe ;
-                    # ne pas interpoler un nom de projet dans une commande shell.
-                    recipe = blendfile._display_command([
-                        "blender", "--background", "--factory-startup", "--python", "creer_blend.py"])
-                    notes.append(f"    {recipe}")
-                    if sys.platform.startswith("win"):
-                        notes.append("    (à lancer dans PowerShell)")
-            notes.append("")
-            notes.append(f"{blends} fichier(s) .blend sur {len(models)} modèle(s).")
-            notes.append("Le glTF, le .bin et les PNG sont joints : l'export "
-                         "reste utilisable sans Blender.")
-            archive.writestr("LIRE-MOI.txt", "\n".join(notes) + "\n")
         return buffer.getvalue()
 
     def build_mod(self, name: str = "HookyMod") -> dict:

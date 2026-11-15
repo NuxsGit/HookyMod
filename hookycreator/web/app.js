@@ -15,8 +15,6 @@ const state = {
   models: [],
   ensembles: [],
   textures: [],
-  blends: [],
-  blend: { ref: "", objects: [] },
   busy: 0,
   selection: new Set(),
   anchor: null,
@@ -39,7 +37,6 @@ const assetValidation = new AssetValidationQueue({ onChange: updateValidatedAsse
 let apiThumbnailHold = null;
 let apiValidationHold = null;
 let inspectionSequence = 0;
-let blendInspectionSequence = 0;
 let ensembleLoad = null;
 let ensembleRenderSequence = 0;
 let projectSnapshotRevision = null;
@@ -224,7 +221,7 @@ function showView(view, options = {}) {
   if (view === "textures") renderTextures();
   if (view === "sounds") renderSounds();
   if (view === "mobs") renderMobs();
-  if (view === "blender") renderBlends();
+  if (view === "import") renderModelImport();
   if (view === "settings") { renderSettings(); refreshSystem(); }
 }
 
@@ -237,7 +234,7 @@ const VIEW_LABELS = {
   textures: "Textures",
   sounds: "Sons",
   mobs: "Mobs",
-  blender: "Blender",
+  import: "Importer un modèle",
   settings: "Réglages",
 };
 
@@ -375,8 +372,8 @@ function updateValidatedAssets() {
   if (state.view === "textures") errors = summary(state.textureCandidates, "texture", "texture(s)", "#texture-count").errors;
   if (state.view === "ensembles") errors = summary(state.ensembleCandidates, "model", "ensemble(s)", "#ensemble-count").errors;
   if (state.view === "sounds") errors = summary(state.soundCandidates, "sound", "son(s)", "#sound-count").errors;
-  if (state.view === "mobs" || state.view === "blender") {
-    const selector = state.view === "mobs" ? "#mob-validation-status" : "#blend-validation-status";
+  if (state.view === "mobs" || state.view === "import") {
+    const selector = state.view === "mobs" ? "#mob-validation-status" : "#model-import-validation-status";
     const model = summary(state.chooserModels, "model", "modèle(s)", selector);
     const texture = summary(state.chooserTextures, "texture", "texture(s)", "#mob-texture-validation-status");
     errors = model.errors + (state.view === "mobs" ? texture.errors : 0);
@@ -408,7 +405,8 @@ function modelThumb(asset) {
 // 320 px : la tuile en fait 160, et une texture de 1024² pèse 20 fois plus
 // lourd pour des pixels que l'écran ne montre jamais
 function textureThumb(asset, size = 320) {
-  return `/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=0&thumb=1`
+  const index = Number.isInteger(asset.index) && asset.index >= 0 ? asset.index : 0;
+  return `/api/texture/png?path=${encodeURIComponent(asset.rel)}&index=${index}&thumb=1`
     + `&max=${size}`
     + (asset.mtime ? `&v=${asset.mtime}` : "") + imageRevisionQuery();
 }
@@ -447,7 +445,8 @@ function tileMarkup(asset, kind) {
                    : "aperçu désactivé")
     : `<img decoding="async" alt="" data-thumb="${esc(textureThumb(asset))}">`;
   return `
-    <article class="tile ${chosen ? "selected" : ""}" data-kind="${kind}"
+    <article class="tile ${chosen ? "selected" : ""}" role="button" tabindex="0"
+             aria-label="Ouvrir ${esc(asset.name)}" data-kind="${kind}"
              data-rel="${esc(asset.rel)}" data-key="${esc(key)}"
              data-check-kind="${kind}" data-check-rel="${esc(asset.rel)}" hidden>
       <button class="pick" data-pick="${esc(key)}" title="Sélectionner (Ctrl+clic)">✓</button>
@@ -504,8 +503,6 @@ async function renderEnsembles() {
         return;
       }
       state.ensembles = payload.ensembles || [];
-      state.blender = payload.blender || null;
-      renderBlenderState();
     } catch (error) {
       if (render === ensembleRenderSequence && state.view === "ensembles") toast(error.message, "error");
       return;
@@ -521,7 +518,8 @@ async function renderEnsembles() {
   thumbnailQueue.release(grid);
   grid.innerHTML = shown.length
     ? shown.map((row) => `
-      <article class="tile ensemble" data-kind="model" data-rel="${esc(row.rel)}"
+      <article class="tile ensemble" role="button" tabindex="0" aria-label="Ouvrir ${esc(row.name)}"
+               data-kind="model" data-rel="${esc(row.rel)}"
                data-key="model:${esc(row.rel)}" data-ensemble="1"
                data-check-kind="model" data-check-rel="${esc(row.rel)}" hidden>
         <button class="pick" data-pick="model:${esc(row.rel)}" title="Sélectionner (Ctrl+clic)">✓</button>
@@ -612,7 +610,7 @@ async function openModel(rel, options = {}) {
     { id: "detail", label: "Détaillé", faces: 400000 },
     { id: "rapide", label: "Rapide", faces: 30000 },
   ];
-  const textured = info.textures.length ? "&tex=1" : "";
+  const textured = info.textured ? "&tex=1" : "&tex=0";
   const shot = (faces) => `/api/model/preview?path=${encodeURIComponent(rel)}&w=460&h=345`
     + (faces ? `&faces=${faces}` : "") + textured + imageRevisionQuery(info.revision);
 
@@ -627,19 +625,18 @@ async function openModel(rel, options = {}) {
       <dt>Sommets</dt><dd>${info.vertices.toLocaleString("fr-FR")}</dd>
       <dt>Dimensions</dt><dd>${info.bounds.map((value) => value.toFixed(3)).join(" × ")}</dd>
       <dt>Matériaux</dt><dd>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
-      <dt>Textures</dt><dd>${info.textures.length ? "cartes associées à vérifier ci-dessous" : "aucune repérée"}</dd>
+      <dt>Textures</dt><dd>${info.textures.length ? esc(info.texture_match || "candidats à vérifier") : "aucune repérée"}</dd>
       <dt>Animations</dt><dd>${info.animations.length ? `${info.animations.length} fichier(s)` : "aucune repérée"}</dd>
       <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
     </dl>
     ${info.warnings.length ? `<details class="warns"><summary>${info.warnings.length} remarque(s) de décodage</summary>
       <ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
     ${info.textures.length ? `<div class="ensemble-strip">
-      <h4>Cartes du modèle (après vérification)</h4>
+      <h4>Cartes à vérifier · ${esc(info.texture_match || "candidats")}</h4>
       <div class="strip">${info.textures.map((t) => `
-        <button class="strip-item" data-open-texture="${esc(t.rel)}" title="${esc(t.rel)}"
-                data-check-kind="texture" data-check-rel="${esc(t.rel)}" hidden>
+        <button class="strip-item" data-open-texture="${esc(t.rel)}" data-open-texture-index="${Number(t.index) || 0}" title="${esc(t.rel)}">
           <img decoding="async" alt="" data-thumb="${esc(textureThumb(t, 192))}">
-          <span>${esc(t.name)}</span>
+          <span>${esc(t.name)}${t.material ? ` · ${esc(t.material)}` : ""}</span>
           <span class="strip-role">${ROLE_BADGE(t.role)}</span>
         </button>`).join("")}</div>
     </div>` : ""}
@@ -649,10 +646,9 @@ async function openModel(rel, options = {}) {
         encore injectées dans le modèle exporté.</p></details>` : ""}
     <div class="actions">
       <button class="btn" id="btn-uv">Vérifier les UV</button>
-      <button class="btn primary" id="btn-blend">Exporter en .blend</button>
-      <button class="btn" id="btn-blender">Exporter pour Blender (glTF/OBJ)</button>
+      <button class="btn primary" id="btn-export-model">Exporter en glTF / OBJ</button>
       <button class="btn ghost" id="btn-turntable">Planche de rotations</button>
-      <button class="btn ghost" id="btn-translate-model">Injecter un .blend…</button>
+      <button class="btn ghost" id="btn-translate-model">Importer un modèle…</button>
     </div>
     <label class="field"><span>Qualité de l'aperçu</span>
       <select id="model-quality">
@@ -661,10 +657,6 @@ async function openModel(rel, options = {}) {
     </label>
     <p class="hint" id="model-budget-note">Le budget et le culling se règlent dans Réglages.</p>`);
 
-  assetValidation.setScope("inspector", info.textures.map((texture) => ({
-    kind: "texture", rel: texture.rel,
-  })), state.project?.image_revision);
-  updateValidatedAssets();
   ensureTab({ id: `model:${rel}`, kind: "model", label: name, doc: { type: "model", rel } });
   state.tab = `model:${rel}`;
   renderTabs();
@@ -691,19 +683,20 @@ async function openModel(rel, options = {}) {
   $("#btn-turntable").onclick = () => {
     $("#model-shot").src = `${shot(null)}&views=4`;
   };
-  $("#btn-blender").onclick = () => exportModel(rel);
-  $("#btn-blend").onclick = () => exportBlend(rel);
+  $("#btn-export-model").onclick = () => exportModel(rel);
   $("#btn-uv").onclick = () => showUv(rel);
   $$("[data-open-texture]", document).forEach((node) => {
-    node.onclick = () => openTexture(node.dataset.openTexture);
+    node.onclick = () => openTexture(node.dataset.openTexture, Number(node.dataset.openTextureIndex) || 0);
   });
   $("#btn-translate-model").onclick = () => {
-    const search = $("#blend-target-search");
+    const search = $("#model-target-search");
     if (search) search.value = rel;
     state.shown.chooser = 48;
-    showView("blender");
-    const select = $("#blend-target");
+    restoredChoices["model-target"] = rel;
+    showView("import");
+    const select = $("#model-target");
     if (select && assetValidation.entry("model", rel)?.injectable) select.value = rel;
+    modelTargetChanged();
   };
   $("#model-quality").onchange = (event) => {
     const chosen = qualities.find((q) => q.id === event.target.value) || qualities[0];
@@ -739,7 +732,8 @@ async function renderTextures() {
   updateMore("texture", textures.length, shown.length);
 }
 
-async function openTexture(rel) {
+async function openTexture(rel, index = 0) {
+  index = Number.isInteger(index) && index >= 0 ? index : 0;
   showInspector("Texture", `<h3>Chargement de la texture…</h3><p class="muted">${esc(rel)}</p>`);
   const request = inspectionSequence;
   let info;
@@ -753,17 +747,20 @@ async function openTexture(rel) {
     return;
   }
   if (request !== inspectionSequence) return;
-  const texture = info.textures[0];
+  const texture = info.textures.find((item) => item.index === index);
   if (!texture) {
-    showInspector("Texture", `<h3>Texture indisponible</h3><p>Aucune texture dans ce fichier.</p>`);
+    showInspector("Texture", `<h3>Texture indisponible</h3><p>Texture ${index} absente de ce fichier.</p>`);
     return;
   }
   const editable = info.textures.filter((item) => item.editable).length;
-  const image = `/api/texture/png?path=${encodeURIComponent(rel)}&index=0`
+  const image = `/api/texture/png?path=${encodeURIComponent(rel)}&index=${index}`
     + imageRevisionQuery(info.revision);
   showInspector("Texture", `
     <h3>${esc(texture.name)}</h3>
     <div class="sub">${esc(rel)}</div>
+    ${info.textures.length > 1 ? `<label class="field"><span>Texture du conteneur</span>
+      <select id="texture-index">${info.textures.map((item) =>
+        `<option value="${item.index}" ${item.index === index ? "selected" : ""}>${esc(item.name)} · ${item.index}</option>`).join("")}</select></label>` : ""}
     <img class="preview" alt="" src="${esc(image)}">
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}${info.orin ? " · Orin" : ""}</dd>
@@ -783,15 +780,18 @@ async function openTexture(rel) {
       <input type="file" id="file-import" accept="image/*" hidden>
     </div>`);
 
-  ensureTab({ id: `texture:${rel}`, kind: "texture", label: texture.name, doc: { type: "texture", rel } });
-  state.tab = `texture:${rel}`;
+  const tabId = `texture:${rel}${index ? `#${index}` : ""}`;
+  ensureTab({ id: tabId, kind: "texture", label: texture.name, doc: { type: "texture", rel, index } });
+  state.tab = tabId;
   renderTabs();
   markTile("texture", rel);
+  const textureSelect = $("#texture-index");
+  if (textureSelect) textureSelect.onchange = (event) => openTexture(rel, Number(event.target.value));
 
   $("#btn-export-png").onclick = async () => {
     try {
       const result = await api("/api/texture/export", {
-        method: "POST", body: JSON.stringify({ path: rel, index: 0 }),
+        method: "POST", body: JSON.stringify({ path: rel, index }),
       });
       toast(`PNG écrit : ${result.file}`);
     } catch (error) { toast(error.message, "error"); }
@@ -813,12 +813,12 @@ async function openTexture(rel) {
       });
       const result = await api("/api/texture/import", {
         method: "POST",
-        body: JSON.stringify({ path: rel, index: 0, image: base64 }),
+        body: JSON.stringify({ path: rel, index, image: base64 }),
       });
       toast(`Texture remplacée (${result.texture}) → ${result.wrote}`);
       await refresh();
       // L'utilisateur a pu ouvrir une autre fiche pendant l'import.
-      if (request === inspectionSequence) openTexture(rel);
+      if (request === inspectionSequence) openTexture(rel, index);
     } catch (error) { toast(error.message, "error"); }
   };
 }
@@ -832,7 +832,8 @@ async function renderSounds() {
   const shown = sounds.slice(0, state.shown.sounds);
   state.soundCandidates = shown;
   grid.innerHTML = shown.length ? shown.map((asset) => `
-    <article class="tile sound-tile" data-kind="sound" data-rel="${esc(asset.rel)}"
+    <article class="tile sound-tile" role="button" tabindex="0" aria-label="Ouvrir ${esc(asset.name)}"
+             data-kind="sound" data-rel="${esc(asset.rel)}"
              data-check-kind="sound" data-check-rel="${esc(asset.rel)}" hidden>
       <div class="thumb" aria-hidden="true">♫</div>
       <div class="meta"><strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
@@ -887,9 +888,10 @@ function fillMobSelects() {
   const injectable = models.filter((asset) => assetValidation.entry("model", asset.rel)?.injectable);
   const options = (items) => items.map((asset) =>
     `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
-  const setSingle = (select, items, empty) => {
+  const setSingle = (select, items, empty, requireChoice = false) => {
     if (!select) return;
-    const html = items.length ? options(items) : `<option value="">${empty}</option>`;
+    const prompt = requireChoice && items.length ? "(choisir un modèle cible)" : empty;
+    const html = (requireChoice || !items.length ? `<option value="">${prompt}</option>` : "") + options(items);
     if (select.dataset.optionsHtml === html) return;
     const previous = select.value;
     select.innerHTML = html;
@@ -897,7 +899,8 @@ function fillMobSelects() {
     if (items.some((item) => item.rel === previous)) select.value = previous;
   };
   setSingle($("#mob-model"), models, "(aucun modèle vérifié)");
-  setSingle($("#blend-target"), injectable, "(aucun modèle réinjectable vérifié)");
+  // Ne jamais injecter par défaut dans le premier modèle validé.
+  setSingle($("#model-target"), injectable, "(aucun modèle réinjectable vérifié)", true);
   const textureSelect = $("#mob-textures");
   if (textureSelect) {
     const html = options(textures);
@@ -909,12 +912,13 @@ function fillMobSelects() {
     }
   }
   applyRestoredChoices();
+  updateModelImportControls();
 }
 
 function requestChooserChecks(includeTextures) {
   const assets = state.project?.assets || [];
   const cap = state.shown.chooser || 48;
-  const search = $(includeTextures ? "#mob-resource-search" : "#blend-target-search");
+  const search = $(includeTextures ? "#mob-resource-search" : "#model-target-search");
   const filter = (search?.value || "").trim().toLowerCase();
   const models = assets.filter((asset) => asset.kind === "model" && matches(asset, filter));
   const textures = includeTextures
@@ -923,7 +927,7 @@ function requestChooserChecks(includeTextures) {
   state.chooserTextures = textures.slice(0, cap);
   assetValidation.setScope("view", [...state.chooserModels, ...state.chooserTextures],
                            state.project?.image_revision);
-  const more = $(includeTextures ? "#mob-validate-more" : "#blend-validate-more");
+  const more = $(includeTextures ? "#mob-validate-more" : "#model-import-validate-more");
   if (more) more.hidden = models.length <= cap && textures.length <= cap;
   updateValidatedAssets();
 }
@@ -932,7 +936,8 @@ async function renderMobs() {
   requestChooserChecks(true);
   const mobs = state.project?.mobs || [];
   $("#mob-grid").innerHTML = mobs.map((mob) => `
-    <article class="tile" data-kind="mob" data-slug="${esc(mob.slug)}">
+    <article class="tile" role="button" tabindex="0" aria-label="Ouvrir ${esc(mob.name)}"
+             data-kind="mob" data-slug="${esc(mob.slug)}">
       <div class="meta">
         <strong>${esc(mob.name)}</strong>
         <small>parent : ${esc(mob.parent)}</small>
@@ -962,165 +967,171 @@ function openMob(slug) {
 
 function openDoc(doc) {
   if (doc.type === "model") return openModel(doc.rel);
-  if (doc.type === "texture") return openTexture(doc.rel);
+  if (doc.type === "texture") return openTexture(doc.rel, doc.index || 0);
   if (doc.type === "sound") return openSound(doc.rel);
   if (doc.type === "mob") return openMob(doc.slug);
-  if (doc.type === "blend") return selectBlend(doc.ref, { tab: true });
 }
 
-/* ------------------------------------------------------------------ blender */
-async function renderBlends() {
+/* ------------------------------------------------------------------ import OBJ / glTF */
+let modelImportFiles = [];
+let modelImportRevision = 0;
+let modelTargetRevision = 0;
+let modelImportAnalysisRevision = -1;
+let modelImportCanImport = false;
+let modelImportPending = false;
+
+function updateModelImportControls() {
+  const inspect = $("#model-inspect");
+  const inject = $("#model-inject");
+  const target = $("#model-target")?.value || "";
+  if (inspect) inspect.disabled = modelImportPending || !modelImportFiles.length;
+  if (inject) inject.disabled = modelImportPending || !modelImportFiles.length
+    || modelImportAnalysisRevision !== modelImportRevision || !modelImportCanImport
+    || !target || !assetValidation.valid("model", target)
+    || !assetValidation.entry("model", target)?.injectable;
+}
+
+function renderModelImport() {
   requestChooserChecks(false);
+  updateModelImportControls();
+}
+
+function setModelImportFiles(fileList) {
+  const files = [...(fileList || [])];
+  const names = new Set();
+  const primary = files.filter((file) => /\.(obj|gltf|glb)$/i.test(file.name));
+  let error = "";
+  if (!files.length) error = "Aucun fichier choisi.";
+  else if (files.length > 17 || primary.length !== 1) error = "Choisis un seul modèle et au plus 16 fichiers .bin.";
+  else if (files.some((file) => !/\.(obj|gltf|glb|bin)$/i.test(file.name))) error = "Formats acceptés : OBJ, glTF, GLB et fichiers .bin.";
+  else if (files.length > 1 && !/\.gltf$/i.test(primary[0].name)) error = "Les fichiers .bin accompagnent uniquement un .gltf.";
+  else if (files.some((file) => { const name = file.name.toLocaleLowerCase(); const duplicate = names.has(name); names.add(name); return duplicate; })) error = "Deux fichiers portent le même nom.";
+  else if (files.some((file) => !file.size) || files.reduce((total, file) => total + file.size, 0) > 64 * 1024 * 1024) error = "Fichier vide ou ensemble supérieur à 64 Mio.";
+  modelImportFiles = error ? [] : files;
+  modelImportRevision += 1;
+  modelImportCanImport = false;
+  updateModelImportControls();
+  for (const selector of ["#model-source-shot", "#model-result-shot"]) {
+    const image = $(selector);
+    if (image) { image.hidden = true; image.removeAttribute("src"); }
+  }
+  const list = $("#model-file-summary");
+  if (list) list.innerHTML = modelImportFiles.length
+    ? modelImportFiles.map((file) => `<li><strong>${esc(file.name)}</strong><span>${humanSize(file.size)}</span></li>`).join("")
+    : `<li>${esc(error || "Aucun fichier choisi")}</li>`;
+  const report = $("#model-import-report");
+  if (report) report.innerHTML = `<li class="muted">${error ? esc(error) : "Prêt à analyser le fichier."}</li>`;
+  if (error && files.length) toast(error, "error");
+}
+
+function modelImportOptionsChanged() {
+  modelImportRevision += 1;
+  modelImportCanImport = false;
+  updateModelImportControls();
+  for (const selector of ["#model-source-shot", "#model-result-shot"]) {
+    const image = $(selector);
+    if (image) { image.hidden = true; image.removeAttribute("src"); }
+  }
+  const report = $("#model-import-report");
+  if (report && modelImportFiles.length) report.innerHTML = `<li class="muted">Options modifiées : relance l'analyse.</li>`;
+}
+
+function modelTargetChanged() {
+  modelTargetRevision += 1;
+  const image = $("#model-result-shot");
+  if (image) { image.hidden = true; image.removeAttribute("src"); }
+  updateModelImportControls();
+}
+
+function readModelFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const encoded = String(reader.result || "");
+      const comma = encoded.indexOf(",");
+      if (comma < 0) reject(new Error(`Lecture impossible : ${file.name}`));
+      else resolve({ name: file.name, data: encoded.slice(comma + 1) });
+    };
+    reader.onerror = () => reject(new Error(`Lecture impossible : ${file.name}`));
+    reader.onabort = () => reject(new Error("Lecture du modèle annulée."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function runModelImport(inject = false) {
+  if (modelImportPending) return;
+  if (!modelImportFiles.length) { toast("Choisis d'abord un fichier OBJ, glTF ou GLB.", "error"); return; }
+  const target = $("#model-target")?.value || "";
+  if (inject && (modelImportAnalysisRevision !== modelImportRevision || !modelImportCanImport)) {
+    toast("Analyse d'abord le fichier et corrige les éventuels problèmes.", "error"); return;
+  }
+  if (inject && (!target || !assetValidation.valid("model", target)
+      || !assetValidation.entry("model", target)?.injectable)) {
+    toast("Choisis un modèle cible compatible et vérifié.", "error"); return;
+  }
+  const scale = Number($("#model-scale")?.value || 1);
+  if (!Number.isFinite(scale) || scale < 0.001 || scale > 1000) {
+    toast("Échelle attendue entre 0,001 et 1 000.", "error"); return;
+  }
+  const revision = modelImportRevision;
+  const targetRevision = modelTargetRevision;
+  const files = [...modelImportFiles];
+  const axis = $("#model-axis")?.value || "keep";
+  const fit = Boolean($("#model-fit")?.checked);
+  modelImportPending = true;
+  updateModelImportControls();
+  status(inject ? "Injection en cours…" : "Analyse du modèle…", "busy");
   try {
-    const payload = await api("/api/blend/list");
-    state.blends = payload.blends || [];
+    const encoded = [];
+    for (const file of files) {
+      encoded.push(await readModelFile(file));
+      if (revision !== modelImportRevision || (inject && targetRevision !== modelTargetRevision)) {
+        status("prêt");
+        return;
+      }
+    }
+    const result = await api(inject ? "/api/model/import" : "/api/model/inspect", {
+      method: "POST", body: JSON.stringify({ files: encoded, axis, scale, fit, target }),
+    });
+    // La cible a pu être écrite même si le choix a changé pendant la requête.
+    if (inject) toast(`Copie modifiée : ${result.wrote}`);
+    const current = revision === modelImportRevision && (!inject || (
+      targetRevision === modelTargetRevision && target === $("#model-target")?.value
+      && fit === Boolean($("#model-fit")?.checked)));
+    if (current) {
+      if (!inject) {
+        modelImportAnalysisRevision = revision;
+        modelImportCanImport = result.can_import === true;
+      }
+      const shot = $(inject ? "#model-result-shot" : "#model-source-shot");
+      if (shot) {
+        shot.hidden = !result.preview;
+        if (result.preview) shot.src = result.preview;
+      }
+      const report = $("#model-import-report");
+      if (report) {
+        const summary = inject
+          ? `<li><span class="badge">écrit</span><span><code>${esc(result.wrote)}</code></span></li>`
+            + `<li><span class="badge">${result.faces} f.</span><span>${result.vertices} sommet(s) sur ${result.capacity_vertices} disponibles</span></li>`
+          : `<li><span class="badge">source</span><span><b>${esc(result.file)}</b> · ${result.meshes} maillage(s) · ${result.vertices} sommet(s) · ${result.faces} triangle(s)</span></li>`;
+        const notes = inject ? [...(result.report || []), ...(result.notes || [])] : (result.warnings || []);
+        report.innerHTML = summary + notes.map((note) => `<li><span class="badge warn">note</span><span>${esc(note)}</span></li>`).join("");
+      }
+      if (!inject) toast(result.can_import ? "Analyse terminée : vérifie la cible avant l'injection." : "Analyse terminée : fichier non injectable en l'état.", result.can_import ? "ok" : "error");
+    }
+    if (inject) {
+      try { await refresh(); }
+      catch (error) { toast(`Copie écrite, mais actualisation impossible : ${error.message}`, "error"); }
+    } else if (!current) status("prêt");
   } catch (error) {
-    toast(error.message, "error");
-    state.blends = [];
+    if (revision === modelImportRevision && (!inject || targetRevision === modelTargetRevision)) {
+      if (!inject) modelImportCanImport = false;
+      toast(error.message, "error");
+    } else status("prêt");
+  } finally {
+    modelImportPending = false;
+    updateModelImportControls();
   }
-  const list = $("#blend-list");
-  if (list) {
-    list.innerHTML = state.blends.length
-      ? state.blends.map((entry) => `
-          <option value="${esc(entry.ref)}" ${entry.ref === state.blend.ref ? "selected" : ""}>
-            ${esc(entry.name)} — ${humanSize(entry.size)} (${esc(entry.origin)})
-          </option>`).join("")
-      : `<option value="">(aucun .blend : dépose un fichier)</option>`;
-  }
-  if (!state.blend.ref && state.blends.length) {
-    selectBlend(state.blends[0].ref);
-  }
-}
-
-async function selectBlend(ref, options = {}) {
-  state.blend.ref = ref;
-  const list = $("#blend-list");
-  if (list) list.value = ref;
-  if (options.tab && ref) {
-    const entry = state.blends.find((item) => item.ref === ref);
-    ensureTab({ id: `blend:${ref}`, kind: "blend", label: entry?.name || ref,
-                doc: { type: "blend", ref } });
-    state.tab = `blend:${ref}`;
-    renderTabs();
-  }
-  await inspectBlend();
-}
-
-function blendOptions() {
-  return {
-    axis: $("#blend-axis")?.value || "y_up",
-    scale: Number($("#blend-scale")?.value || 1),
-    only: $("#blend-only")?.value?.trim() || null,
-  };
-}
-
-async function inspectBlend() {
-  const request = ++blendInspectionSequence;
-  const ref = state.blend.ref || $("#blend-list")?.value;
-  if (!ref) {
-    state.blend.objects = [];
-    return;
-  }
-  state.blend.ref = ref;
-  const info = $("#blend-info");
-  if (info) info.innerHTML = `<dt class="muted">analyse…</dt><dd></dd>`;
-  try {
-    const payload = await api("/api/blend/inspect", {
-      method: "POST",
-      body: JSON.stringify({ ref, ...blendOptions() }),
-    });
-    if (request !== blendInspectionSequence || state.blend.ref !== ref) return;
-    state.blend.objects = payload.objects || [];
-    const objects = payload.objects || [];
-    if (info) {
-      info.innerHTML = `
-        <dt>Fichier</dt><dd>${esc(payload.file)}</dd>
-        <dt>Version Blender</dt><dd>${esc(payload.version)}</dd>
-        <dt>Objets</dt><dd>${objects.length}</dd>
-        <dt>Maillages</dt><dd>${payload.meshes}</dd>
-        <dt>Faces</dt><dd>${payload.faces.toLocaleString("fr-FR")}</dd>
-        <dt>Sommets</dt><dd>${payload.vertices.toLocaleString("fr-FR")}</dd>
-        <dt>Matériaux</dt><dd>${payload.materials.length ? payload.materials.map(esc).join(", ") : "—"}</dd>`;
-    }
-    const report = $("#blend-report");
-    if (report) {
-      const rows = [];
-      objects.forEach((object) => {
-        rows.push(`<li><span class="badge">${object.faces} f.</span>
-          <span><b>${esc(object.name)}</b>
-          ${object.materials.length ? `<small class="muted"> · ${object.materials.map(esc).join(", ")}</small>` : ""}
-          ${object.reason ? `<small class="muted"> — ${esc(object.reason)}</small>` : ""}</span></li>`);
-      });
-      (payload.warnings || []).forEach((warning) => {
-        rows.push(`<li><span class="badge warn">note</span><span>${esc(warning)}</span></li>`);
-      });
-      report.innerHTML = rows.join("") || `<li class="muted">Aucune remarque.</li>`;
-    }
-    log("ok", `${payload.file} : ${payload.faces} face(s) lues`);
-  } catch (error) {
-    if (request !== blendInspectionSequence || state.blend.ref !== ref) return;
-    if (info) info.innerHTML = `<dt class="muted">erreur</dt><dd>${esc(error.message)}</dd>`;
-    toast(error.message, "error");
-  }
-}
-
-function previewBlend() {
-  const ref = state.blend.ref || $("#blend-list")?.value;
-  if (!ref) { toast("Choisis d'abord un fichier .blend", "error"); return; }
-  const { axis, scale, only } = blendOptions();
-  const url = `/api/blend/preview?ref=${encodeURIComponent(ref)}&w=560&h=420&axis=${axis}`
-    + `&scale=${encodeURIComponent(scale)}` + (only ? `&only=${encodeURIComponent(only)}` : "");
-  const image = $("#blend-preview");
-  if (image) image.src = `${url}&t=${Date.now()}`;
-}
-
-async function uploadBlend(file) {
-  if (!file) return;
-  if (!/\.blend$/i.test(file.name)) { toast("Il faut un fichier .blend", "error"); return; }
-  try {
-    const response = await fetch("/api/blend/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream", "X-Hooky-Filename": file.name },
-      body: file,
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    toast(`${payload.name} envoyé (${humanSize(payload.size)})`);
-    await renderBlends();
-    await selectBlend(payload.ref, { tab: true });
-    previewBlend();
-  } catch (error) { toast(error.message, "error"); }
-}
-
-async function translateBlend() {
-  const ref = state.blend.ref || $("#blend-list")?.value;
-  const target = $("#blend-target")?.value;
-  if (!ref) { toast("Choisis un fichier .blend", "error"); return; }
-  if (!target) { toast("Choisis le modèle du jeu à modifier", "error"); return; }
-  const { axis, scale, only } = blendOptions();
-  try {
-    const result = await api("/api/blend/translate", {
-      method: "POST",
-      body: JSON.stringify({
-        ref, target, axis, scale, only,
-        fit: $("#blend-fit")?.checked !== false,
-      }),
-    });
-    const shot = $("#blend-result-shot");
-    if (shot && result.preview) shot.src = result.preview;
-    const report = $("#blend-report");
-    if (report) {
-      report.innerHTML = [
-        `<li><span class="badge">écrit</span><span><code>${esc(result.wrote)}</code></span></li>`,
-        `<li><span class="badge">${result.faces} f.</span><span>${result.vertices} sommet(s)
-          sur ${result.capacity_vertices} disponibles</span></li>`,
-        ...result.report.map((line) => `<li><span class="badge">détail</span><span>${esc(line)}</span></li>`),
-        ...(result.notes || []).map((note) => `<li><span class="badge warn">note</span><span>${esc(note)}</span></li>`),
-      ].join("");
-    }
-    toast(`${target} modifié : ${result.wrote}`);
-    await refresh();
-  } catch (error) { toast(error.message, "error"); }
 }
 
 /* ------------------------------------------------------------------ réglages */
@@ -1128,13 +1139,13 @@ function settingsOrDefault() {
   return state.settings || {
     vram_gb: 6, vram_max_gb: 25, vram_min_gb: 1, supersample: 2,
     cull: true, frustum: true, adaptive: true, max_faces: null, lod: 0,
-    accent: "menthe", density: "confort", export_textures: true, thumb_faces: null,
+    accent: "azur", density: "confort", export_textures: true, thumb_faces: null,
     accents: ["menthe", "azur", "ambre", "framboise"], densities: ["confort", "compact"],
   };
 }
 
 function applyUiSettings(settings = settingsOrDefault()) {
-  document.documentElement.dataset.accent = settings.accent || "menthe";
+  document.documentElement.dataset.accent = settings.accent || "azur";
   document.documentElement.dataset.density = settings.density || "confort";
 }
 
@@ -1175,7 +1186,6 @@ function renderSettings() {
   }
   $("#set-export-textures").checked = settings.export_textures !== false;
   $("#set-textured").checked = settings.textured_previews !== false;
-  renderBlenderState();
   updateWarmStatus(state.warm);
 
   $("#settings-summary").innerHTML = [
@@ -1192,7 +1202,7 @@ function renderSettings() {
       ? `${settings.max_faces.toLocaleString("fr-FR")} maximum` : "automatique"}</li>`,
     `<li><span class="k">Vignettes</span>${settings.thumb_faces
       ? `${settings.thumb_faces.toLocaleString("fr-FR")} faces` : "selon le budget"}</li>`,
-    `<li><span class="k">Export Blender</span>${settings.export_textures !== false
+    `<li><span class="k">Export glTF / OBJ</span>${settings.export_textures !== false
       ? "avec les PNG" : "géométrie seule"}</li>`,
   ].join("");
 }
@@ -1258,7 +1268,7 @@ async function flushSettings() {
     if (state.view === "ensembles") await renderEnsembles();
     if (state.view === "sounds") await renderSounds();
     if (state.view === "mobs") await renderMobs();
-    if (state.view === "blender") requestChooserChecks(false);
+    if (state.view === "import") requestChooserChecks(false);
     if (notify) toast("Réglages enregistrés");
     settingsSaveFailed = false;
     saved = true;
@@ -1301,11 +1311,6 @@ function wireSettings() {
   on("#set-textured", "onchange", (event) => {
     saveSettings({ textured_previews: event.target.checked });
   });
-  on("#set-blender-path", "onchange", async (event) => {
-    if (await saveSettings({ blender_path: event.target.value.trim() })) {
-      await refreshBlender();
-    }
-  });
   on("#set-preview-faces", "onchange", (event) => {
     saveSettings({ preview_faces: Number(event.target.value) });
   });
@@ -1326,7 +1331,7 @@ function wireSettings() {
   on("#warm-stop", "onclick", stopPreparingThumbnails);
   on("#set-reset", "onclick", () => saveSettings({
     vram_gb: 6, supersample: 2, cull: true, frustum: true, adaptive: true,
-    max_faces: null, lod: 0, accent: "menthe", density: "confort",
+    max_faces: null, lod: 0, accent: "azur", density: "confort",
     export_textures: true, thumb_faces: null, cache_mb: 256,
   }, { quiet: false }));
 }
@@ -1382,26 +1387,21 @@ function clearSelection() {
   updateSelectionBar();
 }
 
-async function exportSelection(blend = false) {
+async function exportSelection() {
   const items = [...state.selection].map((key) => {
     const cut = key.indexOf(":");
     return { kind: key.slice(0, cut), rel: key.slice(cut + 1) };
   });
   if (!items.length) { toast("Rien de sélectionné", "error"); return; }
-  if (blend && !items.some((item) => item.kind === "model")) {
-    toast("Sélectionne au moins un modèle pour un export .blend", "error");
-    return;
-  }
   status(`export de ${items.length} élément(s)…`, "busy");
   try {
     const result = await api("/api/export/selection", {
       method: "POST",
-      body: JSON.stringify({ items, blend, download_link: true }),
+      body: JSON.stringify({ items, download_link: true }),
     });
     showExportResult(result, "ZIP de sélection prêt");
     toast(`${items.length} élément(s) préparés dans le ZIP`);
-    if (blend) log("info", "ZIP Blender : un dossier par modèle, .blend si Blender "
-      + "est installé, sinon creer_blend.py + la commande dans LIRE-MOI.txt");
+
   } catch (error) { toast(error.message, "error"); }
 }
 
@@ -1435,7 +1435,7 @@ function markTile(kind, rel) {
 
 /* ------------------------------------------------------------------ actions */
 async function exportModel(rel) {
-  const button = $("#btn-blender");
+  const button = $("#btn-export-model");
   if (button) { button.disabled = true; button.textContent = "Export en cours…"; }
   try {
     const result = await api("/api/model/export", {
@@ -1447,16 +1447,17 @@ async function exportModel(rel) {
     log("ok", `export → ${result.absolute_folder || result.folder}`);
     log("info", `fichiers : ${result.files.join(", ")}`);
     if (!result.textures) {
-      log("warn", "aucune texture trouvée pour ce modèle dans le dossier scanné : "
-        + "le glTF sort sans image (les PNG sont à côté du BFRES dans le dump)");
-      toast("Export fait, mais aucune texture n'a été trouvée", "error");
+      const reason = state.settings?.export_textures === false
+        ? "Export des textures désactivé dans les réglages."
+        : "Aucune texture exportée : consulte les remarques pour les références manquantes ou illisibles.";
+      log("warn", reason);
+      toast(reason, "error");
     } else {
       // le rôle de chaque carte dit sur quelle entrée de shader la mettre
       const byRole = (result.maps || [])
         .map((map) => `${map.label} → ${map.file}`).join(" · ");
       log("ok", `${result.textures} carte(s) : ${byRole}`);
-      log("info", "TEXTURES.md explique où va chaque image ; assembler_shaders.py "
-        + "les branche dans Blender");
+      log("info", "TEXTURES.md décrit les cartes et leurs éventuelles liaisons par matériau.");
       toast(`${result.textures} carte(s) de texture exportée(s)`);
     }
     (result.warnings || []).forEach((warning) => log("warn", warning));
@@ -1464,7 +1465,7 @@ async function exportModel(rel) {
     toast(error.message, "error");
     log("error", error.message);
   } finally {
-    if (button) { button.disabled = false; button.textContent = "Exporter pour Blender (glTF/OBJ)"; }
+    if (button) { button.disabled = false; button.textContent = "Exporter en glTF / OBJ"; }
   }
 }
 
@@ -1541,86 +1542,23 @@ function showExportResult(result, title) {
   $("#export-result-folder").textContent = result.absolute_folder || result.folder || "";
   const note = $("#export-result-note");
   if (note) note.textContent = result.temporary_archive
-    ? "Archive temporaire : télécharge-la maintenant ; le cache est nettoyé périodiquement."
+    ? "Archive temporaire : télécharge-la maintenant ; consulte les rapports de modèle inclus."
     : (result.stale_files || []).length
       ? "Ce dossier contient aussi d'anciens fichiers. Le ZIP contient uniquement cet export."
       : "Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.";
+  const warningBox = $("#export-result-warnings");
+  const warnings = Array.isArray(result.warnings) ? result.warnings.filter((w) => typeof w === "string") : [];
+  if (warningBox) {
+    warningBox.hidden = !warnings.length;
+    warningBox.textContent = warnings.length
+      ? "À vérifier :\n" + warnings.slice(0, 12).map((warning) => `• ${warning}`).join("\n")
+        + (warnings.length > 12 ? "\nAutres remarques dans le journal et RAPPORT_MODELE.txt." : "")
+      : "";
+  }
   link.href = result.download_url;
-  link.download = result.download_name || "hookycreator-blender.zip";
+  link.download = result.download_name || "hookycreator-modeles.zip";
   panel.hidden = false;
   if (typeof link.click === "function") link.click();
-}
-
-async function exportBlend(rel) {
-  const request = inspectionSequence;
-  const button = $("#btn-blend");
-  const label = button ? button.textContent : "";
-  if (button) { button.disabled = true; button.textContent = "Blender travaille…"; }
-  try {
-    const result = await api("/api/model/blend", {
-      method: "POST",
-      body: JSON.stringify({ path: rel, textures: state.settings?.export_textures !== false }),
-    });
-    showExportResult(result, result.method === "blender"
-      ? "Export .blend prêt" : "glTF et script prêts — sans .blend");
-    if (result.method === "blender") {
-      toast(`.blend écrit : ${result.blend}`);
-      log("ok", `${result.message}`);
-    } else {
-      // Blender peut être absent *ou* avoir échoué : conserver la vraie raison.
-      toast("Aucun nouveau .blend confirmé : voir le journal", "error");
-      log("warn", result.message);
-      if (result.command) log("info", `à lancer : ${result.command}`);
-      if (result.platform_note) log("info", result.platform_note);
-      // Un export long ne doit pas remplacer une fiche ouverte entre-temps.
-      if (request === inspectionSequence) {
-        showInspector("Export Blender incomplet", `
-          <h3>Le .blend n'a pas été écrit</h3>
-          <p class="muted">${esc(result.message)}</p>
-          <p>Vérifie Blender et son chemin dans <b>Réglages</b>, puis relance.</p>
-          ${result.command ? `<p>Ou lance cette commande dans le dossier de l'export :</p>
-            <pre class="command" id="blend-command">${esc(result.command)}</pre>
-            <button class="btn ghost tiny" id="copy-command">Copier la commande</button>` : ""}
-          <p class="hint">${esc(result.platform_note || "")}</p>
-          <p class="hint">Le dossier contient déjà ${result.files.length} fichier(s) :
-            ${esc(result.files.join(", "))}</p>`);
-        const copy = $("#copy-command");
-        if (copy) copy.onclick = async () => {
-          try { await navigator.clipboard.writeText(result.command || ""); toast("Commande copiée"); }
-          catch (error) { toast("Copie impossible : sélectionne le texte", "error"); }
-        };
-      }
-    }
-    if (result.output) log("info", result.output.split("\n").slice(-6).join(" · "));
-  } catch (error) {
-    toast(error.message, "error");
-    log("error", error.message);
-  } finally {
-    if (button) { button.disabled = false; button.textContent = label; }
-  }
-}
-
-function renderBlenderState() {
-  const info = state.blender;
-  const nodes = $$("[data-blender-state]");
-  if (!nodes.length) return;
-  const text = !info ? "recherche…"
-    : info.found ? `Blender détecté : ${info.path}`
-    : "Blender introuvable — l'export glTF reste disponible et le script .blend est fourni";
-  nodes.forEach((node) => {
-    node.textContent = text;
-    node.classList.toggle("warn", Boolean(info && !info.found));
-  });
-  const input = $("#set-blender-path");
-  // le chemin saisi reste affiché ; à défaut, celui que la détection a trouvé
-  if (input && info && !input.value) input.value = info.configured || info.path || "";
-}
-
-async function refreshBlender() {
-  try {
-    state.blender = await api("/api/blender");
-    renderBlenderState();
-  } catch (error) { /* l'atelier reste utilisable sans Blender */ }
 }
 
 async function startBulk() {
@@ -1752,15 +1690,11 @@ const MENUS = {
   modele: [
     { label: "Vue des modèles", hint: "Ctrl+2", run: () => showView("models") },
     { label: "Vue des ensembles (modèle + textures + animations)", run: () => showView("ensembles") },
-    { label: "Exporter en .blend", run: () => {
-      const rel = state.tabs.find((tab) => tab.doc?.type === "model")?.doc?.rel;
-      if (rel) exportBlend(rel); else toast("Ouvre d'abord un modèle", "error");
-    } },
-    { label: "Exporter le modèle sélectionné pour Blender", run: () => {
+    { label: "Exporter le modèle sélectionné en glTF / OBJ", run: () => {
       const rel = state.tabs.find((tab) => tab.doc?.type === "model")?.doc?.rel;
       if (rel) exportModel(rel); else toast("Ouvre d'abord un modèle", "error");
     } },
-    { label: "Injecter un .blend…", hint: "Ctrl+5", run: () => showView("blender") },
+    { label: "Importer un modèle…", hint: "Ctrl+5", run: () => showView("import") },
   ],
   texture: [
     { label: "Vue des textures", hint: "Ctrl+3", run: () => showView("textures") },
@@ -1772,12 +1706,10 @@ const MENUS = {
         .catch((error) => toast(error.message, "error"));
     } },
   ],
-  blender: [
-    { label: "Vue Blender", hint: "Ctrl+5", run: () => showView("blender") },
-    { label: "Analyser le .blend sélectionné", run: () => inspectBlend() },
-    { label: "Aperçu du .blend", run: () => previewBlend() },
-    { sep: true },
-    { label: "Injecter dans le modèle cible", run: () => translateBlend() },
+  import: [
+    { label: "Importer un modèle", hint: "Ctrl+5", run: () => showView("import") },
+    { label: "Analyser les fichiers choisis", run: () => runModelImport(false) },
+    { label: "Injecter dans la copie de travail", run: () => runModelImport(true) },
   ],
   affichage: [
     { label: "Accueil", hint: "Ctrl+1", run: () => showView("home") },
@@ -1799,7 +1731,7 @@ const MENUS = {
     { label: "Raccourcis clavier", run: () => toast(
       "Ctrl+K palette · Ctrl+J journal · Ctrl+1…6 vues · Ctrl+F filtrer · F5 rafraîchir · Échap fermer") },
     { label: "À propos", run: () => toast(
-      "HookyCreator 1.1 — traduction BFRES/BNTX et .blend faite maison, sans bibliothèque tierce.") },
+      "HookyCreator — atelier local de modèles et textures. Consulte la documentation pour les limites et licences.") },
   ],
 };
 
@@ -1841,13 +1773,13 @@ function paletteCommands() {
     { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
     { label: "Aller aux sons", group: "vue", run: () => showView("sounds") },
     { label: "Aller aux mobs", group: "vue", run: () => showView("mobs") },
-    { label: "Aller à Blender → jeu", group: "vue", run: () => showView("blender") },
+    { label: "Importer un modèle", group: "vue", run: () => showView("import") },
     { label: "Aller aux réglages", group: "vue", run: () => showView("settings") },
     { label: "Rafraîchir le projet", group: "action", run: () => refresh({ quiet: false }) },
     { label: "Exporter tout le projet", group: "action", run: () => { showView("home"); startBulk(); } },
     { label: "Assembler le mod…", group: "action", run: () => { showView("create"); $("#mod-name")?.focus(); } },
-    { label: "Analyser le .blend sélectionné", group: "blender", run: () => inspectBlend() },
-    { label: "Injecter le .blend dans le modèle cible", group: "blender", run: () => translateBlend() },
+    { label: "Analyser les fichiers choisis", group: "import", run: () => runModelImport(false) },
+    { label: "Injecter le modèle source", group: "import", run: () => runModelImport(true) },
     { label: "Basculer le journal", group: "affichage", run: toggleConsole },
     { label: "Densité compacte", group: "affichage", run: () => saveSettings({
       density: state.settings?.density === "compact" ? "confort" : "compact" }) },
@@ -1873,10 +1805,6 @@ function paletteCommands() {
       label: `Ouvrir la texture ${asset.name}`, group: "texture", hint: asset.rel,
       run: () => { showView("textures"); openTexture(asset.rel); },
     }));
-  (state.blends || []).forEach((entry) => commands.push({
-    label: `Charger le .blend ${entry.name}`, group: "blender", hint: entry.ref,
-    run: () => { showView("blender"); selectBlend(entry.ref, { tab: true }); },
-  }));
   return commands;
 }
 
@@ -2088,7 +2016,7 @@ async function rescanProject() {
     if (state.view === "textures") await renderTextures();
     if (state.view === "sounds") await renderSounds();
     if (state.view === "mobs") await renderMobs();
-    if (state.view === "blender") await renderBlends();
+    if (state.view === "import") await renderModelImport();
     if (state.view === "home") renderHome();
     if (state.view === "create") renderCreation();
     if (payload.scan.incomplete || payload.scan.truncated) {
@@ -2222,8 +2150,8 @@ async function refresh(options = {}) {
   if (state.view === "textures") await renderTextures();
   if (state.view === "sounds") await renderSounds();
   if (state.view === "mobs") await renderMobs();
-  if (state.view === "blender") await renderBlends();
-  if (state.view === "settings") { renderSettings(); refreshSystem(); refreshBlender(); }
+  if (state.view === "import") await renderModelImport();
+  if (state.view === "settings") { renderSettings(); refreshSystem(); }
   if (options.quiet === false) {
     const counts = payload.project.assets.length;
     toast(`Projet rafraîchi : ${counts} fichier(s)`);
@@ -2240,6 +2168,39 @@ function setThumbnailPause(paused) {
   }
   try { localStorage.setItem("hooky-thumbnails-paused", paused ? "1" : "0"); }
   catch (_) { /* stockage facultatif */ }
+}
+
+// Les cartes reçoivent le focus comme les autres commandes. Les flèches se
+// déplacent selon leur position réelle, y compris quand la grille se réorganise.
+function handleTileNavigation(event) {
+  const tile = event.target.closest?.(".tile[tabindex]");
+  if (!tile || event.target !== tile || event.altKey || event.ctrlKey || event.metaKey) return false;
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    tile.click();
+    return true;
+  }
+  const direction = {
+    ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+  }[event.key];
+  if (!direction) return false;
+  const grid = tile.closest(".grid");
+  if (!grid) return false;
+  const rect = tile.getBoundingClientRect();
+  const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+  let best = null, score = Infinity;
+  for (const candidate of grid.querySelectorAll(".tile[tabindex]:not([hidden])")) {
+    if (candidate === tile) continue;
+    const box = candidate.getBoundingClientRect();
+    const dx = box.left + box.width / 2 - x, dy = box.top + box.height / 2 - y;
+    const along = dx * direction[0] + dy * direction[1];
+    if (along <= 1) continue;
+    const across = direction[0] ? Math.abs(dy) : Math.abs(dx);
+    const distance = along + across * 2;
+    if (distance < score) { best = candidate; score = distance; }
+  }
+  if (best) { event.preventDefault(); best.focus(); }
+  return Boolean(best);
 }
 
 function wire() {
@@ -2292,7 +2253,7 @@ function wire() {
     state.shown.chooser = 48;
     requestChooserChecks(true);
   });
-  onInputDebounced("#blend-target-search", () => {
+  onInputDebounced("#model-target-search", () => {
     state.shown.chooser = 48;
     requestChooserChecks(false);
   });
@@ -2329,20 +2290,18 @@ function wire() {
       if (state.view === "ensembles") renderEnsembles();
       if (state.view === "sounds") renderSounds();
       if (state.view === "mobs") requestChooserChecks(true);
-      if (state.view === "blender") requestChooserChecks(false);
+      if (state.view === "import") requestChooserChecks(false);
     };
   });
   $("#mob-validate-more").onclick = () => {
     state.shown.chooser += 48;
     requestChooserChecks(true);
   };
-  $("#blend-validate-more").onclick = () => {
+  $("#model-import-validate-more").onclick = () => {
     state.shown.chooser += 48;
     requestChooserChecks(false);
   };
-  $("#selection-export").onclick = () => exportSelection(false);
-  const selBlend = $("#selection-blend");
-  if (selBlend) selBlend.onclick = () => exportSelection(true);
+  $("#selection-export").onclick = () => exportSelection();
   $("#selection-clear").onclick = clearSelection;
   $("#selection-all").onclick = () => {
     selectionKeys().forEach((key) => state.selection.add(key));
@@ -2407,20 +2366,27 @@ function wire() {
   $("#mod-form").onsubmit = buildMod;
   $("#bulk-start").onclick = startBulk;
 
-  // blender
-  $("#blend-list").onchange = (event) => selectBlend(event.target.value, { tab: true });
-  $("#blend-inspect").onclick = inspectBlend;
-  $("#blend-preview-btn").onclick = previewBlend;
-  $("#blend-translate").onclick = translateBlend;
-  $("#blend-file").onchange = (event) => uploadBlend(event.target.files[0]);
-  const drop = $("#blend-drop");
+  // Import de fichiers standards. Les fichiers ne sont jamais stockés dans la session.
+  $("#model-file-choose").onclick = () => $("#model-files").click();
+  $("#model-files").onchange = (event) => {
+    setModelImportFiles(event.target.files);
+    event.target.value = ""; // autorise la nouvelle sélection du même fichier
+  };
+  $("#model-inspect").onclick = () => runModelImport(false);
+  $("#model-inject").onclick = () => runModelImport(true);
+  $("#model-axis").onchange = modelImportOptionsChanged;
+  $("#model-scale").oninput = modelImportOptionsChanged;
+  $("#model-fit").onchange = modelTargetChanged;
+  $("#model-target").onchange = modelTargetChanged;
+  updateModelImportControls();
+  const drop = $("#model-drop");
   if (drop) {
     drop.ondragover = (event) => { event.preventDefault(); drop.classList.add("over"); };
     drop.ondragleave = () => drop.classList.remove("over");
     drop.ondrop = (event) => {
       event.preventDefault();
       drop.classList.remove("over");
-      uploadBlend(event.dataTransfer.files[0]);
+      setModelImportFiles(event.dataTransfer.files);
     };
   }
 
@@ -2448,6 +2414,7 @@ function wire() {
   $("#palette").onclick = (event) => { if (event.target.id === "palette") closePalette(); };
 
   document.addEventListener("keydown", (event) => {
+    if (handleTileNavigation(event)) return;
     const meta = event.ctrlKey || event.metaKey;
     if (meta && event.key.toLowerCase() === "k") { event.preventDefault(); openPalette(); return; }
     if (meta && event.key.toLowerCase() === "j") { event.preventDefault(); toggleConsole(); return; }
@@ -2458,7 +2425,7 @@ function wire() {
     }
     if (meta && "123456".includes(event.key)) {
       event.preventDefault();
-      const views = ["home", "models", "textures", "mobs", "blender", "settings"];
+      const views = ["home", "models", "textures", "mobs", "import", "settings"];
       showView(views[Number(event.key) - 1]);
       return;
     }
@@ -2489,13 +2456,13 @@ function wire() {
 
 /* ------------------------------------------------------------------ reprise automatique */
 const SESSION_TEXT_FIELDS = ["search", "search-tex", "search-ens", "search-sound", "tex-role",
-  "mod-name", "mob-name", "mob-parent", "mob-resource-search", "blend-axis", "blend-scale",
-  "blend-only", "blend-target-search"];
-const SESSION_CHECK_FIELDS = ["model-shots", "ens-textures", "bulk-anim", "blend-fit"];
+  "mod-name", "mob-name", "mob-parent", "mob-resource-search", "model-axis", "model-scale",
+  "model-target-search"];
+const SESSION_CHECK_FIELDS = ["model-shots", "ens-textures", "bulk-anim", "model-fit"];
 let sessionTouchedDuringBoot = false;
 
 function applyRestoredChoices() {
-  for (const id of ["mob-model", "blend-target"]) {
+  for (const id of ["mob-model", "model-target"]) {
     const desired = restoredChoices[id];
     if (!desired) continue;
     const select = $(`#${id}`);
@@ -2534,8 +2501,7 @@ function captureUiSession() {
   if (quality) fields["model-quality"] = quality;
   const choices = {
     "mob-model": restoredChoices["mob-model"] || $("#mob-model")?.value || "",
-    "blend-target": restoredChoices["blend-target"] || $("#blend-target")?.value || "",
-    "blend-ref": state.blend.ref || "",
+    "model-target": restoredChoices["model-target"] || $("#model-target")?.value || "",
     "mob-textures": [...new Set([
       ...(restoredChoices["mob-textures"] || []),
       ...[...($("#mob-textures")?.selectedOptions || [])].map((option) => option.value),
@@ -2564,13 +2530,7 @@ async function restoreUiSession(saved) {
   if (!saved || saved.version !== 1 || !state.project) return;
   const assets = new Map((state.project.assets || []).map((asset) => [`${asset.kind}:${asset.rel}`, asset]));
   const mobs = new Map((state.project.mobs || []).map((mob) => [mob.slug, mob]));
-  const blendRefs = (saved.tabs || []).some((tab) => tab.type === "blend") || saved.choices?.["blend-ref"];
-  if (blendRefs) {
-    try { state.blends = (await api("/api/blend/list", { background: true })).blends || []; }
-    catch (error) { log("warn", `Liste Blender indisponible : ${error.message}`); }
-  }
   if (sessionTouchedDuringBoot) return;
-  const blends = new Map((state.blends || []).map((entry) => [entry.ref, entry]));
   for (const id of [...SESSION_TEXT_FIELDS, ...SESSION_CHECK_FIELDS]) {
     const value = saved.fields?.[id];
     const node = $(`#${id}`);
@@ -2593,10 +2553,9 @@ async function restoreUiSession(saved) {
   const choices = saved.choices || {};
   restoredChoices = {};
   if (assets.has(`model:${choices["mob-model"]}`)) restoredChoices["mob-model"] = choices["mob-model"];
-  if (assets.has(`model:${choices["blend-target"]}`)) restoredChoices["blend-target"] = choices["blend-target"];
+  if (assets.has(`model:${choices["model-target"]}`)) restoredChoices["model-target"] = choices["model-target"];
   restoredChoices["mob-textures"] = (choices["mob-textures"] || [])
     .filter((rel) => assets.has(`texture:${rel}`));
-  state.blend.ref = blends.has(choices["blend-ref"]) ? choices["blend-ref"] : "";
 
   state.tabs = [];
   ensureViewTab("home", VIEW_LABELS.home).closable = false;
@@ -2605,14 +2564,13 @@ async function restoreUiSession(saved) {
       ensureViewTab(tab.view, VIEW_LABELS[tab.view]);
     } else if (["model", "texture", "sound"].includes(tab.type)) {
       const asset = assets.get(`${tab.type}:${tab.rel}`);
-      if (asset) ensureTab({ id: `${tab.type}:${tab.rel}`, kind: tab.type, label: asset.name,
-                             doc: { type: tab.type, rel: tab.rel } });
+      const index = tab.type === "texture" && Number.isInteger(tab.index) && tab.index >= 0 ? tab.index : 0;
+      if (asset) ensureTab({ id: `${tab.type}:${tab.rel}${index ? `#${index}` : ""}`,
+                             kind: tab.type, label: asset.name,
+                             doc: { type: tab.type, rel: tab.rel, ...(tab.type === "texture" ? { index } : {}) } });
     } else if (tab.type === "mob" && mobs.has(tab.slug)) {
       ensureTab({ id: `mob:${tab.slug}`, kind: "mob", label: mobs.get(tab.slug).name,
                   doc: { type: "mob", slug: tab.slug } });
-    } else if (tab.type === "blend" && blends.has(tab.ref)) {
-      ensureTab({ id: `blend:${tab.ref}`, kind: "blend", label: blends.get(tab.ref).name,
-                  doc: { type: "blend", ref: tab.ref } });
     }
   }
   const view = Object.hasOwn(VIEW_LABELS, saved.view) ? saved.view : "home";
@@ -2628,8 +2586,7 @@ async function restoreUiSession(saved) {
   else delete document.documentElement.dataset.min;
   setThumbnailPause(Boolean(saved.thumbnails_paused));
   applyRestoredChoices();
-  if (saved.inspector && active.doc && active.doc.type !== "blend") void openDoc(active.doc);
-  if (view === "blender" && state.blend.ref) void selectBlend(state.blend.ref);
+  if (saved.inspector && active.doc) void openDoc(active.doc);
   // Les grilles synchrones sont en place à la prochaine image. Ne pas voler
   // le défilement si l'utilisateur a déjà commencé à interagir.
   const scroll = $("#views");
@@ -2667,7 +2624,7 @@ function wireUiSession() {
         sessionLoadFailed = false;
       }
     }
-    if (event?.type === "change" && ["mob-model", "mob-textures", "blend-target"].includes(event.target?.id)) {
+    if (event?.type === "change" && ["mob-model", "mob-textures", "model-target"].includes(event.target?.id)) {
       delete restoredChoices[event.target.id];
     }
     uiSessionWriter.schedule(event?.type === "input" || event?.type === "scroll" ? 250 : 100);

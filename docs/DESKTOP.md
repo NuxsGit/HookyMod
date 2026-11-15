@@ -5,7 +5,8 @@ fournit la fenêtre, le choix de dossier et les téléchargements ; le moteur
 existant reste un **sidecar Python autonome**, avec sa bibliothèque Rust et ses
 décodeurs. Ce n'est pas une réécriture complète en Rust. Un installateur construit
 correctement ne demande pas à l'utilisateur final d'installer Python ou Rust.
-Blender reste nécessaire pour produire automatiquement un vrai `.blend`.
+Les échanges de modèles utilisent glTF/OBJ ; aucun logiciel 3D n'est requis pour
+préparer ces exports ou analyser un import.
 
 ## Utilisation
 
@@ -24,9 +25,11 @@ Blender reste nécessaire pour produire automatiquement un vrai `.blend`.
    `~/Downloads/HookyCreator/`). L'application affiche le chemin après le
    transfert. Si nécessaire, utilise le lien de secours de l'export. Le mode
    navigateur utilise les réglages de téléchargement habituels du navigateur.
-4. **Exporter en .blend** exige Blender installé ; indique son chemin dans
-   Réglages s'il n'est pas détecté. Sinon le ZIP contient un glTF et un script,
-   mais pas de nouveau `.blend`.
+4. Importe le glTF/OBJ dans ton logiciel 3D, puis utilise **Importer un modèle**
+   pour analyser un OBJ triangulé, un glTF avec son `.bin`, ou un GLB. L'écriture
+   dans la copie de travail est strictement limitée à certaines cibles BFRES 9.x ;
+   BFRES 10.x et les structures non vérifiées sont refusés. Lis les remarques
+   et les rapports inclus dans l'export avant de poursuivre.
 
 La vue, les onglets, les filtres, la sélection, l'inspecteur et les brouillons
 sont sauvegardés par projet. Les réglages et les fichiers modifiés restent
@@ -104,8 +107,8 @@ exécutables et reteste le backend livré. Les installateurs de test sont conser
 comme artefacts de CI lorsque le workflow réussit. Le dialogue de choix lui-même
 n'est pas automatisé : le mode debug
 accepte une racine de fixture par variable d'environnement pour ce test, option
-absente des builds release. Un autre test ouvre le `.blend` avec un vrai Blender
-sur Linux.
+absente des builds release. Un autre job teste les formats standards et ouvre
+les exports glTF/OBJ avec Blender comme logiciel consommateur sous Linux.
 
 Pour lancer ces vérifications localement après construction :
 

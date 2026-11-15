@@ -1,178 +1,50 @@
-# Ouvrir les assets de Ocarina of Time (remake Switch 2, 2026)
+# Ouvrir et diagnostiquer des ressources
 
-Notes vérifiées le 11 novembre 2026 à partir des sources publiques listées en bas.
-Elles expliquent **pourquoi un fichier ne s'affiche pas** et **quels outils
-savent déjà le lire**, sans reprendre de code sous GPL.
+HookyMod lit des ressources compatibles fournies par l'utilisateur : dossiers extraits, certaines archives SARC, fichiers `.zs`, BFRES et BNTX. Un suffixe reconnu ne garantit pas que la version ou le contenu du fichier soit entièrement pris en charge. Ne distribue pas de fichiers ou de clés que tu n'as pas le droit de partager.
 
-## 1. Ce qu'est le jeu
+## Dictionnaires et compression
 
-* Remake de *Ocarina of Time* sorti le **5 novembre 2026** sur Switch 2 ;
-  build de référence **E0F3CCFA**, update **v131072**, titre `0400486024DEC000`.
-* Moteur : **ModuleSystem**, celui de *Tears of the Kingdom* (nom de code « Owl »).
-  Conséquence directe : le romfs, les formats et la plupart des noms de classes
-  sont ceux de TotK — un `.bfres.zs`, un `.bntx.zs`, un `.pack.zs` et un
-  `.bgyml` se lisent avec la même boîte à outils.
-* romfs : **186 587 fichiers, ~26 Go**.
-
-| Dossier | Contenu | Extension |
-|---|---|---|
-| `Tex` | 20 667 textures (9,4 Go) | `<Nom>.bntx.zs` |
-| `Model` | 7 896 modèles + animations | `<Nom>.<Nom>.bfres.zs`, `<Nom>_Animation.anim.bfres.zs` |
-| `Pack` | 8 385 *acteur packs* (Link = `Player_Base`, `Player_Child`, `Player_Adult`) | `*.pack.zs` (SARC) |
-| `TerrainArc`, `Bake`, `PreComputedCulling` | terrain, éclairage cuit, occlusion | `.extm`, `.bkprb`, `.bcul` |
-| `AS` | 919 graphes d'animation | `*.root.asb.zs` |
-| `Banc` | 247 cartes (une par zone) | `.bcett.byml.zs` |
-| `Mals` | textes (16 langues, 540 MSBT chacune) | `*.sarc.zs` |
-| `System` | table des tailles de ressources | `*.rsizetable.zs` |
-
-## 2. Compression : `.zs` + dictionnaires
-
-Presque tout est du **zstd**. Beaucoup de frames exigent un des quatre
-dictionnaires du jeu, rangés dans `Pack/ZsDic.pack.zs` (zstd simple → SARC de
-fichiers `.zsdic`) :
-
-| `dict_id` | Fichier | Sert à |
-|---:|---|---|
-| 1 | `zs.zsdic` | tout le reste (textures, modèles…) |
-| 2 | `bkprb.zsdic` | éclairage cuit |
-| 3 | `bcett.byml.zsdic` | placement des cartes |
-| 4 | `pack.zsdic` | acteur packs `.pack.zs` |
-
-HookyMod charge ces dictionnaires automatiquement dès que le dossier `romfs`
-est choisi (menu **Fichier → Choisir un dossier romfs…**) ; sans eux, un `.zs`
-« ne s'ouvre pas » alors que le fichier est intact. Vérification en une ligne :
+Beaucoup de fichiers `.zs` utilisent un dictionnaire zstd. L'application recherche notamment `Pack/ZsDic.pack.zs` dans le projet et ses parents. Utilise les dictionnaires correspondant à tes propres fichiers : s'ils manquent, l'ouverture ou la recompression peut être refusée. Une frame tronquée est rejetée plutôt que traitée comme une ressource complète.
 
 ```bash
-python -m hookymod.cli doctor romfs/Tex/<Nom>.bntx.zs
+python -m hookymod.cli doctor /chemin/vers/romfs
+python -m hookymod.cli dicts /chemin/vers/romfs
+python -m hookymod.cli scan /chemin/vers/romfs --json -o rapport.json
+python -m hookymod.cli list /chemin/vers/archive.pack.zs --recursive --romfs /chemin/vers/romfs
 ```
 
-## 3. Pourquoi un asset ne s'affiche pas
+Le scan est un inventaire de candidats ; consulte les avertissements, notamment s'il est limité ou rencontre des entrées illisibles. Les formats inconnus ne deviennent pas exploitables parce qu'ils sont listés.
 
-1. **Tkinter absent** → aucune fenêtre ne s'ouvre (c'est le cas le plus fréquent
-   sur Windows). `python -m hookymod.cli doctor` l'affiche en clair. Voir §4.
-2. **Modèle sans ses textures** : le BFRES ne contient pas les textures, elles
-   vivent à part dans `Tex/<Nom>.bntx.zs`. Ouvrir la texture correspondante
-   (ou l'exporter en PNG) est donc une étape normale, pas un bug.
-3. **`.zs` non décompressé** faute de dictionnaire (voir §2).
-4. **Mod qui « ne fait rien » en jeu** : le fichier a grossi au-delà de sa
-   réservation dans
-   `System/Resource/ResourceSizeTable.Product.111.Nin_Ounce_NVN2.rsizetable.zs`
-   (format RESTBL v1, entrée = CRC-32 du chemin sans `.zs` + taille réservée).
-   Le jeu refuse alors le fichier. HookyMod sait lire/corriger cette table
-   (`restbl`, `translate pack`) ; `tools/rstb_set.py` du dépôt communautaire fait
-   la même chose.
-5. **Format non géré** : `.ainb` (logique), `.asb` (animations), `.bcett.byml`
-   (placement), `.bkprb` (éclairage cuit), `.bcul` (occlusion) ne sont pas encore
-   analysés par HookyMod ; le diagnostic le dit explicitement au lieu d'échouer
-   en silence.
+## Textures et modèles
 
-## 3 bis. Ce que disent les fichiers réels du papillon (build 1.1.1)
+Les textures BNTX sont souvent distinctes des modèles BFRES. Dans HookyCreator, les références de matériaux reconnues permettent de rechercher des images dans l'inventaire ; une référence absente, ambiguë ou non décodable reste signalée. Certaines associations par nom sont heuristiques et doivent être vérifiées.
 
-Mesuré sur les quatre `Mt_Body_Animal_Butterfly_*.bntx.zs` et le
-`Animal_Butterfly.Animal_Butterfly.bfres.zs` du dépôt :
-
-**Textures** — BNTX **0.4.1.1** (`0x00040101`), conteneur **`Ounc`** (et non
-`NX  `), disposition **Orin**, 9 mips, **aucun dictionnaire** (`dict_id = 0`) :
-
-| Fichier | Format | Taille |
-|---|---|---|
-| `..._Alb` | `ASTC_8x5_SRGB` | 384 × 384 |
-| `..._Nrm` | `ASTC_5x5_UNORM` | 384 × 384 |
-| `..._AO`, `..._Rgh` | `BC4_UNORM` | 256 × 256 |
-
-En 0.4.x, la structure BTI porte des adresses **32 bits** : nom à `+80`, table
-des pointeurs de mips à `+96` (en 0.3.x/Switch 1, ce sont des 64 bits à
-`+76`/`+92`). Les mips sont des pointeurs **absolus** chaînés
-(`0x1000`, `0x9000`, `0xB000`…), et un en-tête `BRTD` précède les pixels.
-
-**Modèles** — `FRES` version **10** (`0x000A0400`), compressé avec
-`dict_id = 1` (`zs.zsdic`) : sans `Pack/ZsDic.pack.zs`, rien ne se décompresse.
-Structure observée (toutes les adresses sont des `u64` qui suivent la signature
-et un `u32` compteur) :
-
-| Bloc | Offset | Champs |
-|---|---|---|
-| `_STR` | `0x3590` | `u32` nombre de chaînes à `+0x10`, entrées (`u16` longueur + texte + NUL) à partir de `+0x18` ; **pas de `_DIC`** |
-| `FMDL` | `0xF0` | `+0x08` nom (offset de chaîne), `+0x18` `FSKL`, `+0x20` `FVTX`, `+0x28` `FSHP`, `+0x30` dictionnaire des formes, `+0x38` `FMAT`, `+0x40` dictionnaire des matériaux, `+0x48` user data |
-| `FVTX` | `0x1B0` | `+0x08` liste des attributs, `+0x10` `0xE40` (?), `+0x18` tampons |
-| `FMAT` | `0x208` | compteur 1, `+0x08` nom, puis `0x1920` (textures), `0x1090`, `0x1900`… |
-| `FSHP` | `0x310` | compteur 2 (`Wing_L`, `Wing_R`), `+0x08` nom, puis `0x640`, `0x838`, `0x840`, `0x9F0`… |
-| `FSKL` | `0x3F0` | squelette (`Root`, `Skl_Root`, `Wing_L`, `Wing_R`) |
-
-Les noms de textures référencés par le matériau apparaissent dans `_STR`
-(`Mt_Body_Animal_Butterfly_Alb`, `…_Rgh`, `_ao0`, `_rgh0`, `_p0`, `_t0`) : c'est
-la clé pour retrouver le fichier `Tex/*.bntx.zs` correspondant.
-
-### Géométrie v10 : décodée (mesurée, puis vérifiée)
-
-Le format n'a pas de spécification publique ; ce qui suit vient de mesures sur le
-papillon, et chaque hypothèse est vérifiée à l'exécution (`hookymod/bfres_v10.py`).
-
-| Élément | Valeur mesurée |
-|---|---|
-| base des tampons GPU | `u64` à `0x170` de l'en-tête (`0x4000` ici) |
-| tampon d'indices | `u16`, de la base jusqu'à l'offset des sommets, découpé en sous-maillages **alignés sur `0x1000` octets**, chacun terminé par du remplissage |
-| tampon de sommets | juste après les indices ; offset `u32` dans `FVTX` (ici `0x5700` → `0x9700`) |
-| pas d'enregistrement | **24 octets** (autocorrélation des octets : pics à 24 et 48) |
-| position | `3 × f16` à `+0` |
-| UV | `2 × u16 ÷ 65535` à `+16` |
-| non décodé | `+8`, `+12`, `+20` (normales/tangentes/quelque chose) → **rien n'est inventé** |
-
-Les garde-fous, tous obligatoires avant de livrer une géométrie :
-
-1. la dispersion des positions doit être réelle (un tampon d'indices relu comme
-   des `f16` donne des valeurs dénormalisées → rejeté) ;
-2. le score de cohérence (arêtes de triangle / distance aléatoire) doit être
-   franchement bas, sinon refus ;
-3. les UV ne sont acceptées que si l'aire UV de chaque triangle **corrèle** avec
-   son aire 3D (mesuré : 0,66 — une projection réelle) ; sinon pas d'UV du tout ;
-4. les sous-maillages de moins de 8 triangles sont écartés comme bruit.
-
-Résultat sur le papillon : 3 sous-maillages, **1 302 triangles**, corps et ailes
-cohérents, UV valides → export glTF/OBJ avec l'albédo branché.
-
-Reste à faire pour les modèles : normales/tangentes du tampon v10 (pour un
-ombrage exact plutôt que recalculé), squelette `FSKL` (pour l'animation) et
-l'écriture (BFRES v10 écrivable) pour les mods.
-
-## 4. Voir quelque chose **sans** fenêtre
+Les BFRES 10.x reconnus peuvent être décodés à partir des tables de formes, indices, matériaux et attributs du LOD 0. Un repli heuristique existe pour certaines autres dispositions ; il peut omettre ou mélanger des éléments et le signale. Squelettes, pose, animations, morphs, shaders et autres LOD ne sont pas reconstruits. L'écriture 10.x est refusée ; l'injection est limitée à certaines structures 9.x. Voir [HOOKYCREATOR.md](HOOKYCREATOR.md).
 
 ```bash
-python -m hookymod.cli doctor                              # modules, Tk, dictionnaires
-python -m hookymod.cli ls romfs/Tex                        # inventaire (via le romfs)
-python -m hookymod.cli textures romfs/Tex/<Nom>.bntx.zs -o png/   # textures en PNG
-python -m hookymod.cli view romfs/Model/<Nom>.<Nom>.bfres.zs -o modele.png
-python -m hookymod.cli view ... --views 4 --size 480x480    # planche de rotations
-python -m hookymod.cli obj  romfs/Model/<Nom>.<Nom>.bfres.zs -o modele.obj
+python -m hookymod.cli textures texture.bntx -o images/
+python -m hookymod.cli view modele.bfres -o apercu.png
+python -m hookymod.cli export-model modele.bfres -o modele_export
 ```
 
-Sur Windows, pour retrouver l'interface : réinstaller Python depuis python.org
-en cochant **« tcl/tk and IDLE »** (ou lancer `py -3.12 -m hookymod.app`).
-Sous Debian/Ubuntu : `sudo apt install python3-tk`.
+La CLI de modèle recherche des textures voisines par nom : seul un albédo unique pour un matériau unique est relié, de façon heuristique. Les autres cartes candidates restent à brancher manuellement. Les noms de sortie ambigus et les conteneurs BNTX multi-images sont ignorés et signalés ; les PNG voisins sont limités à 64 Mio. Pour un OBJ source, elle conserve les indices UV et normales par coin mais ne lit pas les bibliothèques MTL ni les textures référencées ; les polygones sont triangulés en éventail avec un avertissement. Les maillages 10.x préconstruits refusent une demande de LOD autre que 0. Choisir un dossier d'export dédié : la CLI peut remplacer ses fichiers homonymes. Le mode individuel de HookyCreator propose une résolution par matériau plus détaillée et fournit un rapport. L'explorateur Tk n'associe pas automatiquement les textures lors de son export glTF/OBJ.
 
-## 5. Outils existants qui traduisent déjà ces formats
+## Autres diagnostics
 
-| Outil | Ce qu'il fait | Remarque |
-|---|---|---|
-| [OctoSquiddy/Switch-2-Toolbox](https://github.com/OctoSquiddy/Switch-2-Toolbox) | fork de Switch-Toolbox avec **BFRES v10** (Switch 2), **BNTX 0.4.1.x** (« Ounc »), chargement automatique des textures externes du dossier `Tex` | nécessite `Pack/ZsDic.pack.zs` décompressé dans `Lib/ZstdDictionaries` ([issue #757](https://github.com/KillzXGaming/Switch-Toolbox/issues/757)). GPL v3. |
-| [Kabosune/oot-remake-modding](https://github.com/Kabosune/oot-remake-modding) | `zstool.py` (ls/cat/extract `.zs` + SARC + BYML), `zsmod.py` (édition de nombres), `asbtool.py` (ASB), `rstb_set.py` (table des tailles), `nxpatch.py` | orienté code/paramètres, pas les modèles ; c'est la référence la plus à jour sur la structure du romfs. |
-| [CosmicDreamsOfCode/BfresToCast](https://github.com/CosmicDreamsOfCode/BfresToCast) | conversion BFRES → Cast (glTF/FBX) | PR #8 : textures externes, ASTC, tableaux, blend shapes. |
-| [NotRexed/Hookshot](https://github.com/NotRexed/Hookshot) | recompilation statique du jeu pour PC (Vulkan) ; `nx2/prompt_assets.py` documente `.nup`, dictionnaires, RESTBL | ne sert pas à éditer des assets. |
-| [zortos293/Lichii](https://github.com/zortos293/Lichii) | émulateur (lignée yuzu/Eden) | décode ASTC/BC7 à l'exécution. |
-| TotK tools (TotkToolkit, etc.) | mêmes formats côté TotK | beaucoup de connaissances sont transférables. |
+- Une interface Tk absente peut nécessiter l'installation du paquet système `python3-tk` sous Debian/Ubuntu ; la CLI et l'atelier navigateur peuvent être utilisés sans elle.
+- Les textures BC6/BC7/ASTC ont besoin de `texture2ddecoder` pour les chemins de lecture concernés. L'encodage ASTC/BC7 n'est pas fourni.
+- Une ressource modifiée dont la taille change peut nécessiter une adaptation de la table RESTBL. L'assemblage de HookyCreator ne la met pas automatiquement à jour.
+- Les archives, animations, paramètres et formats non reconnus peuvent rester illisibles. Une exportation ou une relecture valide ne garantit pas le résultat en jeu.
 
-Conclusion pratique : **la traduction est possible** — Switch-2-Toolbox (fork
-Switch 2) pour ouvrir/modifier modèles et textures, `zstool.py` pour inspecter
-`.zs`/SARC/BYML, `zsmod.py` pour les valeurs, `rstb_set.py` pour la table des
-tailles. HookyMod reste l'outil « tout-en-un » côté ligne de commande et
-diagnostic, avec un périmètre volontairement limité à SARC / zstd / BFRES /
-BNTX / OBJ / PNG.
+## Références et attributions
 
-## 6. Sources
+Ces projets externes sont cités comme sources ou outils distincts, pas comme dépendances intégrées ni comme garantie de compatibilité :
 
-* `docs/romfs.md` et `docs/engine.md` de `Kabosune/oot-remake-modding` (build
-  E0F3CCFA, update v131072) — structure du romfs, dictionnaires zstd, RESTBL v1.
-* `tools/zstool.py` du même dépôt — implémentation de référence SARC/zstd/BYML.
-* `OctoSquiddy/Switch-2-Toolbox` — BFRES v10, BNTX 0.4.1.x, textures externes.
-* `NotRexed/Hookshot` (`nx2/prompt_assets.py`) — `.nup`, dictionnaires, RESTBL.
-* `KillzXGaming/tegra_swizzle` — formules de swizzle X1 et Orin.
+- [OctoSquiddy/Switch-2-Toolbox](https://github.com/OctoSquiddy/Switch-2-Toolbox), structures BFRES/BNTX et textures externes ; projet sous GPL-3.0. Voir aussi [la discussion sur les dictionnaires](https://github.com/KillzXGaming/Switch-Toolbox/issues/757).
+- [Kabosune/oot-remake-modding](https://github.com/Kabosune/oot-remake-modding), notes sur les fichiers, dictionnaires et table des tailles.
+- [CosmicDreamsOfCode/BfresToCast](https://github.com/CosmicDreamsOfCode/BfresToCast), autre convertisseur de modèles.
+- [NotRexed/Hookshot](https://github.com/NotRexed/Hookshot), notamment ses notes sur NUP et les tables de tailles.
+- [zortos293/Lichii](https://github.com/zortos293/Lichii), projet indépendant d'émulation.
+- `KillzXGaming/tegra_swizzle`, formules publiques de disposition des pixels X1/Orin ; la famille d'outils TotkToolkit propose également des références sur des formats apparentés.
+
+Les licences et attributions des composants effectivement utilisés sont récapitulées dans [PROVENANCE.md](PROVENANCE.md) et dans les répertoires des dépendances.

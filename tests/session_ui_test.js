@@ -24,9 +24,9 @@ function harness() {
     return node;
   }
   for (const id of ["search", "search-tex", "search-ens", "search-sound", "tex-role", "mod-name",
-    "mob-name", "mob-parent", "mob-resource-search", "blend-axis", "blend-scale", "blend-only",
-    "blend-target-search", "model-shots", "ens-textures", "bulk-anim", "blend-fit", "mob-model",
-    "blend-target", "mob-textures", "views", "inspector", "console", "selection-count", "tabs"]) add(id);
+    "mob-name", "mob-parent", "mob-resource-search", "model-axis", "model-scale",
+    "model-target-search", "model-shots", "ens-textures", "bulk-anim", "model-fit", "mob-model",
+    "model-target", "mob-textures", "views", "inspector", "console", "selection-count", "tabs"]) add(id);
   nodes.get("#inspector").hidden = true;
   nodes.get("#console").hidden = true;
   const $ = (selector) => nodes.get(selector) || null;
@@ -37,14 +37,14 @@ function harness() {
       { kind: "texture", rel: "Model/Héros_Alb.bntx", name: "Albedo" },
       { kind: "sound", rel: "Sound/One.bwav", name: "One" },
     ], mobs: [{ slug: "MyMob", name: "My Mob" }] },
-    blends: [], blend: { ref: "" }, view: "home", tabs: [], tab: "view:home",
+    view: "home", tabs: [], tab: "view:home",
     filters: {}, selection: new Set(), shown: { models: 48, textures: 48, ensembles: 48, sounds: 48, chooser: 48 },
   };
   const document = { documentElement: { dataset: {} }, body: { inert: false }, visibilityState: "visible",
     addEventListener: (type, callback) => { listeners[type] = callback; } };
   const window = { addEventListener: (type, callback) => { winListeners[type] = callback; } };
   const thumb = { paused: false };
-  const labels = { home: "Accueil", models: "Modèles", textures: "Textures", sounds: "Sons", blender: "Blender" };
+  const labels = { home: "Accueil", models: "Modèles", textures: "Textures", sounds: "Sons", import: "Importer" };
   class FakeWriter {
     constructor(capture, options) { this.capture = capture; this.options = options; this.enabled = false; }
     enable() { this.enabled = true; }
@@ -71,10 +71,8 @@ function harness() {
     toggleConsole: (show) => { $("#console").hidden = !show; },
     setThumbnailPause: (paused) => { thumb.paused = paused; },
     openDoc: (doc) => { actions.push(["openDoc", doc]); $("#inspector").hidden = false; },
-    selectBlend: (ref) => actions.push(["selectBlend", ref]),
     requestAnimationFrame: (callback) => callback(),
     finishPendingSettings: async () => { writes.push(["settings"]); return true; },
-    api: async (url) => { actions.push(["api", url]); return { blends: [{ ref: "work:one.blend", name: "one" }] }; },
     toast: (message) => actions.push(["toast", message]), status: (...args) => actions.push(["status", ...args]),
     log: (...args) => actions.push(["log", ...args]),
   });
@@ -88,13 +86,13 @@ async function restoreAndCapture() {
     version: 1, view: "models", active: "model:Model/Héros.bfres",
     tabs: [{ type: "view", view: "home" }, { type: "view", view: "models" },
       { type: "model", rel: "Model/Héros.bfres" }, { type: "model", rel: "missing.bfres" },
-      { type: "texture", rel: "../../other" }, { type: "mob", slug: "MyMob" },
+      { type: "texture", rel: "../../other" }, { type: "texture", rel: "Model/Héros_Alb.bntx", index: 1 }, { type: "mob", slug: "MyMob" },
       { type: "blend", ref: "work:one.blend" }, { type: "blend", ref: "work:missing.blend" }],
     selection: ["model:Model/Héros.bfres", "texture:Model/Héros_Alb.bntx", "model:missing.bfres"],
     fields: { search: " HÉROS ", "mod-name": "Mon brouillon", "model-shots": true,
               "ens-textures": false, "model-quality": "detail" },
-    choices: { "mob-model": "Model/Héros.bfres", "blend-target": "missing.bfres",
-               "mob-textures": ["Model/Héros_Alb.bntx", "missing.bntx"], "blend-ref": "work:one.blend" },
+    choices: { "mob-model": "Model/Héros.bfres", "model-target": "missing.bfres",
+               "mob-textures": ["Model/Héros_Alb.bntx", "missing.bntx"] },
     shown: { models: 96, textures: 72 }, scroll: 500, inspector: true, console: true,
     reduced: true, thumbnails_paused: true,
   };
@@ -109,14 +107,15 @@ async function restoreAndCapture() {
   assert.deepEqual([...h.state.selection], ["model:Model/Héros.bfres", "texture:Model/Héros_Alb.bntx"]);
   assert.equal(h.state.tabs.some((tab) => tab.id.includes("missing") || tab.id.includes("../")), false);
   assert.equal(h.state.tabs.some((tab) => tab.id === "mob:MyMob"), true);
-  assert.equal(h.state.tabs.some((tab) => tab.id === "blend:work:one.blend"), true);
+  assert.equal(h.state.tabs.some((tab) => tab.id.startsWith("blend:")), false);
+  assert.equal(h.state.tabs.some((tab) => tab.id === "texture:Model/Héros_Alb.bntx#1" && tab.doc.index === 1), true);
   assert.equal(h.actions.filter(([name]) => name === "openDoc").length, 1);
   assert.equal(h.document.documentElement.dataset.min, "1");
   assert.equal(h.thumb.paused, true);
   const captured = JSON.parse(JSON.stringify(vm.runInContext("captureUiSession()", h.ctx)));
   assert.equal(captured.choices["mob-model"], "Model/Héros.bfres", "choix maintenu pendant la validation");
   assert.deepEqual(captured.choices["mob-textures"], ["Model/Héros_Alb.bntx"]);
-  assert.equal(captured.choices["blend-target"], "");
+  assert.equal(captured.choices["model-target"], "");
   assert.equal(captured.fields["model-quality"], "detail");
   assert.equal(captured.shown.models, 96);
 
@@ -129,15 +128,11 @@ async function restoreAndCapture() {
 
 async function userActionDuringLoadWins() {
   const h = harness();
-  let answer;
-  h.ctx.api = () => new Promise((resolve) => { answer = resolve; });
-  h.ctx.saved = { version: 1, view: "models", tabs: [{ type: "blend", ref: "work:one.blend" }],
+  h.ctx.saved = { version: 1, view: "models", tabs: [{ type: "view", view: "models" }],
                   fields: { search: "ancienne valeur" } };
-  const loading = vm.runInContext("restoreUiSession(saved)", h.ctx);
   h.$("#search").value = "saisie récente";
   vm.runInContext("sessionTouchedDuringBoot = true", h.ctx);
-  answer({ blends: [{ ref: "work:one.blend", name: "one" }] });
-  await loading;
+  await vm.runInContext("restoreUiSession(saved)", h.ctx);
   assert.equal(h.$("#search").value, "saisie récente");
   assert.equal(h.state.view, "home");
 }

@@ -2,18 +2,19 @@
 from __future__ import annotations
 
 import os
+import base64
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 
 import zstandard
 
-from hookycreator import blend
+from hookycreator import model_import
 from hookycreator.project import Project, ProjectError
 from hookymod import bntx
 from hookymod.util import decode_png, png_bytes
 from tests import synth
-from tests.test_hookycreator_blend import triangle_blend
 
 
 class WorkingCopyTests(unittest.TestCase):
@@ -100,17 +101,22 @@ class WorkingCopyTests(unittest.TestCase):
         self.assertEqual(src.stat().st_size, edited.stat().st_size)
         self.assertNotEqual(first, self.project.texture_png(rel))
 
-    def test_blend_translation_updates_model_and_state_but_not_original(self):
+    def test_model_import_updates_working_copy_and_state_but_not_original(self):
         rel = "Model/Test.bfres"
-        original = self.model.read_bytes()
+        original = bytearray(self.model.read_bytes())
+        struct.pack_into("<I", original, 8, 0x00090002)
+        self.model.write_bytes(original)
+        self.project.scan()
         before = self.project.model_info(rel)
         self.project.state_payload()  # remplir le cache d'état avant l'écriture
-        blend.save_upload(self.project, "triangle.blend", triangle_blend())
-        blend.translate(self.project, "work:triangle.blend", rel, axis="keep", fit=False)
+        obj = b"v 0 0 0\nv 2 0 0\nv 0 2 0\nf 1 2 3\n"
+        request = {"files": [{"name": "triangle.obj", "data": base64.b64encode(obj).decode()}],
+                   "target": rel, "fit": False}
+        model_import.import_model(self.project, request)
         after = self.project.model_info(rel)
         self.assertNotEqual(before["bounds"], after["bounds"])
         self.assertEqual(after["bounds"], [2.0, 2.0, 0.0])
-        self.assertEqual(self.model.read_bytes(), original)
+        self.assertEqual(self.model.read_bytes(), bytes(original))
         self.assertIn(rel.encode(), self.project.state_payload())
         self.assertIn(rel, self.project.state()["edited"])
 

@@ -16,7 +16,11 @@ l'a pas été, sans relire des logs.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,9 +28,10 @@ from hookymod import bfres as bfres_mod
 from hookymod import bntx as bntx_mod
 from hookymod import blender, render
 from hookymod.container import Level, is_navigable
-from hookymod.util import HookyError
+from hookymod.util import HookyError, safe_filename_stem, write_atomic
 
 from .asset_names import is_animation_bfres, is_auxiliary_bfres
+from .export_folders import ExportFolders
 
 #: suffixes qui cachent une archive (contient un SARC ou une frame zstd + SARC)
 ARCHIVE_SUFFIXES = (".pack.zs", ".pack", ".sarc", ".szs", ".sarc.zs")
@@ -157,6 +162,41 @@ def export_all(project, out_dir, kinds: tuple[str, ...] = ("texture", "model"),
         items = items[:limit]
     report = {"out": str(out), "started": len(items), "ok": 0, "skip": 0,
               "error": 0, "items": [], "textures": 0, "models": 0, **scan}
+    registries: dict[str, ExportFolders] = {}
+    # Pour un objet compatible dépourvu de racine, ne pas prétendre reconnaître
+    # ses dossiers lors d'une autre exécution : une identité provisoire évite
+    # de les écraser si un autre objet emploie les mêmes libellés.
+    source_root = getattr(project, "root", None) or out / f".anonymous-{uuid.uuid4().hex}"
+
+    def output_folder(kind: str, label: str) -> Path:
+        parent = out / ("textures" if kind == "texture" else "models")
+        base, boundary = parent.resolve(), out.resolve()
+        if base == boundary or not base.is_relative_to(boundary):
+            raise HookyError("Le dossier d'export sort du dossier de destination.")
+        registry = registries.get(kind)
+        if registry is None:
+            registry = registries[kind] = ExportFolders(parent, source_root, f"bulk-{kind}")
+        stem = _slug(label)
+        suffix = hashlib.sha256(label.encode("utf-8", "surrogatepass")).hexdigest()[:12]
+        folder = registry.claim(label, stem, f"{stem}--{suffix}")
+        if not folder.resolve().is_relative_to(base) or not registry.owns(folder, label):
+            raise HookyError("Le dossier d'export a changé ou n'appartient plus à cette source.")
+        return folder
+
+    def publish(kind: str, label: str, folder: Path, stage: Path) -> None:
+        boundary, base = out.resolve(), folder.parent.resolve()
+        if (base == boundary or not base.is_relative_to(boundary)
+                or not folder.resolve().is_relative_to(base)
+                or not registries[kind].owns(folder, label)):
+            raise HookyError("Le dossier d'export a changé ou n'appartient plus à cette source.")
+        # Préparation isolée, puis remplacement fichier par fichier : un lien
+        # symbolique préexistant est remplacé, jamais suivi vers sa cible.
+        paths = sorted(stage.iterdir())
+        if any(path.is_symlink() or not path.is_file() for path in paths):
+            raise HookyError("Fichier inattendu dans l'export préparé.")
+        for path in paths:
+            os.replace(path, folder / path.name)
+
     for index, item in enumerate(items, start=1):
         if progress:
             progress(index - 1, len(items), item.label)
@@ -167,18 +207,30 @@ def export_all(project, out_dir, kinds: tuple[str, ...] = ("texture", "model"),
                 file = bntx_mod.BntxFile.parse(data, Path(item.label).name)
                 if not file.textures:
                     raise HookyError("aucune texture dans ce BNTX")
-                folder = out / "textures" / _slug(item.label)
-                folder.mkdir(parents=True, exist_ok=True)
+                folder = output_folder("texture", item.label)
+                entry["folder"] = folder.relative_to(out).as_posix()
                 written = []
-                for texture in file.textures:
-                    try:
-                        target = folder / f"{texture.name or texture.index}.png"
-                        texture.save_png(target, 0)
-                        written.append(target.name)
-                    except HookyError as exc:
-                        entry.setdefault("notes", []).append(f"{texture.name} : {exc}")
-                if not written:
-                    raise HookyError(entry.get("notes", ["aucun PNG écrit"])[0])
+                used_names: set[str] = set()
+                with tempfile.TemporaryDirectory(prefix=".hooky-export-", dir=out) as tmp:
+                    stage = Path(tmp) / folder.name
+                    stage.mkdir()
+                    for texture in file.textures:
+                        try:
+                            stem = _slug(texture.name or str(texture.index))
+                            name = f"{stem}.png"
+                            counter = 2
+                            while name.casefold() in used_names:
+                                name = f"{stem[:100]}--{counter}.png"
+                                counter += 1
+                            used_names.add(name.casefold())
+                            target = stage / name
+                            texture.save_png(target, 0)
+                            written.append(target.name)
+                        except HookyError as exc:
+                            entry.setdefault("notes", []).append(f"{texture.name} : {exc}")
+                    if not written:
+                        raise HookyError(entry.get("notes", ["aucun PNG écrit"])[0])
+                    publish("texture", item.label, folder, stage)
                 entry["files"] = written
                 entry["format"] = file.textures[0].format_name
                 report["textures"] += len(written)
@@ -198,11 +250,34 @@ def export_all(project, out_dir, kinds: tuple[str, ...] = ("texture", "model"),
                             "animations BFRES : lecture pas encore implémentée"
                         ) from exc
                     raise
-                folder = out / "models" / _slug(item.label)
-                folder.mkdir(parents=True, exist_ok=True)
-                written = blender.export_bundle(meshes, folder, folder.name,
-                                                formats=("gltf", "obj"))
-                entry["files"] = sorted(p.name for p in written.values())
+                folder = output_folder("model", item.label)
+                entry["folder"] = folder.relative_to(out).as_posix()
+                with tempfile.TemporaryDirectory(prefix=".hooky-export-", dir=out) as tmp:
+                    stage = Path(tmp) / folder.name
+                    stage.mkdir()
+                    if item.archive:
+                        # Les textures internes aux packs ne sont pas indexées par
+                        # matériau : ne jamais deviner leur raccordement.
+                        maps = {"material_maps": {}, "files": [], "warnings": [
+                            "Modèle dans une archive : textures non associées automatiquement ; "
+                            "exporte-les séparément et vérifie les matériaux."]}
+                    else:
+                        maps = project.export_maps_for(item.label, stage)
+                    notes = list(file.warnings) + maps["warnings"]
+                    written = blender.export_bundle(meshes, stage, folder.name,
+                                                    formats=("gltf", "obj"),
+                                                    material_maps=maps.get("material_maps", {}),
+                                                    warnings=notes)
+                    produced = {p.name for p in written.values()}
+                    produced.update(map_file["file"] for map_file in maps["files"])
+                    if (stage / "TEXTURES.md").is_file() and not item.archive:
+                        produced.add("TEXTURES.md")
+                    if "obj" in written and written["obj"].with_suffix(".mtl").is_file():
+                        produced.add(written["obj"].with_suffix(".mtl").name)
+                    publish("model", item.label, folder, stage)
+                entry["files"] = sorted(produced)
+                entry["notes"] = notes[:100] + ([f"{len(notes) - 100} remarque(s) omise(s)."]
+                                                if len(notes) > 100 else [])
                 entry["faces"] = sum(len(m.faces) for m in meshes)
                 entry["version"] = f"{file.version >> 16}.{(file.version >> 8) & 0xFF}"
                 report["models"] += 1
@@ -218,8 +293,9 @@ def export_all(project, out_dir, kinds: tuple[str, ...] = ("texture", "model"),
         report["items"].append(entry)
     if progress:
         progress(len(items), len(items), "")
-    (out / "rapport.json").write_text(json.dumps(report, indent=2, ensure_ascii=False),
-                                      encoding="utf-8")
+    # Remplacer un ancien rapport sans suivre un éventuel lien symbolique.
+    write_atomic(out / "rapport.json",
+                 json.dumps(report, indent=2, ensure_ascii=False).encode("utf-8", "backslashreplace"))
     return report
 
 
@@ -244,5 +320,4 @@ def summary(report: dict) -> str:
 
 
 def _slug(label: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in label)
-    return cleaned.strip("_")[:120] or "asset"
+    return safe_filename_stem(label)

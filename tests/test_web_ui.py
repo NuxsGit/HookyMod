@@ -19,7 +19,7 @@ WEB = ROOT / "hookycreator" / "web"
 #: éléments fabriqués à la volée par le script (panneau de détail), donc absents
 #: du HTML livré : ils sont créés par showInspector() et ses appelants.
 DYNAMIC_IDS = {
-    "btn-blender", "btn-blend", "btn-export-png", "btn-import", "btn-uv",
+    "btn-export-model", "btn-export-png", "btn-import", "btn-uv", "texture-index",
     "btn-translate-model", "btn-turntable", "copy-command", "file-import",
     "model-budget", "model-budget-note", "model-quality", "model-shot",
     "uv-back", "uv-flip", "uv-normal", "uv-shot", "sound-player",
@@ -46,7 +46,7 @@ class WebContractTests(unittest.TestCase):
         sections = set(re.findall(r'id="view-([a-z]+)"', self.html))
         rail = set(re.findall(r'data-view="([a-z]+)"', self.html))
         labels = set(re.findall(
-            r'^\s+(home|edit|create|models|ensembles|textures|sounds|mobs|blender|settings):',
+            r'^\s+(home|edit|create|models|ensembles|textures|sounds|mobs|import|settings):',
             self.js, re.M))
         self.assertEqual(sections, rail)
         self.assertTrue(sections <= labels | {"home"})
@@ -68,7 +68,8 @@ class WebContractTests(unittest.TestCase):
     def test_unsupported_operations_are_described_without_promising_a_mod(self) -> None:
         self.assertIn("BFRES auxiliaires (rapport)", self.html)
         self.assertIn('kinds.push("animation", "auxiliary")', self.js)
-        self.assertIn("leurs sous-maillages ne sont pas réécrits", self.html)
+        self.assertIn("l'écriture BFRES 10.x n'est pas disponible", self.html)
+        self.assertIn("certaines structures BFRES 9.x", self.html)
         self.assertIn("aucun acteur jouable", self.html)
 
     def test_small_screens_keep_the_inspector_visible(self) -> None:
@@ -76,6 +77,12 @@ class WebContractTests(unittest.TestCase):
         self.assertNotIn('.inspector { display: none; }', self.css)
         app_grid = self.css.split('.app {', 1)[1].split('}', 1)[0]
         self.assertIn('grid-template-columns: minmax(0, 1fr)', app_grid)
+
+    def test_native_webview_smoke_targets_the_model_export_button(self) -> None:
+        smoke = (ROOT / "tools" / "smoke_desktop_webview.py").read_text(encoding="utf-8")
+        self.assertIn("#btn-export-model", smoke)
+        self.assertIn('id="btn-export-model"', self.js)
+        self.assertNotIn("#btn-blender", smoke)
 
     def test_menus_have_entries(self) -> None:
         start = self.js.index("const MENUS = {")
@@ -125,15 +132,20 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('restbl.label', self.js)
         self.assertIn('Lecture et reconstruction RESTBL', self.js)
 
-    def test_blend_export_is_wired_to_the_api(self) -> None:
-        self.assertIn("/api/model/blend", self.js)
-        self.assertIn("/api/blender", self.js)
-
-    def test_blend_view_is_wired_to_the_api(self) -> None:
-        for route in ("/api/blend/list", "/api/blend/inspect",
-                      "/api/blend/preview", "/api/blend/translate"):
+    def test_model_export_and_import_are_wired_to_standard_formats(self) -> None:
+        for route in ("/api/model/export", "/api/model/inspect", "/api/model/import"):
             self.assertIn(route, self.js)
-        self.assertIn("/api/blend/upload", self.js)
+        self.assertNotIn("/api/model/blend", self.js)
+        self.assertNotIn("/api/blend/", self.js)
+        self.assertIn('accept=".obj,.gltf,.glb,.bin"', self.html)
+        self.assertIn('id="model-target"', self.html)
+        self.assertIn("modelImportAnalysisRevision !== modelImportRevision", self.js)
+
+    def test_light_theme_and_keyboard_focus_are_explicit(self) -> None:
+        self.assertIn("--bg: #f4f7fa", self.css)
+        self.assertIn("--focus: #00a8e8", self.css)
+        self.assertIn(":focus-visible", self.css)
+        self.assertIn("handleTileNavigation", self.js)
 
     def test_recherche_est_differee(self) -> None:
         """Taper ne doit pas reconstruire la grille à chaque touche."""

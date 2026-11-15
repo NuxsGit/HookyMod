@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,14 +44,6 @@ class WorkflowBenchmarkTests(unittest.TestCase):
             self.assertEqual(entry["maps"], 1)
             self.assertGreaterEqual(entry["total_seconds"], entry["post_seconds"])
         self.assertFalse((self.root / "hookycreator_work").exists())
-
-    @unittest.skipUnless(shutil.which("blender"), "Blender non installé")
-    def test_timing_with_real_blender_reports_a_real_blend(self):
-        result = self.invoke("Model/Heros.bfres", "--repeat", "1", "--blend", "--json")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        entry = json.loads(result.stdout)["exports"][0]
-        self.assertEqual(entry["method"], "blender", entry["message"])
-        print(f"Export réel .blend (1 triangle synthétique, HTTP + ZIP) : {entry['total_seconds']:.3f} s")
 
     def test_invalid_or_outside_model_fails_without_creating_work_in_dump(self):
         for path in ("missing.bfres", "../outside.bfres"):

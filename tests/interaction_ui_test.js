@@ -18,7 +18,7 @@ function elements() {
   const $ = (selector) => {
     if (!nodes.has(selector)) nodes.set(selector, {
       value: "", innerHTML: "", textContent: "", style: {}, files: [],
-      setAttribute() {}, classList: { toggle() {} },
+      setAttribute() {}, removeAttribute() {}, classList: { toggle() {} },
     });
     return nodes.get(selector);
   };
@@ -230,7 +230,7 @@ async function rescanningUpdatesEnsemblesAndRejectsAnOldList() {
   assert.deepEqual(staleState.ensembles, [], "la réponse d'avant scan ne remplit pas le nouveau projet");
 }
 
-async function uvAndBlendDoNotStealTheInspector() {
+async function uvDoesNotStealTheInspector() {
   const { $ } = elements();
   const requests = [], panels = [], toasts = [];
   const state = { settings: {} };
@@ -241,7 +241,7 @@ async function uvAndBlendDoNotStealTheInspector() {
     toast: (...args) => toasts.push(args), log() {}, navigator: {}, openModel() {},
   });
   vm.runInContext("let inspectionSequence = 0;\n" +
-    section("async function showUv(rel)", "function renderBlenderState()"), ctx);
+    section("async function showUv(rel)", "function showExportResult("), ctx);
   const report = { has_uvs: false, warnings: [], conventions: { gltf: "ok", obj: "ok" } };
   const uv = vm.runInContext('showUv("Model/A.bfres")', ctx);
   vm.runInContext('showInspector("Texture", "nouvelle fiche")', ctx);
@@ -263,22 +263,7 @@ async function uvAndBlendDoNotStealTheInspector() {
   assert.equal(panels.at(-1).title, "Texture");
   assert.equal(toasts.some(([text]) => text === "ancien échec"), false);
 
-  vm.runInContext('showInspector("Modèle", "export")', ctx);
-  const exportPending = vm.runInContext('exportBlend("Model/A.bfres")', ctx);
-  vm.runInContext('showInspector("Texture", "pendant export")', ctx);
-  const missing = { method: "script", message: "Blender absent", command: "blender ...",
-                    files: [], platform_note: "", output: "" };
-  requests.shift().resolve(missing);
-  await exportPending;
-  assert.equal(panels.at(-1).title, "Texture", "l'export terminé ne change pas la fiche active");
-  assert.ok(toasts.some(([text]) => String(text).includes("Aucun nouveau .blend")));
 
-  vm.runInContext('showInspector("Modèle", "export")', ctx);
-  const exportCurrent = vm.runInContext('exportBlend("Model/A.bfres")', ctx);
-  requests.shift().resolve(missing);
-  await exportCurrent;
-  assert.equal(panels.at(-1).title, "Export Blender incomplet", "le mode d'emploi reste disponible");
-  assert.match(panels.at(-1).html, /Blender absent/, "la vraie raison reste affichée");
 }
 
 async function importDoesNotReopenAnOldInspector() {
@@ -286,7 +271,7 @@ async function importDoesNotReopenAnOldInspector() {
   const panels = [], toasts = [];
   let resolveImport, infos = 0, ctx;
   const info = { revision: "one", version: "1", orin: false, count: 1,
-    textures: [{ name: "texture", editable: true, format: "RGBA", width: 2, height: 2, mips: 1 }] };
+    textures: [{ index: 0, name: "texture", editable: true, format: "RGBA", width: 2, height: 2, mips: 1 }] };
   class Reader {
     readAsDataURL(file) {
       this.result = "data:image/png;base64,AAAA";
@@ -304,7 +289,7 @@ async function importDoesNotReopenAnOldInspector() {
     },
   });
   vm.runInContext("let inspectionSequence = 0;\n" +
-    section("async function openTexture(rel)", "/* ------------------------------------------------------------------ mobs */"), ctx);
+    section("async function openTexture(rel, index = 0)", "/* ------------------------------------------------------------------ sons"), ctx);
   await vm.runInContext('openTexture("Tex/A.bntx")', ctx);
   $("#file-import").files = [{ name: "image.png" }];
   const imported = $("#file-import").onchange();
@@ -323,38 +308,84 @@ async function importDoesNotReopenAnOldInspector() {
   assert.ok(toasts.some(([text]) => String(text).includes("Impossible de lire l'image")));
 }
 
-async function blendSelectionKeepsTheNewestResult() {
+async function modelImportRejectsStaleAnalysisAndTargetResponses() {
   const { $ } = elements();
-  const requests = [], state = { blend: { ref: "A", objects: [] } };
-  const ctx = vm.createContext({ $, state, console, esc: String, log() {}, toast() {},
-    blendOptions: () => ({}),
-    api: (_url, options) => new Promise((resolve, reject) =>
-      requests.push({ ref: JSON.parse(options.body).ref, resolve, reject })),
+  const requests = [], toasts = [];
+  class Reader {
+    readAsDataURL() { this.result = "data:application/octet-stream;base64,AAAA"; queueMicrotask(() => this.onload()); }
+  }
+  const ctx = vm.createContext({ $, console, FileReader: Reader, queueMicrotask,
+    esc: String, humanSize: String, status() {}, refresh: async () => {},
+    toast: (...args) => toasts.push(args),
+    assetValidation: { valid: () => true, entry: () => ({ injectable: true }) },
+    api: (url, options) => new Promise((resolve, reject) =>
+      requests.push({ url, payload: JSON.parse(options.body), resolve, reject })),
   });
-  vm.runInContext("let blendInspectionSequence = 0;\n" +
-    section("async function inspectBlend()", "function previewBlend()"), ctx);
-  const a = vm.runInContext("inspectBlend()", ctx);
-  state.blend.ref = "B";
-  const b = vm.runInContext("inspectBlend()", ctx);
-  const payload = (file) => ({ file, version: "4.0", objects: [{ name: file, faces: 1, materials: [] }],
-                               meshes: 1, faces: 1, vertices: 3, materials: [], warnings: [] });
-  requests[1].resolve(payload("B.blend"));
-  await b;
-  requests[0].resolve(payload("A.blend"));
-  await a;
-  assert.match($("#blend-info").innerHTML, /B\.blend/);
-  assert.equal(state.blend.objects[0].name, "B.blend");
+  $("#model-target").value = "Model/A.bfres";
+  $("#model-scale").value = "1";
+  $("#model-axis").value = "keep";
+  ctx.file = { name: "triangle.obj", size: 100 };
+  vm.runInContext(section("let modelImportFiles = []", "/* ------------------------------------------------------------------ réglages */"), ctx);
+  vm.runInContext("setModelImportFiles([file])", ctx);
+  assert.equal($("#model-inject").disabled, true);
+  const first = vm.runInContext("runModelImport(false)", ctx);
+  await tick();
+  assert.equal(requests[0].url, "/api/model/inspect");
+  $("#model-scale").value = "2";
+  vm.runInContext("modelImportOptionsChanged()", ctx);
+  requests[0].resolve({ file: "ancien.obj", meshes: 1, vertices: 3, faces: 1,
+                        can_import: true, warnings: [], preview: "" });
+  await first;
+  assert.equal($("#model-inject").disabled, true);
+  assert.match($("#model-import-report").innerHTML, /Options modifiées/);
+  assert.doesNotMatch($("#model-import-report").innerHTML, /ancien.obj/);
+
+  const current = vm.runInContext("runModelImport(false)", ctx);
+  await tick();
+  requests[1].resolve({ file: "triangle.obj", meshes: 1, vertices: 3, faces: 1,
+                        can_import: true, warnings: [], preview: "" });
+  await current;
+  assert.equal($("#model-inject").disabled, false);
+  const injecting = vm.runInContext("runModelImport(true)", ctx);
+  await tick();
+  assert.equal(requests[2].url, "/api/model/import");
+  assert.equal(requests[2].payload.target, "Model/A.bfres");
+  $("#model-target").value = "Model/B.bfres";
+  vm.runInContext("modelTargetChanged()", ctx);
+  requests[2].resolve({ wrote: "Model/A.bfres", faces: 1, vertices: 3,
+                        capacity_vertices: 3, report: [], notes: [], preview: "" });
+  await injecting;
+  assert.doesNotMatch($("#model-import-report").innerHTML, /écrit/);
+  assert.ok(toasts.some(([text]) => String(text).includes("Model/A.bfres")));
+}
+
+function exportWarningsRemainVisible() {
+  const { $ } = elements();
+  const ctx = vm.createContext({ $, console });
+  vm.runInContext(section("function showExportResult(", "async function startBulk()"), ctx);
+  ctx.result = { download_url: "/api/export/download?id=123", absolute_folder: "/tmp/export",
+    warnings: ["Squelette non exporté", "Texture introuvable <nom>"] };
+  vm.runInContext('showExportResult(result, "Export prêt")', ctx);
+  assert.equal($("#export-result").hidden, false);
+  assert.equal($("#export-result-warnings").hidden, false);
+  assert.match($("#export-result-warnings").textContent, /Squelette non exporté/);
+  assert.match($("#export-result-warnings").textContent, /Texture introuvable <nom>/);
+  ctx.result.warnings = [];
+  vm.runInContext('showExportResult(result, "Export suivant")', ctx);
+  assert.equal($("#export-result-warnings").hidden, true);
+  assert.equal($("#export-result-warnings").textContent, "");
 }
 
 (async () => {
+  exportWarningsRemainVisible();
   await passivePollingDoesNotInterruptThumbnails();
   await incompleteScanIsVisibleInStatusAndExport();
   await delayedSearchDoesNotRebuildHiddenViews();
   await ensembleListIsLoadedOnlyOnceWhileFiltering();
   await olderStateResponsesCannotUndoANewerScan();
   await rescanningUpdatesEnsemblesAndRejectsAnOldList();
-  await uvAndBlendDoNotStealTheInspector();
+  await uvDoesNotStealTheInspector();
   await importDoesNotReopenAnOldInspector();
-  await blendSelectionKeepsTheNewestResult();
+  await modelImportRejectsStaleAnalysisAndTargetResponses();
   console.log("Interaction UI: OK");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

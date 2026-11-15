@@ -19,7 +19,7 @@ from array import array
 from pathlib import Path
 
 MAGIC = b"HOOKYGEO1"
-VERSION = 1
+VERSION = 3  # v3 : ne pas réutiliser les normales synthétiques de l'ancien cache
 
 
 def _array_bytes(type_code: str) -> bytes:

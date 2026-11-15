@@ -183,8 +183,8 @@ def run(application: Path) -> None:
                 """)
                 assert driver.script("return document.querySelectorAll('#model-grid .tile:not([hidden])').length") == 1
                 driver.click('#model-grid .tile:not([hidden])')
-                driver.wait("fiche du modèle", "return !!document.querySelector('#btn-blender')")
-                driver.click('#btn-blender')
+                driver.wait("fiche du modèle", "return !!document.querySelector('#btn-export-model')")
+                driver.click('#btn-export-model')
                 first = completed_download(driver)
                 downloads.append(first)
                 folder = Path(driver.script("return document.querySelector('#export-result-folder').textContent"))
@@ -259,7 +259,7 @@ def run(application: Path) -> None:
                 driver.click('button[data-view="models"]')
                 driver.wait("modèle revalidé", "return !!document.querySelector('#model-grid .tile:not([hidden])')")
                 driver.click('#model-grid .tile:not([hidden])')
-                driver.wait("fiche rouverte", "return !!document.querySelector('#btn-blender')")
+                driver.wait("fiche rouverte", "return !!document.querySelector('#btn-export-model')")
                 driver.wait("session prête", "return !!uiSessionWriter && uiSessionWriter.enabled")
                 driver.script("""
                     const original = uiSessionWriter.fetcher;
@@ -302,7 +302,7 @@ def run(application: Path) -> None:
                 process, driver = launch_driver(application, env, log)
                 driver.wait("reprise du projet et de la fiche", """
                     const models = document.querySelector('#view-models');
-                    return !!(models && !models.hidden && document.querySelector('#btn-blender')
+                    return !!(models && !models.hidden && document.querySelector('#btn-export-model')
                       && document.querySelector('#search').value === 'Heros'
                       && document.querySelector('#mod-name').value === 'Brouillon conservé');
                 """, timeout=120)

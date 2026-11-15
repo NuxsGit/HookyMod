@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="fr" data-accent="menthe" data-density="confort">
+<html lang="fr" data-accent="azur" data-density="confort">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HookyCreator</title>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23121a29'/><path d='M8 22 L16 8 L24 22 Z' fill='none' stroke='%2338e0c0' stroke-width='2.5'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2300a8e8'/><path d='M8 22 L16 8 L24 22 Z' fill='none' stroke='%23ffffff' stroke-width='2.5'/></svg>">
 </head>
 <body>
 <div class="app">
@@ -24,7 +24,7 @@
       <button class="menu-btn" data-menu="edition">Édition</button>
       <button class="menu-btn" data-menu="modele">Modèle</button>
       <button class="menu-btn" data-menu="texture">Texture</button>
-      <button class="menu-btn" data-menu="blender">Blender</button>
+      <button class="menu-btn" data-menu="import">Importer</button>
       <button class="menu-btn" data-menu="affichage">Affichage</button>
       <button class="menu-btn" data-menu="aide">Aide</button>
     </nav>
@@ -42,7 +42,6 @@
   <div class="selection-bar" id="selection-bar" hidden>
     <span id="selection-count">0 sélectionné</span>
     <button class="btn primary tiny" id="selection-export">Exporter en ZIP</button>
-    <button class="btn ghost tiny" id="selection-blend">Exporter en .blend</button>
     <button class="btn ghost tiny" id="selection-all">Tout</button>
     <button class="btn ghost tiny" id="selection-invert">Inverser</button>
     <button class="btn ghost tiny" id="selection-clear">Vider</button>
@@ -76,9 +75,9 @@
         <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
         <span>Sons</span>
       </button>
-      <button class="rail-btn" data-view="blender" title="Blender (Ctrl+5)">
+      <button class="rail-btn" data-view="import" title="Importer un modèle (Ctrl+5)">
         <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 12 21 6"/></svg>
-        <span>Blender</span>
+        <span>Importer</span>
       </button>
       <span class="rail-label">Créer</span>
       <button class="rail-btn" data-view="create" title="Espace création de mod">
@@ -196,9 +195,9 @@
               <span class="tool-number">04</span><b>Sons (expérimental)</b>
               <small>Écouter et convertir les fichiers BWAV Opus mono compatibles.</small>
             </button>
-            <button class="quick-card" type="button" data-goto="blender">
-              <span class="tool-number">05</span><b>Blender → jeu</b>
-              <small>Analyser un .blend et injecter sa géométrie dans un modèle compatible.</small>
+            <button class="quick-card" type="button" data-goto="import">
+              <span class="tool-number">05</span><b>Importer un modèle</b>
+              <small>Analyser un OBJ ou glTF et injecter sa géométrie dans une cible compatible.</small>
             </button>
           </div>
           <div class="info-note">
@@ -375,7 +374,7 @@
               <header class="panel-head"><h3>Nouveau mob</h3></header>
               <form class="panel-body" id="mob-form">
                 <label class="field"><span>Nom affiché</span>
-                  <input name="name" id="mob-name" placeholder="Cheval de Link" required></label>
+                  <input name="name" id="mob-name" placeholder="Créature de la forêt" required></label>
                 <label class="field"><span>Parent à noter sur la fiche (facultatif)</span>
                   <input name="parent" id="mob-parent" placeholder="Animal_Horse"></label>
                 <label class="field"><span>Rechercher une ressource</span>
@@ -399,79 +398,72 @@
           </div>
         </section>
 
-        <!-- ---------------------------------------------------------- blender -->
-        <section class="view" id="view-blender" hidden>
-          <div class="view-head">
+        <!-- ---------------------------------------------------------- import de modèle -->
+        <section class="view" id="view-import" hidden>
+          <div class="view-head workspace-head">
             <div>
-              <h2>Blender → jeu</h2>
-              <p class="muted">Le fichier <code>.blend</code> est lu par HookyMod lui-même
-                (aucun Blender installé) : sa géométrie peut être injectée dans un modèle
-                compatible en gardant ses matériaux.</p>
+              <p class="eyebrow">OUTIL / GÉOMÉTRIE</p>
+              <h2>Importer un modèle</h2>
+              <p class="muted">Prévisualise un OBJ, glTF ou GLB triangulé puis injecte sa géométrie
+                dans une copie de travail d'un modèle compatible.</p>
             </div>
           </div>
           <div class="warning-note game-limit">
-            <strong>Lecture ne veut pas dire réécriture.</strong>
-            Les modèles 10.x reconnus par le lecteur d'aperçu ne sont pas encore réinjectables :
-            leurs sous-maillages ne sont pas réécrits. Pour les autres modèles compatibles,
-            la géométrie doit tenir dans les tampons d'origine.
+            <strong>Compatibilité limitée.</strong> Seules certaines structures BFRES 9.x sont réécrites ;
+            l'écriture BFRES 10.x n'est pas disponible. La cible doit avoir une seule forme et un seul niveau de détail, sans squelette,
+            déformation ni bornes à réécrire. La géométrie doit tenir dans les tampons existants.
+            Seuls les matériaux et textures de la cible sont conservés.
           </div>
-
-          <div class="split blend">
+          <div class="split import-layout">
             <section class="panel">
-              <header class="panel-head"><h3>1 · Fichier</h3></header>
+              <header class="panel-head"><h3><span class="step-number">01</span> Modèle source</h3></header>
               <div class="panel-body">
-                <div class="drop" id="blend-drop">
-                  <strong>Dépose un .blend ici</strong>
-                  <small>ou</small>
-                  <label class="btn" for="blend-file">Choisir un fichier…</label>
-                  <input type="file" id="blend-file" accept=".blend" hidden>
+                <div class="drop" id="model-drop">
+                  <strong>Dépose tes fichiers ici</strong>
+                  <small>OBJ, glTF ou GLB · 64 Mio maximum au total</small>
+                  <button class="btn" id="model-file-choose" type="button">Choisir les fichiers…</button>
+                  <input type="file" id="model-files" accept=".obj,.gltf,.glb,.bin" multiple hidden>
                 </div>
-                <label class="field"><span>Fichiers disponibles</span>
-                  <select id="blend-list" size="6"></select></label>
-                <div class="row">
-                  <button class="btn" id="blend-inspect">Analyser</button>
-                  <button class="btn ghost" id="blend-preview-btn">Aperçu</button>
-                </div>
-                <dl class="kv" id="blend-info"></dl>
+                <p class="hint">Pour un glTF avec tampons externes, sélectionne aussi les fichiers .bin associés.
+                  Les textures et matériaux du fichier source ne sont pas importés. Les tangentes,
+                  couleurs et UV secondaires non conservables bloquent l'injection.</p>
+                <ul class="import-files" id="model-file-summary" aria-live="polite"><li>Aucun fichier choisi</li></ul>
+                <button class="btn" id="model-inspect" type="button" disabled>Analyser et prévisualiser</button>
               </div>
             </section>
-
             <section class="panel">
-              <header class="panel-head"><h3>2 · Réglages de la conversion</h3></header>
+              <header class="panel-head"><h3><span class="step-number">02</span> Cible et transformation</h3></header>
               <div class="panel-body">
-                <label class="field"><span>Axes</span>
-                  <select id="blend-axis">
-                    <option value="y_up">Blender Z-up → jeu Y-up (recommandé)</option>
-                    <option value="keep">Garder les axes du fichier</option>
+                <label class="field"><span>Axes du fichier source</span>
+                  <select id="model-axis">
+                    <option value="keep">Conserver les axes (glTF Y vers le haut)</option>
+                    <option value="z_up">Convertir Z vers le haut en Y vers le haut</option>
                   </select></label>
                 <label class="field"><span>Échelle</span>
-                  <input type="number" id="blend-scale" value="1" step="0.1" min="0.001" max="1000"></label>
-                <label class="field"><span>Seulement l'objet (nom)</span>
-                  <input id="blend-only" placeholder="ex. Corps"></label>
-                <label class="check"><input type="checkbox" id="blend-fit" checked>
-                  adapter à la taille du modèle du jeu</label>
+                  <input type="number" id="model-scale" value="1" step="0.1" min="0.001" max="1000"></label>
+                <label class="check"><input type="checkbox" id="model-fit">
+                  adapter à la taille et au centre de la cible</label>
                 <label class="field"><span>Rechercher le modèle cible</span>
-                  <input type="search" id="blend-target-search" placeholder="Nom ou chemin"></label>
+                  <input type="search" id="model-target-search" placeholder="Nom ou chemin"></label>
                 <label class="field"><span>Modèle cible</span>
-                  <select id="blend-target"></select></label>
-                <p class="hint">Seuls les modèles vérifiés et réinjectables sont proposés.</p>
-                <p class="hint" id="blend-validation-status" role="status"></p>
+                  <select id="model-target"></select></label>
+                <p class="hint">Seules les cibles vérifiées pour cette écriture limitée sont proposées.
+                  L'absence de cible compatible est possible.</p>
+                <p class="hint" id="model-import-validation-status" role="status"></p>
                 <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
-                <button class="btn ghost tiny" id="blend-validate-more" type="button" hidden>Vérifier 48 modèles de plus</button>
-                <button class="btn primary" id="blend-translate">Injecter dans le modèle</button>
-                <p class="hint">Le modèle d'origine n'est jamais écrasé : le résultat part
-                  dans le dossier de travail et sera repris par l'assemblage du mod.</p>
+                <button class="btn ghost tiny" id="model-import-validate-more" type="button" hidden>Vérifier 48 modèles de plus</button>
+                <button class="btn primary" id="model-inject" type="button" disabled>Injecter dans la copie de travail</button>
+                <p class="hint">La source du projet reste intacte. Assemble ensuite les modifications dans « Mon mod ».</p>
               </div>
             </section>
-
             <section class="panel wide">
-              <header class="panel-head"><h3>3 · Vérification</h3></header>
+              <header class="panel-head"><h3><span class="step-number">03</span> Aperçu et rapport</h3></header>
               <div class="panel-body">
                 <div class="shots">
-                  <figure><img id="blend-preview" alt="aperçu du .blend"><figcaption>.blend</figcaption></figure>
-                  <figure><img id="blend-result-shot" alt="aperçu du modèle modifié"><figcaption>modèle injecté</figcaption></figure>
+                  <figure><img id="model-source-shot" alt="Aperçu limité du modèle source" hidden><figcaption>Source analysée</figcaption></figure>
+                  <figure><img id="model-result-shot" alt="Aperçu limité de la copie modifiée" hidden><figcaption>Copie modifiée</figcaption></figure>
                 </div>
-                <ul class="report" id="blend-report"></ul>
+                <ul class="report" id="model-import-report" aria-live="polite"><li class="muted">Le rapport apparaîtra ici après l'analyse.</li></ul>
               </div>
             </section>
           </div>
@@ -538,13 +530,8 @@
                   </select></label>
                 <label class="check"><input type="checkbox" id="set-textured">
                   colorer les aperçus avec les textures du modèle</label>
-                <label class="field"><span>Chemin de Blender (facultatif)</span>
-                  <input type="text" id="set-blender-path"
-                         placeholder="C:\\Program Files\\Blender Foundation\\Blender 4.2\\blender.exe">
-                </label>
-                <p class="hint" data-blender-state>recherche…</p>
                 <label class="check"><input type="checkbox" id="set-export-textures">
-                  joindre les PNG à l'export Blender</label>
+                  joindre les PNG aux exports glTF / OBJ</label>
               </div>
             </section>
 
@@ -638,6 +625,7 @@
     <a class="btn primary tiny" id="export-download" download>Télécharger le ZIP</a>
   </div>
   <p class="hint" id="export-result-note">Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.</p>
+  <p class="warning-note export-warnings" id="export-result-warnings" role="status" hidden></p>
 </section>
 <section class="native-download-result" id="native-download-result" aria-live="polite" hidden>
   <button class="icon-btn export-dismiss" id="native-download-dismiss" type="button" title="Fermer">✕</button>

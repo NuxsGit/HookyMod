@@ -1,74 +1,24 @@
-# Provenance et licence du code
+# Provenance, références et licences tierces
 
-## Règle du projet
+## Ressources utilisateur
 
-**Aucun code Nintendo dans HookyMod.** Ni SDK, ni bibliothèque officielle, ni
-code décompilé, ni extrait d'un outil tiers copié dans le dépôt. Chaque lecteur
-et chaque écrivain de format a été écrit ici, en observant les fichiers un octet
-après l'autre.
+HookyMod est destiné à fonctionner sur des fichiers fournis par l'utilisateur. Les dumps, modèles, textures, sons, dictionnaires et autres données propriétaires utilisés pour des essais locaux doivent rester hors du dépôt ; `.gitignore` couvre leurs principales extensions, mais n'enlève pas un fichier déjà suivi par Git. Les tests automatisés fabriquent leurs propres fixtures synthétiques. Aucun fichier de jeu n'est nécessaire pour les exécuter.
 
-Ce que cela implique concrètement :
+Les essais sur quelques fichiers réels ont été effectués à partir de données externes fournies séparément, sans les intégrer au dépôt. Ils ne constituent ni une validation générale des formats ni un audit juridique des droits sur ces données. Chaque utilisateur doit vérifier ses propres droits.
 
-| Élément | État |
-|---|---|
-| `hookymod/bntx.py`, `bfres.py`, `sarc.py`, `nup.py`, `restbl.py`, `zs.py`, `nup.py` | écrits pour ce projet, à partir des fichiers réels |
-| `hookymod/bntx_encode.py`, `bfres_import.py`, `blender.py` | idem, pour l'écriture (côté mod) |
-| Code de Nintendo (SDK, moteur, exécutables) | **absent** — et le restera |
-| Code décompilé (jeu, firmwares, homebrew dérivé) | **absent** |
-| Bibliothèques tierces | dépendances génériques `zstandard`, `texture2ddecoder`, `Pillow`, Tauri et PyInstaller ; le noyau Rust possède aussi des crates vendorizées documentées dans `rust/vendor/README.md` |
-| Dumps du jeu (`*.zs`, `*.bntx`, `*.bfres`, `*.nup`, `*.bwav`, `*.bars`) | fournis par l'utilisateur, **hors Git**, uniquement pour valider les lecteurs |
+## Code et références de formats
 
-Les commentaires du code citent des formats publics (« documentation BFRES »)
-pour expliquer une structure ; aucune ligne n'est recopiée d'un projet tiers.
-Quand un comportement vient d'un autre outil, c'est dit en clair — jamais dupliqué.
-Pour la première conversion audio, les structures publiques
-[BWAV](https://gota7.github.io/Citric-Composer/specs/binaryWav.html), les RFC
-[Opus](https://www.rfc-editor.org/rfc/rfc6716) et
-[Ogg Opus](https://www.rfc-editor.org/rfc/rfc7845) ont été consultées ; le sens
-de la sentinelle de boucle a aussi été confronté au comportement documenté de
-[vgmstream](https://github.com/vgmstream/vgmstream/blob/master/src/meta/bwav.c).
-Le lecteur et le remultiplexeur ici ont été écrits pour HookyMod ; aucun code
-vgmstream n'est inclus. Les nouveaux tests utilisent des paquets synthétiques.
+Les lecteurs et écrivains du projet ont été développés pour HookyMod. Aucun SDK officiel ni code décompilé n'est intentionnellement inclus. Les structures publiques suivantes ont notamment été consultées pour la compréhension et la comparaison des formats :
 
-## Pourquoi c'est important
+- [OctoSquiddy/Switch-2-Toolbox](https://github.com/OctoSquiddy/Switch-2-Toolbox), notamment les structures BFRES FMDL, FSHP, Mesh, SubMesh et FMAT. Ce projet est sous GPL-3.0 ; ses structures ont servi de référence, aucun de ses fichiers source n'est incorporé ici.
+- [NotRexed/Hookshot](https://github.com/NotRexed/Hookshot), notes sur les paquets NUP et les tables de tailles. Projet distinct sous GPL-3.0 ; aucun de ses fichiers source n'est incorporé ici.
+- [Spécification BWAV](https://gota7.github.io/Citric-Composer/specs/binaryWav.html), [RFC Opus](https://www.rfc-editor.org/rfc/rfc6716), [RFC Ogg Opus](https://www.rfc-editor.org/rfc/rfc7845) et comportement documenté de [vgmstream](https://github.com/vgmstream/vgmstream/blob/master/src/meta/bwav.c) pour la sentinelle de boucle. Le lecteur et le remultiplexeur audio de ce dépôt sont propres au projet ; aucun code vgmstream n'y est inclus.
+- Les autres références précédemment documentées, dont les outils d'inspection, sont listées dans [OUVRIR_LES_ASSETS.md](OUVRIR_LES_ASSETS.md). Les noms et liens des projets tiers sont conservés pour l'attribution.
 
-Un outil de modding qui embarque du code Nintendo est impossible à publier, et
-impossible à maintenir : on ne sait plus ce qui est observé, ce qui est copié, ni
-ce qu'on a le droit de corriger. Ici, tout est relisible : si un champ se décale
-dans une nouvelle version du jeu, on corrige **notre** lecture.
+Ces descriptions de provenance ne remplacent pas un audit complet de la chaîne de dépendances ou des licences.
 
-La contrepartie assumée : le travail est plus lent, parce qu'il faut mesurer
-chaque structure. C'est le prix d'un outil propre.
+## Dépendances et licence du projet
 
-## Les assets de test
+Les dépendances Python génériques comprennent notamment `zstandard`, `texture2ddecoder` et `Pillow` ; la construction desktop utilise Tauri et PyInstaller. Les versions et dépendances sont définies dans les fichiers de requirements, de verrouillage npm et Cargo. Les crates vendorizées du noyau Rust, leurs auteurs et leurs licences MIT ou ISC sont documentés dans [rust/vendor/README.md](../rust/vendor/README.md) et leurs fichiers de licence restent présents. Tauri, ses dépendances et les autres bibliothèques conservent leurs propres licences.
 
-Les fichiers du papillon à la racine (`Animal_Butterfly*.bfres.zs`,
-`Mt_Body_Animal_Butterfly_*.bntx.zs`, `ZsDic.pack.zs`) servent à vérifier que
-les lecteurs fonctionnent sur de vrais fichiers. Ils sont conservés pour le
-moment, comme demandé, mais :
-
-* ils ne sont **pas** du code, et ne serviront jamais de dépendance ;
-* `previews/` (images dérivées) est ignoré par Git ;
-* à terme, la suite de tests tournera sur des fichiers **synthétiques** générés
-  par `tests/synth.py`, et les dumps resteront hors du dépôt (variable
-  `HOOKYMOD_ASSETS` pour indiquer où ils sont).
-
-## Ce que l'outil devient : un modmaker
-
-Ordre de travail, du plus sûr au plus risqué :
-
-1. **Lire** (fait, en cours) : BNTX (textures), BFRES (géométrie v9, v10 en
-   cours), SARC, NUP, RESTBL, BYML, dictionnaires zstd.
-2. **Modifier sans casser** :
-   * textures : PNG → BNTX en gardant format, swizzle, mips et taille
-     (`bntx_encode.py`) ;
-   * géométrie : OBJ édité dans Blender → réinjecté dans le BFRES d'origine, en
-     conservant la disposition des sommets (`bfres_import.py`) ;
-   * traductions : MSBT / BYML (`translate.py`).
-3. **Ajouter** : nouveaux acteurs, mobs, objets — c'est-à-dire toucher aux
-   `ActorParam` (BYML), aux tables RESTBL (tailles des fichiers) et aux liens
-   modèle/texture. Cela suppose un BFRES **écrivable**, pas seulement lisible :
-   c'est la prochaine grande étape après la lecture v10.
-
-Rien de tout cela ne demande une ligne de code Nintendo : seulement des fichiers
-du jeu, lus et écrits par nos propres structures.
+Les manifests des deux crates du dépôt déclarent `license = "MIT"`, mais le checkout ne contient actuellement **pas de fichier de licence propre au projet**. Ces métadonnées ne précisent pas à elles seules la portée d'une licence sur l'ensemble du dépôt ; clarifier les conditions applicables avec ses auteurs avant redistribution.

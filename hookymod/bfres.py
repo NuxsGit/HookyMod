@@ -202,6 +202,7 @@ class VertexBuffer:
     strides: list[int] = field(default_factory=list)
     sizes: list[int] = field(default_factory=list)
     vertex_count: int = 0
+    vertex_skin_count: int = 0
     gpu_alignment: int = 8
     buffer_offsets: list[int] = field(default_factory=list)   # absolus, dans le fichier
     header_offset: int = 0
@@ -296,6 +297,12 @@ class Shape:
     meshes: list[Mesh] = field(default_factory=list)
     flags: int = 0
     lod_count: int = 1
+    skin_bone_count: int = 0
+    vertex_skin_count: int = 0
+    key_shape_count: int = 0
+    target_attribute_count: int = 0
+    bounds_offset: int = 0
+    radius_offset: int = 0
 
     def _used_indices(self, lod: int) -> list[tuple[int, int, int]]:
         """Triangles du LOD demandé.
@@ -370,7 +377,12 @@ class Shape:
         if colors_raw and len(colors_raw) >= vertex_count:
             mesh.colors = [tuple(colors_raw[i][:3]) for i in sorted(used)]
         if not mesh.normals:
-            mesh.ensure_normals()
+            # Ne pas présenter des normales synthétiques comme des attributs
+            # d'origine : une cible sans canal normal ne pourrait pas les
+            # conserver lors de l'aller-retour.
+            message = f"{self.name} : normales absentes ; elles ne sont pas exportées."
+            if message not in warnings:
+                warnings.append(message)
         return mesh
 
 
@@ -388,12 +400,15 @@ class Model:
     materials: list[Material] = field(default_factory=list)
     vertex_buffers: list[VertexBuffer] = field(default_factory=list)
     skeleton_name: str = ""
+    skeleton_offset: int = 0
     #: maillages déjà construits (BFRES 10.x : voir :mod:`bfres_v10`)
     prebuilt: list[MeshData] = field(default_factory=list)
 
     def build_meshes(self, lod: int = 0, warnings: list[str] | None = None) -> list[MeshData]:
         warnings = warnings if warnings is not None else []
         if self.prebuilt:
+            if lod != 0:
+                raise HookyError("BFRES : seul le LOD 0 est accessible avec ce lecteur.")
             return list(self.prebuilt)
         meshes: list[MeshData] = []
         for shape in self.shapes:
@@ -547,7 +562,7 @@ def meshes_from_file(file: "BfresFile", lod: int = 0,
     # (le bloc ci-dessous traite les modèles « classiques », v7 à v9)
     for model in file.models:
         if model.prebuilt:
-            for mesh in model.prebuilt:
+            for mesh in model.build_meshes(lod, file.warnings):
                 if budget is not None and total + len(mesh.faces) > budget:
                     break
                 meshes.append(mesh)
@@ -558,9 +573,15 @@ def meshes_from_file(file: "BfresFile", lod: int = 0,
                 break
             try:
                 mesh = shape.build_mesh(lod, file.warnings)
-            except HookyError:
+            except HookyError as exc:
+                message = f"{shape.name or 'forme'} : non exportée ({exc})."
+                if message not in file.warnings:
+                    file.warnings.append(message)
                 continue
             if mesh is None or not mesh.faces:
+                message = f"{shape.name or 'forme'} : aucune géométrie exportable."
+                if message not in file.warnings:
+                    file.warnings.append(message)
                 continue
             if 0 <= shape.material_index < len(model.materials):
                 mesh.material = model.materials[shape.material_index].name
@@ -626,7 +647,7 @@ class BfresFile:
             flags = data[0xEE]
             if flags & 0x04:
                 self.has_external_strings = True
-                self.warnings.append("Chaînes externes (TotK) : certains noms seront vides.")
+                self.warnings.append("Chaînes externes : certains noms seront vides.")
 
         self.buffer_offset = 0
         if buffer_info_offset and buffer_info_offset + 16 <= len(data):
@@ -653,6 +674,14 @@ class BfresFile:
             else:
                 if not entries:
                     self.warnings.append("Dictionnaire de modèles vide ou sans valeurs lisibles.")
+        # Dans le layout 10.x observé, l'en-tête pointe directement sur un
+        # tableau FMDL, et non sur le tableau de pointeurs du lecteur historique.
+        # Ne jamais laisser le lecteur historique contourner une table 10.x
+        # déclarée mais corrompue.
+        if (self.version_major == 10 and model_offset
+                and data[model_offset:model_offset + 4] == b"FMDL"):
+            self._parse_v10(data, require_model_shape=True)
+            return self
         for index, (name, offset) in enumerate(entries):
             if not offset or offset >= len(data):
                 continue
@@ -696,20 +725,17 @@ class BfresFile:
         if not meshes:
             self.warnings.append("BFRES 10.x : aucun maillage validé.")
             return
-        material = report.material_names[0] if report.material_names else ""
-        for mesh in meshes:
-            mesh.material = material
         model = Model(name=report.model_name or self.name or "modele", index=0,
                       prebuilt=list(meshes))
-        if material:
-            model.materials.append(Material(name=material, index=0))
+        for index, material in enumerate(report.material_names):
+            if material:
+                model.materials.append(Material(name=material, index=index))
         model.skeleton_name = getattr(report, "skeleton_name", "") or model.skeleton_name
         self.models.append(model)
         self.v10_report = report
         if require_model_shape:
-            self.warnings.append(
-                "BFRES 10.x : FMDL et table FVTX référencée validés ; extraction heuristique."
-            )
+            method = "tables de formes" if report.structured else "extraction heuristique"
+            self.warnings.append(f"BFRES 10.x : FMDL et FVTX référencés ; {method}.")
         self.warnings.extend(report.warnings)
 
     # -- objets
@@ -724,6 +750,7 @@ class BfresFile:
         model.name = cur.string() or name
         cur.string()  # chemin interne
         skeleton_offset = cur.offset()
+        model.skeleton_offset = skeleton_offset
         vertex_array_offset = cur.offset()
         vertex_buffer = cur
         shapes_values = cur.offset()
@@ -822,9 +849,9 @@ class BfresFile:
         cur.offset()  # liste d'index d'os (skinning)
         key_shapes_values = cur.offset()
         key_shapes_dict = cur.offset()
-        cur.offset()  # zone des bounding boxes
+        shape.bounds_offset = cur.offset()
         if self.version_major > 3:
-            cur.offset()  # rayons
+            shape.radius_offset = cur.offset()
             cur.i64()     # user pointer
         else:
             cur.i64()
@@ -835,11 +862,11 @@ class BfresFile:
         shape.material_index = cur.u16()
         shape.bone_index = cur.u16()
         shape.vtx_index = cur.u16()
-        cur.u16()  # nombre d'index d'os
-        cur.u8()   # nombre d'os par sommet
+        shape.skin_bone_count = cur.u16()
+        shape.vertex_skin_count = cur.u8()
         num_mesh = cur.u8()
-        cur.u8()   # key shapes
-        cur.u8()   # attributs cibles
+        shape.key_shape_count = cur.u8()
+        shape.target_attribute_count = cur.u8()
         cur.skip(2 if (self.version_major <= 3 or self.version_major >= 9) else 6)
 
         if vertex_buffer_offset:
@@ -885,7 +912,7 @@ class BfresFile:
         num_buffers = cur.u8()
         cur.u16()           # idx
         vtx.vertex_count = cur.u32()
-        cur.u16()           # nombre d'os par sommet
+        vtx.vertex_skin_count = cur.u16()
         vtx.gpu_alignment = cur.u16() or 8
 
         if attributes_dict:

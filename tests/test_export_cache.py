@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hookycreator import project as project_mod
-from hookymod import blender, blendfile, util
+from hookymod import blender, util
 from tests import synth
 from tests.test_ensembles_blend import _make_project
 
@@ -105,7 +105,7 @@ class ExportCacheTests(unittest.TestCase):
             self.assertEqual(build.call_count, 2)
             self.assertGreater(second["textures"], first["textures"])
 
-    def test_bounded_cache_clear_scan_and_blender_are_independent(self):
+    def test_bounded_cache_clear_and_scan_invalidate_bundles(self):
         with patch.object(project_mod, "EXPORT_CACHE_BYTES", 1):
             result = self.project.export_model(self.rel, archive=True)
             self.assertEqual(self.project._export_cache_bytes, 0)
@@ -118,12 +118,7 @@ class ExportCacheTests(unittest.TestCase):
         self.project.export_model(self.rel, archive=True)
         self.project.scan()
         self.assertEqual(self.project._export_cache_bytes, 0)
-        # Blender (qui dépend d'un exécutable externe) ne réutilise jamais le bundle.
-        with patch.object(blender, "export_bundle", wraps=blender.export_bundle) as build, \
-             patch.object(blendfile, "find_blender", return_value=None):
-            self.project.export_blend(self.rel, archive=True)
-            self.project.export_blend(self.rel, archive=True)
-            self.assertEqual(build.call_count, 2)
+
 
 
 if __name__ == "__main__":

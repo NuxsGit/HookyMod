@@ -68,13 +68,13 @@ class SniffTests(unittest.TestCase):
 
     def test_engine_guess(self):
         engine, _ = identify.guess_engine({"sarc": 10, "bfres": 3}, {".zs"})
-        self.assertIn("Nintendo (Switch", engine)
+        self.assertEqual(engine, "SARC / BFRES / BNTX")
         engine, _ = identify.guess_engine({"uasset": 40}, {".uasset"})
         self.assertIn("Unreal", engine)
         engine, _ = identify.guess_engine({"unityfs": 5}, {".bundle"})
         self.assertIn("Unity", engine)
         engine, _ = identify.guess_engine({"zar": 4, "cmb": 2}, {".zar"})
-        self.assertIn("Grezzo", engine)
+        self.assertEqual(engine, "ZAR / CMB / CTEX")
         engine, _ = identify.guess_engine({}, set())
         self.assertEqual(engine, "Inconnu")
 
@@ -123,7 +123,7 @@ class ScanTests(unittest.TestCase):
     def test_scan_counts_and_engine(self):
         report = identify.scan(self.root)
         self.assertEqual(report["file_count"], 6)
-        self.assertIn("Nintendo (Switch", report["engine"])
+        self.assertEqual(report["engine"], "SARC / BFRES / BNTX")
         self.assertEqual(report["extensions"][".bfres"]["count"], 1)
         self.assertEqual(report["extensions"][".bin"]["count"], 1)
         self.assertGreater(report["total_size"], 0)

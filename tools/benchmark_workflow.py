@@ -2,8 +2,7 @@
 """Mesure le backend desktop et la livraison HTTP d'exports individuels.
 
 Exemple : python tools/benchmark_workflow.py /chemin/romfs Model/MonModele.bfres.zs
-Ajoute --blend pour mesurer le vrai appel à Blender quand il est installé. Le
-travail est temporaire, les sources ne sont pas modifiées. La fenêtre Tauri et
+Le travail est temporaire, les sources ne sont pas modifiées. La fenêtre Tauri et
 son affichage ne sont pas mesurés ; le cache du système n'est pas vidé.
 """
 from __future__ import annotations
@@ -66,8 +65,6 @@ def verify_archive(file, result: dict) -> None:
         expected = {prefix + name for name in result["files"]}
         if actual != expected:
             raise RuntimeError("Le ZIP ne correspond pas aux fichiers annoncés")
-        if result.get("method") == "blender" and not any(name.endswith(".blend") for name in names):
-            raise RuntimeError("Le .blend annoncé est absent du ZIP")
 
 
 def run(args) -> dict:
@@ -125,7 +122,7 @@ def run(args) -> dict:
                                 "Premier export : cache applicatif neuf mais partagé entre les modèles.",
                                 "La fidélité en jeu ne peut pas être déduite d'un ZIP valide."],
             }
-            route = "/api/model/blend" if args.blend else "/api/model/export"
+            route = "/api/model/export"
             for rel in models:
                 for attempt in range(args.repeat):
                     before = time.perf_counter()
@@ -166,7 +163,6 @@ def main(argv=None) -> int:
     parser.add_argument("root", help="dossier du jeu extrait")
     parser.add_argument("models", nargs="*", help="chemins des modèles relatifs au projet")
     parser.add_argument("--repeat", type=int, default=2, help="exports par modèle (défaut : 2)")
-    parser.add_argument("--blend", action="store_true", help="appeler Blender pour un vrai .blend")
     parser.add_argument("--no-textures", action="store_true", help="désactiver l'export des cartes")
     parser.add_argument("--backend", help="sidecar autonome à mesurer, au lieu de Python")
     parser.add_argument("--json", action="store_true", help="rapport structuré sur stdout")

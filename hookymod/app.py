@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -31,6 +29,7 @@ except Exception as exc:  # noqa: BLE001 - on remonte la cause exacte
 _TkAppBase = tk.Tk if TK_AVAILABLE else object
 _TkToplevelBase = tk.Toplevel if TK_AVAILABLE else object
 
+from . import blender as model_export_mod
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
 from . import diagnose
@@ -48,7 +47,7 @@ from .viewer import open_viewer
 from .zs import DEFAULT_LEVEL, ZstdDicts, find_dict_files, frame_info, is_zstd, zstd_available
 
 APP_NAME = "HookyMod · Asset Explorer"
-APP_TAGLINE = "Assets Switch 2 · Hookshot"
+APP_TAGLINE = "Exploration et édition de ressources"
 
 #: Palette de départ (les widgets « bruts » sont recolorés au changement de thème).
 _DEFAULT = theme_mod.get_palette(theme_mod.DEFAULT_THEME)
@@ -58,34 +57,6 @@ BG, PANEL, PANEL2, FG, MUTED, ACC = (_DEFAULT.bg, _DEFAULT.surface,
 CONFIG_PATH = Path(os.environ.get("HOOKYMOD_CONFIG",
                                   Path.home() / ".config" / "hookymod" / "config.json"))
 OLD_CONFIG_PATH = Path.home() / ".asset_explorer.json"
-
-BLEND_SCRIPT = r'''
-import bpy, sys, os, traceback
-try:
-    args = sys.argv[sys.argv.index("--") + 1:]
-    src, out = args[0], args[1]
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    ext = os.path.splitext(src)[1].lower()
-    if ext == ".obj":
-        if hasattr(bpy.ops.wm, "obj_import"):
-            bpy.ops.wm.obj_import(filepath=src)
-        else:
-            bpy.ops.import_scene.obj(filepath=src)
-    elif ext in (".glb", ".gltf"):
-        bpy.ops.import_scene.gltf(filepath=src)
-    elif ext == ".fbx":
-        bpy.ops.import_scene.fbx(filepath=src)
-    elif ext in (".bfres", ".sbfres"):
-        # Nécessite un add-on BFRES installé dans Blender.
-        bpy.ops.import_scene.nxbfres(filepath=src)
-    else:
-        raise RuntimeError("Format non géré par le script Blender : " + ext)
-    bpy.ops.wm.save_as_mainfile(filepath=out)
-    print("CONVERSION_OK")
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
-'''
 
 #: Dispositions de pixels proposées dans l'onglet Textures (Switch 1 / Switch 2).
 SWIZZLE_CHOICES = ("Auto", "Switch 1 (X1)", "Switch 2 (Orin)")
@@ -130,26 +101,6 @@ MENU_ACTIONS = (
     ("Reconstruire un mod depuis un projet…", "translate_pack"),
     ("Paramètres…", "settings_dialog"),
 )
-
-
-def find_blender(configured: str = "") -> str:
-    """Trouve un exécutable Blender (config, PATH, chemins standards)."""
-    if configured and Path(configured).exists():
-        return configured
-    candidates = [shutil.which("blender")]
-    patterns = [
-        r"C:\Program Files\Blender Foundation\Blender*\blender.exe",
-        r"C:\Program Files (x86)\Steam\steamapps\common\Blender\blender.exe",
-        "/Applications/Blender.app/Contents/MacOS/Blender",
-        "/usr/bin/blender", "/usr/local/bin/blender", "/snap/bin/blender",
-    ]
-    import glob
-    for pattern in patterns:
-        candidates += sorted(glob.glob(pattern), reverse=True)
-    for candidate in candidates:
-        if candidate and Path(candidate).exists():
-            return candidate
-    return ""
 
 
 class LoadingPopup(_TkToplevelBase):  # type: ignore[misc,valid-type]
@@ -595,7 +546,7 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
                    command=self.view_model).pack(side="left")
         ttk.Button(controls, text="Exporter OBJ…", command=self.export_model_obj).pack(
             side="left", padx=6)
-        ttk.Button(controls, text="Convertir en .blend…", command=self.convert_blend).pack(
+        ttk.Button(controls, text="Exporter glTF / OBJ…", command=self.export_model_bundle).pack(
             side="left")
         ttk.Label(controls, text="LOD", style="Panel.TLabel").pack(side="left", padx=(16, 4))
         self.lod_var = tk.StringVar(value="0")
@@ -752,7 +703,6 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         self.bind("<Control-r>", lambda e: self.set_romfs())
         self.bind("<Control-e>", lambda e: self.export_mod())
         self.bind("<Control-p>", lambda e: self.patch_dialog())
-        self.bind("<Control-b>", lambda e: self.convert_blend())
         self.bind("<Alt-Left>", lambda e: self.back())
         self.bind("<Control-Key-1>", lambda e: self.select_tab(0))
         self.bind("<Control-Key-2>", lambda e: self.select_tab(1))
@@ -868,8 +818,8 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         self._set_preview(
             "HookyMod · Asset Explorer\n"
             "========================\n\n"
-            "Édite les assets du remake Ocarina of Time (Switch 2) et prépare des mods\n"
-            "pour Hookshot.\n\n"
+            "Explore des ressources compatibles et prépare des modifications\n"
+            "à partir de tes propres fichiers.\n\n"
             "1. « romfs… » : choisis le dossier romfs de ton dump (les dictionnaires zstd\n"
             "   de Pack/ZsDic.pack.zs sont chargés automatiquement).\n"
             "   « .nup… » : ouvre directement un paquet Switch 2 et extrais son romfs.\n"
@@ -1777,7 +1727,7 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
     def open_nup(self) -> None:
         """Ouvre un paquet .nup (dump Switch 2) et extrait son romfs."""
         choice = filedialog.askopenfilename(
-            title="Ouvrir un paquet .nup (dump Nintendo Switch 2)",
+            title="Ouvrir un paquet .nup",
             filetypes=[("Paquet Switch 2", "*.nup"), ("Tous les fichiers", "*.*")])
         if not choice:
             return
@@ -2098,8 +2048,8 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             return
         notes = self._update_size_table(base, sizes)
         message = (f"{len(written)} fichier(s) écrit(s) dans :\n{base / 'romfs'}\n\n"
-                   "Pour Hookshot, place ce dossier dans « mods/<nom>/romfs » ; "
-                   "pour un émulateur, copie son contenu dans le mod LayeredFS.")
+                   "Place ce dossier dans « mods/<nom>/romfs » si ton chargeur "
+                   "de mods utilise cette disposition.")
         if notes:
             message += "\n\nTable de tailles :\n" + "\n".join(notes)
         if warnings:
@@ -2420,9 +2370,11 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         self._active_source = key
         self.bfres_file = file
         lines = [file.info()]
-        vertices = sum(s.vtx_buffer.vertex_count for m in file.models
-                       for s in m.shapes if s.vtx_buffer)
-        faces = sum(s.face_count(0) for m in file.models for s in m.shapes)
+        vertices = sum(sum(len(mesh.positions) for mesh in model.prebuilt) if model.prebuilt else
+                       sum(shape.vtx_buffer.vertex_count for shape in model.shapes if shape.vtx_buffer)
+                       for model in file.models)
+        faces = sum(sum(len(mesh.faces) for mesh in model.prebuilt) if model.prebuilt else
+                    sum(shape.face_count(0) for shape in model.shapes) for model in file.models)
         lines += ["", f"Total : {vertices:,} sommets · {faces:,} triangles (LOD 0)",
                   "« Voir en 3D » dessine uniquement la partie visible du modèle "
                   "(budget adapté à la taille de la fenêtre)."]
@@ -2473,6 +2425,16 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         meshes: list[MeshData] = []
         total = 0
         for model in file.models:
+            if model.prebuilt:
+                for mesh in model.build_meshes(lod, file.warnings):
+                    if total >= budget:
+                        break
+                    if mesh.faces:
+                        meshes.append(mesh)
+                        total += len(mesh.faces)
+                if total >= budget:
+                    break
+                continue
             for shape in model.shapes:
                 if shape.face_count(lod) and total >= budget:
                     break
@@ -2544,9 +2506,16 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             "muted": p.muted, "accent": p.accent,
         })
 
+    def _meshes_for_export(self) -> tuple[bfres_mod.BfresFile, list[MeshData]]:
+        """L'export ne doit pas hériter du budget limité de la vue 3D."""
+        file = self._model_source()
+        if file is None:
+            raise HookyError("Ouvre d'abord un modèle BFRES.")
+        return file, bfres_mod.meshes_from_file(file, self._current_lod())
+
     @_action
     def export_model_obj(self) -> None:
-        meshes = self._meshes_for_view()
+        file, meshes = self._meshes_for_export()
         path = filedialog.asksaveasfilename(title="Exporter en OBJ", defaultextension=".obj",
                                             initialfile="modele.obj",
                                             filetypes=[("Wavefront OBJ", "*.obj")])
@@ -2554,99 +2523,25 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             return
         export_obj(meshes, path)
         self.status(f"Modèle exporté : {path}")
+        if file.warnings:
+            messagebox.showwarning("Limites de l'export", "\n".join(file.warnings[:8]), parent=self)
 
     @_action
-    def convert_blend(self) -> None:
-        doc = self.current
-        if not doc:
-            messagebox.showinfo("Convertir", "Ouvre d'abord un fichier.", parent=self)
+    def export_model_bundle(self) -> None:
+        """Géométrie standard depuis l'explorateur ; textures non devinées."""
+        file, meshes = self._meshes_for_export()
+        directory = filedialog.askdirectory(title="Dossier d'export glTF / OBJ")
+        if not directory:
             return
-
-        temp_dir = Path(tempfile.mkdtemp(prefix="hookymod_blend_"))
-        source: Path | None = None
-        if doc.top.archive is None:
-            name = doc.top.name
-            suffix = Path(name).suffix.lower()
-            if doc.top.data[:4] == b"FRES":
-                try:
-                    meshes = self._meshes_for_view()
-                except HookyError as exc:
-                    raise HookyError(
-                        f"{exc}\n\nAstuce : « Exporter OBJ » permet d'importer le maillage "
-                        "manuellement dans Blender.") from exc
-                source = temp_dir / "modele.obj"
-                export_obj(meshes, source)
-            elif suffix in (".obj", ".fbx", ".glb", ".gltf", ".bfres", ".sbfres"):
-                target = temp_dir / name
-                write_atomic(target, doc.top.data)
-                source = target
-            else:
-                raise HookyError(
-                    f"Format « {suffix or name} » non convertible en .blend.\n"
-                    "Formats gérés : .bfres (via OBJ), .obj, .fbx, .glb/.gltf.")
-        else:
-            indices = self._selected_indices()
-            if len(indices) == 1:
-                entry = doc.top.archive.entries[indices[0]]
-                payload = self._entry_payload(entry)
-                if payload[:4] == b"FRES":
-                    key = f"{self.current_key}!{entry.name}"
-                    bfres = self._bfres_cache.get(key)
-                    if bfres is None:
-                        bfres = bfres_mod.BfresFile.parse(payload)
-                        self._bfres_cache[key] = bfres
-                    meshes = self._meshes_for_view(file=bfres)
-                    source = temp_dir / (Path(entry.name).stem + ".obj")
-                    export_obj(meshes, source)
-                else:
-                    target = temp_dir / entry.name
-                    write_atomic(target, payload)
-                    source = target
-        if source is None:
-            raise HookyError(
-                "Sélectionne un modèle (.bfres) ou un fichier .obj/.fbx/.glb à convertir.")
-
-        blender = find_blender(str(self.config_data.get("blender", "")))
-        if not blender:
-            chosen = filedialog.askopenfilename(
-                title="Blender introuvable — sélectionne l'exécutable blender")
-            if not chosen:
-                return
-            blender = chosen
-            self.config_data["blender"] = chosen
-            self._save_config()
-
-        out = filedialog.asksaveasfilename(title="Enregistrer le .blend",
-                                           defaultextension=".blend",
-                                           initialfile=source.stem + ".blend",
-                                           filetypes=[("Blender", "*.blend")])
-        if not out:
-            return
-        script = temp_dir / "to_blend.py"
-        script.write_text(BLEND_SCRIPT)
-
-        def work():
-            result = subprocess.run(
-                [blender, "-b", "--python", str(script), "--", str(source), out],
-                capture_output=True, text=True, timeout=900)
-            return result
-
-        def done(result):
-            log = (result.stdout or "") + "\n" + (result.stderr or "")
-            if "CONVERSION_OK" in (result.stdout or "") and Path(out).exists():
-                self.status(f"Converti : {out}")
-                messagebox.showinfo("Conversion", f"Fichier créé :\n{out}\n\n"
-                                    f"Source temporaire : {source}", parent=self)
-            else:
-                self.status("Conversion échouée")
-                messagebox.showerror(
-                    "Conversion échouée",
-                    "Blender n'a pas produit de .blend.\n\n"
-                    + log[-2000:] +
-                    "\n\nEssaie « Exporter OBJ » puis importe le fichier dans Blender.",
-                    parent=self)
-
-        self._run_bg("Conversion Blender en cours…", work, done)
+        warnings = list(file.warnings) + ["Textures non associées par l'explorateur."]
+        model_export_mod.export_bundle(meshes, directory, "modele", material_maps={}, warnings=warnings)
+        self.status(f"Modèle exporté : {directory}")
+        messagebox.showinfo("Modèle exporté",
+            f"glTF et OBJ enregistrés dans :\n{directory}\n\n"
+            "Cet export depuis l'explorateur ne lie pas automatiquement les textures. "
+            "HookyCreator propose les cartes reconnues par matériau.\n\n"
+            "Limites :\n" + "\n".join(warnings[:8])
+            + "\nConsulte RAPPORT_MODELE.txt et vérifie le résultat.", parent=self)
 
     # ------------------------------------------------------------------ paramètres
     @_action
@@ -2658,20 +2553,9 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         frame = ttk.Frame(win, padding=14)
         frame.pack(fill="both", expand=True)
 
-        blender_var = tk.StringVar(value=str(self.config_data.get("blender", "")))
         level_var = tk.StringVar(value=str(self.config_data.get("compress_level", DEFAULT_LEVEL)))
         preview_var = tk.StringVar(value=str(self.config_data.get("preview_max", 1024)))
 
-        ttk.Label(frame, text="Exécutable Blender").grid(row=0, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=blender_var, width=54).grid(row=0, column=1, pady=4)
-
-        def browse_blender() -> None:
-            path = filedialog.askopenfilename(title="Sélectionner blender")
-            if path:
-                blender_var.set(path)
-
-        ttk.Button(frame, text="…", width=3, command=browse_blender).grid(row=0, column=2,
-                                                                          padx=(4, 0))
         ttk.Label(frame, text="Niveau de compression zstd (1-22)").grid(row=1, column=0,
                                                                        sticky="w", pady=4)
         ttk.Spinbox(frame, from_=1, to=22, textvariable=level_var, width=6).grid(
@@ -2711,7 +2595,6 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
                 row=6, column=0, columnspan=3, sticky="w")
 
         def save_settings() -> None:
-            self.config_data["blender"] = blender_var.get().strip()
             try:
                 level = int(level_var.get())
                 self.config_data["compress_level"] = max(1, min(22, level))
@@ -2814,7 +2697,6 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             "Ctrl+E  exporter en mod\n"
             "Ctrl+R  choisir le dossier romfs\n"
             "Ctrl+P  patch chercher/remplacer\n"
-            "Ctrl+B  convertir en .blend\n"
             "Ctrl+1  onglet Aperçu\n"
             "Ctrl+2  onglet Textures\n"
             "Ctrl+3  onglet Modèle 3D\n"
@@ -2828,12 +2710,11 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         messagebox.showinfo(
             "À propos",
             f"{APP_NAME}\n\n"
-            "Assets du remake Switch 2 d'Ocarina of Time pour le port PC Hookshot :\n"
-            "SARC, zstd (.zs + dictionnaires), BFRES, BNTX (Switch 1 X1 et Switch 2 Orin).\n\n"
+            "Exploration de ressources : SARC, zstd (.zs + dictionnaires), BFRES et BNTX.\n\n"
             f"Thème : {self.palette.label} (Affichage → thème, sans redémarrer)\n"
             "Diagnostics : Affichage → fichier courant, Aide → installation.\n\n"
             "Aucun asset du jeu n'est inclus : fournis ton propre dump.\n"
-            "Projet indépendant, non affilié à Nintendo.", parent=self)
+            "Projet indépendant, sans affiliation aux éditeurs des formats.", parent=self)
 
     # ------------------------------------------------------------------ fermeture
     def _on_close(self) -> None:

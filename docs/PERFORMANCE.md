@@ -42,15 +42,16 @@ ou du dossier de travail.
 - Les cartes metallic/roughness sont assemblées par canaux, sans boucle Python
   par pixel pour les tailles courantes ; le décodage PNG sans filtre évite aussi
   une passe inutile. Les résultats sont vérifiés pixel par pixel dans les tests.
-- Les PNG et les `.blend` ne sont pas recompressés dans le ZIP. Le reste du ZIP
-  utilise une compression rapide. L'export est toujours préparé dans un dossier
-  isolé et le ZIP n'inclut pas les anciennes sorties de l'utilisateur.
-- Un cache mémoire **borné à 64 Mio** réutilise les exports glTF/OBJ complets
+- Les PNG ne sont pas recompressés dans le ZIP ; le reste utilise une compression
+  rapide. L'export individuel est préparé dans un dossier isolé et le ZIP
+  n'inclut pas les anciennes sorties de l'utilisateur.
+- Un cache mémoire **borné à 64 Mio** peut réutiliser les exports glTF/OBJ
   répétés tant que le modèle, les textures et l'inventaire n'ont pas changé. Les
   dates, taille et identité fournies par le système de fichiers participent à la
   clé ; une modification externe conservant toutes ces métadonnées pourrait ne
-  pas être détectée. Les exports incomplets et les vrais `.blend` ne sont pas
-  mis dans ce cache. Vider le cache ou rescanner l'invalide.
+  pas être détectée. Une carte candidate illisible empêche sa mise en cache ;
+  l'absence de candidats peut être mémorisée jusqu'au prochain scan. Vider le
+  cache ou rescanner l'invalide.
 - Au démarrage, la première réponse d'inventaire ne parcourt plus les caches de
   vignettes pour produire leurs statistiques ; ces chiffres arrivent en arrière-plan.
   Les grandes réponses JSON sont compressées rapidement sur la boucle locale.
@@ -61,8 +62,6 @@ Depuis la racine du dépôt, après installation de `requirements.txt` :
 
 ```bash
 python tools/benchmark_workflow.py /chemin/vers/romfs Model/MonModele.bfres.zs
-# Mesurer également l'appel réel à Blender (s'il est détecté) :
-python tools/benchmark_workflow.py /chemin/vers/romfs Model/MonModele.bfres.zs --blend
 # En utilisant un sidecar autonome déjà construit :
 python tools/benchmark_workflow.py /chemin/vers/romfs Model/MonModele.bfres.zs --backend /chemin/vers/hookycreator-backend
 ```
@@ -73,36 +72,44 @@ vérifie ensuite le ZIP et les références glTF **hors chronométrage**. Le tra
 et le cache applicatif sont temporaires ; le cache du système d'exploitation
 n'est pas vidé. Le premier export de chaque modèle n'est pas forcément totalement
 froid : les modèles d'une même commande partagent le cache de textures. La fenêtre
-Tauri, le rendu de l'interface et la fidélité en jeu ne sont pas mesurés. Avec
-`--blend`, vérifier que la méthode affichée est `blender` : `script` signifie que
-Blender est absent ou a échoué, donc qu'aucun nouveau `.blend` n'a été produit.
+Tauri, le rendu de l'interface et la fidélité en jeu ne sont pas mesurés. Le
+rapport liste aussi les remarques et le nombre de cartes réellement exportées.
 
 ## Exemple de mesures
 
 Dans un conteneur Linux x86-64 (2 vCPU Xeon 2,6 GHz, Python 3.11, sans noyau
-Rust, `zstandard` et `texture2ddecoder` installés), quatre BFRES réels ont été
-exportés en glTF/OBJ et ZIP avec cache applicatif temporaire. Les quatre textures
-RGBA8 1024² disponibles pour cet essai sont **synthétiques** et peuvent être
-appariées heuristiquement à plusieurs modèles ; ce n'est pas une validation des
-textures du jeu. Le tableau inclut la préparation et le téléchargement HTTP :
+Rust, avec `zstandard` et `texture2ddecoder`), quatre BFRES réels ont été exportés
+avec le lecteur structuré LOD 0, dans un travail temporaire. Le tableau inclut la
+préparation et le téléchargement HTTP des ZIP ; les caches du système étaient
+chauds. Les quatre BNTX disponibles dans le dossier étaient **synthétiques** et
+ne correspondaient pas aux références des matériaux : aucune carte n'a donc été
+reliée ou exportée dans cet essai.
 
-| Modèle | Faces décodées | Cartes | Premier export | Répétition |
+| Échantillon | Triangles LOD 0 | Cartes | Premier export | Répétition |
 |---|---:|---:|---:|---:|
-| Chat | 7 292 | 5 | 0,414 s | 0,029 s |
-| Vache | 5 437 | 5 | 0,210 s | 0,018 s |
-| Epona adulte | 113 432 | 5 | 2,444 s | 0,099 s |
-| Wolfos | 118 676 | 0 | 2,649 s | 0,102 s |
+| Modèle A | 2 148 | 0 | 0,031 s | 0,006 s |
+| Modèle B | 14 070 | 0 | 0,146 s | 0,014 s |
+| Modèle C | 39 679 | 0 | 0,469 s | 0,020 s |
+| Modèle D | 43 160 | 0 | 0,502 s | 0,022 s |
 
-Les ZIP ont été relus et les références glTF vérifiées ; les BFRES ont toutefois
-émis des avertissements, donc le décodage et le rendu complets ne sont pas
-garantis. Sur un inventaire distinct de 66 700 fichiers **vides synthétiques**,
-le lancement du processus Python jusqu'à l'état HTTP décodé a pris 0,960 s. Ce
-chiffre exclut la fenêtre Tauri et la validation des assets. Les caches OS
-étaient chauds pour ces essais.
+Les ZIP et les références glTF ont été relus ; les remarques signalent notamment
+l'absence de textures, de squelette et d'autres LOD. Ce n'est **pas** une
+validation de rendu, de textures réelles ou de fonctionnement en jeu. Le processus
+Python de cet essai a répondu à l'état HTTP en 0,119 s pour neuf assets. Sur un
+inventaire distinct de 66 700 fichiers **vides synthétiques**, une mesure a donné
+1,153 s jusqu'à l'état HTTP décodé, hors fenêtre Tauri et validation des assets.
 
-Ces mesures atteignent les objectifs côté backend pour **ces échantillons**,
-pas une garantie de moins de 3 s pour tous les modèles ou de moins de 5 s pour
-l'application native complète. La taille du dump, les textures réelles, la
-vitesse du disque et de l'ordinateur, le système, les caches et Blender lui-même
-peuvent changer sensiblement les temps. L'appel et l'interface Blender ne sont
-pas inclus dans le tableau.
+Un autre passage sur les quatre mêmes modèles avec un sidecar Linux PyInstaller
+**expérimental** et le noyau Rust ABI 6 a mesuré 0,572 s jusqu'à l'état HTTP,
+puis 0,037 / 0,159 / 0,616 / 0,687 s pour les premiers exports ; les répétitions
+ont pris 0,006 / 0,012 / 0,020 / 0,021 s. Un passage précédent avait mesuré
+1,649 s jusqu'à l'état HTTP. Ce binaire de test, non distribué, utilisait une
+bibliothèque CPython compilée localement et une toolchain Rust 1.88 de provenance
+non vérifiée ; il ne représente pas un installateur officiel. Aucun de ces essais
+ne mesure l'ouverture ou l'affichage d'une fenêtre Tauri.
+
+Ce sont des résultats locaux sur ces seuls échantillons, pas une garantie de
+moins de 3 s pour tous les modèles ni de moins de 5 s pour l'application native
+complète. Taille des fichiers, textures réelles, disque, processeur, système et
+caches peuvent changer les temps. Le chargement dans un logiciel 3D n'est pas
+inclus.

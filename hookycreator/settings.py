@@ -75,12 +75,11 @@ class Settings:
     max_faces: int | None = None               # plafond manuel (None = auto)
     lod: int = 0                              # niveau de détail demandé
     # -- préférences d'interface
-    accent: str = "menthe"                    # couleur d'accent
+    accent: str = "azur"                    # couleur d'accent
     density: str = "confort"                  # confort | compact
-    export_textures: bool = True              # joindre les PNG à l'export Blender
+    export_textures: bool = True              # joindre les PNG aux exports de modèles
     thumb_faces: int | None = 20_000          # plafond des vignettes (None = auto)
     preview_faces: int = 60_000               # plafond de l'aperçu détaillé (0 = tout)
-    blender_path: str = ""                    # blender.exe (vide = détection auto)
     textured_previews: bool = True            # vignettes colorées par les textures
     cache_mb: int = CACHE_DEFAULT_MB          # cache de vignettes sur disque
 
@@ -101,7 +100,6 @@ class Settings:
             density=_choice(self.density, "density", DENSITIES),
             export_textures=bool(self.export_textures),
             preview_faces=int(_number(self.preview_faces, "preview_faces", 0, 400_000)),
-            blender_path=str(self.blender_path or "")[:400],
             textured_previews=bool(self.textured_previews),
             thumb_faces=(None if self.thumb_faces is None
                          else int(_number(self.thumb_faces, "thumb_faces",
@@ -131,7 +129,6 @@ class Settings:
             "export_textures": self.export_textures,
             "thumb_faces": self.thumb_faces,
             "preview_faces": self.preview_faces,
-            "blender_path": self.blender_path,
             "textured_previews": bool(self.textured_previews),
             "cache_mb": self.cache_mb,
             "cache_min_mb": CACHE_MIN_MB,
@@ -160,7 +157,6 @@ class Settings:
             "export_textures": payload.get("export_textures", base.export_textures),
             "thumb_faces": payload.get("thumb_faces", base.thumb_faces),
             "preview_faces": payload.get("preview_faces", base.preview_faces),
-            "blender_path": str(payload.get("blender_path", base.blender_path) or "")[:400],
             "textured_previews": bool(payload.get("textured_previews",
                                                   base.textured_previews)),
             "cache_mb": payload.get("cache_mb", base.cache_mb),

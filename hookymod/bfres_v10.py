@@ -146,6 +146,8 @@ class V10Report:
     minor: int = 0
     model_name: str = ""
     material_names: list[str] = field(default_factory=list)
+    material_textures: dict[str, list[str]] = field(default_factory=dict)
+    structured: bool = False
     buffer_base: int = 0
     vertex_offset: int = 0
     stride: int = STRIDE
@@ -942,6 +944,10 @@ def parse(data: bytes, *, require_model_shape: bool = False) -> tuple[list[MeshD
     report.minor = (report.version >> 8) & 0xFF
     if report.major != 10:
         return None
+    # Ce lecteur ne traverse pour l'instant qu'un FMDL. Ne jamais livrer un
+    # fichier multi-modèle comme s'il était complet.
+    if len(data) > 0xDD and _u16(data, 0xDC) > 1:
+        return None
 
     model_offset = _u64(data, HEADER_MODEL)
     if not _valid_pointer(model_offset, data) or data[model_offset:model_offset + 4] != b"FMDL":
@@ -953,6 +959,17 @@ def parse(data: bytes, *, require_model_shape: bool = False) -> tuple[list[MeshD
         return None
     report.buffer_base = base
     report.model_name = _string_at(data, _u64(data, model_offset + FMDL_NAME))
+
+    # Si une table FSHP est déclarée, la suivre intégralement plutôt que
+    # segmenter des indices heuristiquement. Une table invalide ne doit pas
+    # déclencher un faux succès par balayage de secours.
+    if model_offset + 0x78 <= len(data) and (
+            _u64(data, model_offset + 0x28) or _u16(data, model_offset + 0x6A)):
+        from . import bfres_v10_struct
+        try:
+            return bfres_v10_struct.read(data, model_offset, base, report)
+        except (bfres_v10_struct.InvalidStructure, struct.error, IndexError, ValueError, OverflowError):
+            return None
 
     materials_offset = _u64(data, model_offset + FMDL_MATERIALS)
     if _valid_pointer(materials_offset, data):
@@ -1100,8 +1117,10 @@ def parse(data: bytes, *, require_model_shape: bool = False) -> tuple[list[MeshD
                 mesh.uvs = list(uvs[:length])
             if normals and len(normals) >= length:
                 mesh.normals = list(normals[:length])
-            else:
-                mesh.ensure_normals()
+            elif not any("normales absentes" in warning for warning in report.warnings):
+                # Comme le lecteur structuré, ne pas exporter comme source des
+                # normales inventées ; le rendu calcule ses normales de face.
+                report.warnings.append("Normales absentes ou indécodables ; elles ne sont pas exportées.")
 
     if not meshes:
         report.warnings.append("Géométrie vide après validation : refusée.")
