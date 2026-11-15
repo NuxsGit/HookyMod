@@ -225,6 +225,22 @@ def run(application: Path) -> None:
                 wait_for("arrêt du backend après fermeture", lambda: not listening(backend_port), timeout=20)
                 print("Arrêt du backend avec la fenêtre : OK")
             except Exception:
+                if driver is not None:
+                    with contextlib.suppress(Exception):
+                        snapshot = driver.script("""
+                            const node = id => document.getElementById(id);
+                            const text = id => node(id)?.textContent || '';
+                            return {
+                              url: location.pathname,
+                              exportVisible: !!node('export-result') && !node('export-result').hidden,
+                              exportTitle: text('export-result-title'), exportNote: text('export-result-note'),
+                              exportFolder: text('export-result-folder'),
+                              nativeVisible: !!node('native-download-result') && !node('native-download-result').hidden,
+                              nativeTitle: text('native-download-title'), nativePath: text('native-download-path'),
+                              toasts: text('toasts'), log: text('console-log').slice(-3000),
+                            };
+                        """)
+                        print("État de la fenêtre : " + json.dumps(snapshot, ensure_ascii=False), file=sys.stderr)
                 log.seek(0)
                 print("Journal tauri-driver :\n" + log.read().decode('utf-8', errors='replace'), file=sys.stderr)
                 raise

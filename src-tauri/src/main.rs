@@ -163,7 +163,18 @@ fn allowed_navigation(url: &Url, shared: &Shared) -> bool {
     local_origin(url, port)
 }
 
+fn download_directory(app: &AppHandle) -> tauri::Result<PathBuf> {
+    // Les environnements Linux minimaux ne configurent pas toujours
+    // XDG_DOWNLOAD_DIR ; garder une destination prévisible dans le home.
+    app.path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir().map(|home| home.join("Downloads")))
+        .map(|directory| directory.join("HookyCreator"))
+}
+
 fn notify_download(webview: &Webview<Wry>, state: &str, path: &str, message: &str) {
+    #[cfg(debug_assertions)]
+    eprintln!("Hooky téléchargement : {state} / {path} / {message}");
     let detail = serde_json::json!({"status": state, "path": path, "message": message});
     let _ = webview.eval(format!(
         "window.dispatchEvent(new CustomEvent('hooky:download', {{detail: {detail}}}));"
@@ -178,6 +189,8 @@ fn on_download(
 ) -> bool {
     match event {
         DownloadEvent::Requested { url, destination } => {
+            #[cfg(debug_assertions)]
+            eprintln!("Hooky demande de téléchargement : {}", url.path());
             let port = shared.lock().unwrap().active.as_ref().map(|r| r.port);
             if !local_origin(&url, port) {
                 notify_download(&webview, "error", "", "Origine de téléchargement refusée.");
@@ -215,8 +228,8 @@ fn on_download(
                     return false;
                 }
             };
-            let dir = match app.path().download_dir() {
-                Ok(path) => path.join("HookyCreator"),
+            let dir = match download_directory(app) {
+                Ok(path) => path,
                 Err(_) => {
                     notify_download(
                         &webview,
@@ -245,14 +258,21 @@ fn on_download(
             }
         }
         DownloadEvent::Finished { path, success, .. } => {
+            #[cfg(debug_assertions)]
+            eprintln!("Hooky téléchargement terminé : {success}, {path:?}");
             if success {
-                // WKWebView ne fournit pas le chemin au callback Finished.
-                let shown = path.or_else(|| {
-                    app.path()
-                        .download_dir()
-                        .ok()
-                        .map(|p| p.join("HookyCreator"))
-                });
+                // WKWebView ne fournit pas le chemin au callback Finished ;
+                // WebKitGTK peut fournir une URI file: plutôt qu'un chemin.
+                let shown = path
+                    .and_then(|path| {
+                        let text = path.to_string_lossy();
+                        if text.starts_with("file:") {
+                            Url::parse(&text).ok()?.to_file_path().ok()
+                        } else {
+                            Some(path)
+                        }
+                    })
+                    .or_else(|| download_directory(app).ok());
                 notify_download(
                     &webview,
                     "ok",
