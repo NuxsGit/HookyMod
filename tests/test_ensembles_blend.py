@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import runpy
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -261,6 +262,13 @@ class BlendScriptTests(unittest.TestCase):
         bpy.ops.wm.save_as_mainfile.assert_called_once_with(filepath=str(folder / 'un "nom".blend'))
         self.assertFalse(marker.exists())
 
+    def test_displayed_command_quotes_shell_metacharacters(self) -> None:
+        parts = ["/tmp/Blender's tools/blender", "--python", "a $(touch marker);'nom'.py"]
+        self.assertEqual(shlex.split(blendfile._display_command(parts, windows=False)), parts)
+        powershell = blendfile._display_command(parts, windows=True)
+        self.assertTrue(powershell.startswith("& '/tmp/Blender''s tools/blender'"))
+        self.assertIn("'a $(touch marker);''nom''.py'", powershell)
+
     def test_the_script_compiles(self) -> None:
         """Une faute de frappe dans le script se verrait seulement chez l'utilisateur."""
         compile(blendfile.IMPORT_SCRIPT, blendfile.SCRIPT_NAME, "exec")
@@ -438,6 +446,7 @@ class BlendExportProjectTests(unittest.TestCase):
         self.assertIn("Heros/Heros.gltf", names)
         self.assertIn("Heros/creer_blend.py", names)
         self.assertIn("pas de nouveau .blend", notes)
+        self.assertNotIn("Heros.gltf Heros.blend", notes)  # le script connaît déjà ces noms
         self.assertEqual((folder / "Heros.blend").read_bytes(), b"ancien")
 
     def test_selection_zip_contains_only_the_new_blend_on_success(self) -> None:

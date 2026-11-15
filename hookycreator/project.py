@@ -16,6 +16,7 @@ import bisect
 import json
 import os
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -2114,8 +2115,13 @@ class Project:
                     notes.append(
                         f"{name} : pas de nouveau .blend (Blender absent ou export échoué) — depuis le "
                         f"dossier {name}/, lance :")
-                    notes.append(f"    blender --background --factory-startup "
-                                 f"--python creer_blend.py -- {name}.gltf {name}.blend")
+                    # Le script connaît déjà les deux noms et les échappe ;
+                    # ne pas interpoler un nom de projet dans une commande shell.
+                    recipe = blendfile._display_command([
+                        "blender", "--background", "--factory-startup", "--python", "creer_blend.py"])
+                    notes.append(f"    {recipe}")
+                    if sys.platform.startswith("win"):
+                        notes.append("    (à lancer dans PowerShell)")
             notes.append("")
             notes.append(f"{blends} fichier(s) .blend sur {len(models)} modèle(s).")
             notes.append("Le glTF, le .bin et les PNG sont joints : l'export "

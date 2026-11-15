@@ -50,19 +50,37 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev patchelf webkit2gtk-driver xvfb gstreamer1.0-plugins-base gstreamer1.0-plugins-good
-      - name: Microsoft Edge WebDriver
+      - name: Microsoft Edge WebDriver matching WebView2
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if ($env:EdgeWebDriver -and (Test-Path (Join-Path $env:EdgeWebDriver 'msedgedriver.exe'))) {
-            $env:EdgeWebDriver >> $env:GITHUB_PATH
-          } else {
-            cargo install --git https://github.com/chippers/msedgedriver-tool --locked
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & "$HOME/.cargo/bin/msedgedriver-tool.exe"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $PWD.Path >> $env:GITHUB_PATH
+          # WebView2 est indépendant du navigateur Edge : le driver préinstallé
+          # par le runner peut viser une version majeure complètement différente.
+          $id = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $keys = @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$id",
+                    "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$id",
+                    "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$id")
+          $version = $null
+          foreach ($key in $keys) {
+            $candidate = (Get-ItemProperty -Path $key -Name pv -ErrorAction SilentlyContinue).pv
+            if ($candidate -match '^\d+\.\d+\.\d+\.\d+$' -and $candidate -ne '0.0.0.0') {
+              $version = $candidate
+              break
+            }
           }
+          if (-not $version) { throw 'Version du runtime WebView2 introuvable' }
+          $major = $version.Split('.')[0]
+          $driverVersion = (Invoke-RestMethod "https://msedgedriver.microsoft.com/LATEST_RELEASE_$major").Trim()
+          if ($driverVersion -notmatch "^$major\.\d+\.\d+\.\d+$") { throw 'Version du WebDriver invalide' }
+          $directory = Join-Path $env:RUNNER_TEMP 'webview2-driver'
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          $archive = Join-Path $directory 'driver.zip'
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$driverVersion/edgedriver_win64.zip" -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $directory -Force
+          $driver = Join-Path $directory 'msedgedriver.exe'
+          if (-not (Test-Path $driver)) { throw 'WebDriver téléchargé introuvable' }
+          Write-Host "WebView2 $version ; WebDriver $driverVersion"
+          "HOOKY_WEBDRIVER_BINARY=$driver" >> $env:GITHUB_ENV
       - name: Python and Tauri build dependencies
         run: |
           python -m pip install -r requirements-desktop-build.txt
@@ -75,6 +93,11 @@ jobs:
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
           python .github/scripts/run_ci_command.py -- cargo test --manifest-path src-tauri/Cargo.toml
+      # Temporaire : récupérer le lock généré par ce premier build pour le versionner.
+      - name: Record Tauri dependency lock
+        if: runner.os == 'Linux'
+        run: |
+          python -c 'from pathlib import Path; import base64,zlib; s=base64.b64encode(zlib.compress(Path("src-tauri/Cargo.lock").read_bytes(),9)).decode(); [print("::notice title=Cargo-lock-%02d::%s" % (i,s[12000*i:12000*(i+1)])) for i in range((len(s)+11999)//12000)]'
       - name: Build real app for WebDriver
         run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --debug --no-bundle
       - name: Install tauri-driver

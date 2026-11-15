@@ -132,14 +132,19 @@ def run(application: Path) -> None:
         driver = None
         backend_port = None
         with tempfile.TemporaryFile() as log:
-            process = subprocess.Popen(["tauri-driver", "--port", str(port), "--native-port", str(native_port)],
-                                       env=env, stdout=log, stderr=log)
+            command = ["tauri-driver", "--port", str(port), "--native-port", str(native_port)]
+            if env.get("HOOKY_WEBDRIVER_BINARY"):
+                command.extend(["--native-driver", env["HOOKY_WEBDRIVER_BINARY"]])
+            process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
             try:
                 def driver_ready():
                     if process.poll() is not None:
                         raise RuntimeError("tauri-driver s'est arrêté avant de démarrer.")
                     return listening(port)
                 wait_for("démarrage tauri-driver", driver_ready, timeout=30)
+                # Le proxy tauri-driver écoute avant que le WebDriver natif ait
+                # fini son démarrage ; attendre les deux évite un faux échec.
+                wait_for("démarrage du WebDriver natif", lambda: listening(native_port), timeout=30)
                 driver = Driver(port, application)
                 driver.wait("chargement de l'atelier", """
                     const el = document.querySelector('#home-sub');

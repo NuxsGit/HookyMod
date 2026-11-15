@@ -21,6 +21,7 @@ sortie et la taille du fichier avant de rendre la main.
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 import sys
@@ -282,8 +283,18 @@ def _blender_command(blender, script, gltf, blend) -> list[str]:
             "--python", str(script), "--", str(gltf), str(blend)]
 
 
-def _display_command(command: list[str]) -> str:
-    return " ".join(f'"{part}"' if " " in part else part for part in command)
+def _display_command(command: list[str], *, windows: bool | None = None) -> str:
+    """Recette à copier dans un shell sans interpréter les noms du projet.
+
+    Sous Windows la recette vise PowerShell : une chaîne simple est littérale,
+    et deux apostrophes successives représentent une apostrophe. L'appel réel
+    utilise toujours ``subprocess`` avec une liste d'arguments, sans shell.
+    """
+    if windows is None:
+        windows = sys.platform.startswith("win")
+    if windows:
+        return "& " + " ".join("'" + part.replace("'", "''") + "'" for part in command)
+    return shlex.join(command)
 
 
 def run_script(blender, script, gltf, blend, timeout: int = TIMEOUT) -> dict:
@@ -389,7 +400,7 @@ def make_blend(folder, name: str, blender=None, timeout: int = TIMEOUT) -> dict:
 def platform_note() -> str:
     """Petite phrase d'aide selon le système (affichée dans l'atelier)."""
     if sys.platform.startswith("win"):
-        return ("Sous Windows, le chemin habituel est "
+        return ("Sous Windows, copie la commande dans PowerShell. Le chemin habituel est "
                 r"C:\Program Files\Blender Foundation\Blender 4.x\blender.exe")
     if sys.platform == "darwin":
         return "Sous macOS : /Applications/Blender.app/Contents/MacOS/Blender"
