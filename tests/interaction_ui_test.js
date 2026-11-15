@@ -118,6 +118,7 @@ async function ensembleListIsLoadedOnlyOnceWhileFiltering() {
     filters: { ensembles: "" }, shown: { ensembles: 48 } };
   const ctx = vm.createContext({ $, state, console, esc: String, humanSize: String,
     ensembleMatches: () => true, ensembleThumb: () => "/image", renderBlenderState() {}, toast() {},
+    assetValidation: { setScope() {} }, updateValidatedAssets() {},
     thumbnailQueue: { release: () => work.push("release"), observe: () => work.push("observe") },
     api: () => new Promise((resolve) => requests.push(resolve)),
   });
@@ -139,6 +140,7 @@ async function olderStateResponsesCannotUndoANewerScan() {
   const state = { view: "home", project: { image_revision: "session-1", assets: [{ rel: "A" }] },
     settings: { cache_mb: 256 }, ensembles: [], shown: { models: 48, textures: 48, ensembles: 48 } };
   const ctx = vm.createContext({ $, state, console, status() {}, renderStatus() {}, renderHome() {},
+    assetValidation: { revision: "session-1", setScope(_name, _items, revision) { this.revision = revision; } },
     renderModels: async () => {}, renderTextures: async () => {}, renderEnsembles: async () => {},
     renderMobs: async () => {}, renderBlends: async () => {}, renderSettings() {},
     refreshSystem() {}, refreshBlender() {}, applyUiSettings() {}, toast() {},
@@ -199,6 +201,7 @@ async function rescanningUpdatesEnsemblesAndRejectsAnOldList() {
   const state = { view: "ensembles", settings: {}, ensembles: [],
                   shown: { models: 48, textures: 48, ensembles: 48 } };
   const ctx = vm.createContext({ $, state, status() {}, renderStatus() {}, renderHome() {},
+    assetValidation: { revision: null, setScope(_name, _items, revision) { this.revision = revision; } },
     renderModels: async () => {}, renderTextures: async () => {},
     renderEnsembles: async () => { renderCount += 1; }, toast() {},
     api: async () => ({ project: { image_revision: "new", settings: {} },

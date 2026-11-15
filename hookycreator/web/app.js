@@ -8,7 +8,7 @@ const state = {
   project: null,
   settings: null,
   view: "home",
-  filters: { models: "", textures: "", ensembles: "" },
+  filters: { models: "", textures: "", ensembles: "", sounds: "" },
   tabs: [],
   tab: "home",
   logs: [],
@@ -20,15 +20,24 @@ const state = {
   busy: 0,
   selection: new Set(),
   anchor: null,
-  shown: { models: 48, textures: 48, ensembles: 48 },
+  shown: { models: 48, textures: 48, ensembles: 48, sounds: 48, chooser: 48 },
+  modelCandidates: [], textureCandidates: [], ensembleCandidates: [], soundCandidates: [],
+  chooserModels: [], chooserTextures: [],
   system: null,
   engine: null,
   warm: null,
   fullscreen: false,
 };
 
-const thumbnailQueue = new ThumbnailQueue();
+const thumbnailQueue = new ThumbnailQueue({
+  onFailure: (image, reason) => {
+    const owner = image.closest("[data-check-kind][data-check-rel]");
+    if (owner) assetValidation.markError(owner.dataset.checkKind, owner.dataset.checkRel, reason);
+  },
+});
+const assetValidation = new AssetValidationQueue({ onChange: updateValidatedAssets });
 let apiThumbnailHold = null;
+let apiValidationHold = null;
 let inspectionSequence = 0;
 let blendInspectionSequence = 0;
 let ensembleLoad = null;
@@ -88,11 +97,16 @@ function status(message, kind = "ok") {
 }
 
 function busy(active) {
-  if (active && !state.busy) apiThumbnailHold = thumbnailQueue.hold();
+  if (active && !state.busy) {
+    apiThumbnailHold = thumbnailQueue.hold();
+    apiValidationHold = assetValidation.hold();
+  }
   state.busy = Math.max(0, state.busy + (active ? 1 : -1));
   if (!state.busy && apiThumbnailHold) {
     apiThumbnailHold();
     apiThumbnailHold = null;
+    apiValidationHold?.();
+    apiValidationHold = null;
   }
   const dot = $("#status-dot");
   if (dot && state.busy) dot.className = "status-dot busy";
@@ -175,12 +189,15 @@ function closeTab(id) {
 /* ------------------------------------------------------------------ vues */
 function showView(view, options = {}) {
   if (state.view !== view) {
+    assetValidation.clearScope("view");
     thumbnailQueue.release($(`#view-${state.view}`));
     const scroll = $("#views");
     if (scroll) scroll.scrollTop = 0;
     // Les espaces d'accueil doivent rester lisibles, surtout sur mobile où
     // l'inspecteur est superposé. L'onglet du document reste disponible.
-    if (view === "edit" || view === "create") hideInspector();
+    if (view === "edit" || view === "create" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
+      hideInspector();
+    }
   }
   state.view = view;
   $$(".view").forEach((node) => { node.hidden = node.id !== `view-${view}`; });
@@ -198,6 +215,7 @@ function showView(view, options = {}) {
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
   if (view === "textures") renderTextures();
+  if (view === "sounds") renderSounds();
   if (view === "mobs") renderMobs();
   if (view === "blender") renderBlends();
   if (view === "settings") { renderSettings(); refreshSystem(); }
@@ -210,6 +228,7 @@ const VIEW_LABELS = {
   models: "Modèles",
   ensembles: "Ensembles",
   textures: "Textures",
+  sounds: "Sons",
   mobs: "Mobs",
   blender: "Blender",
   settings: "Réglages",
@@ -224,6 +243,9 @@ document.addEventListener("error", (event) => {
   image.classList.add("broken");
   const box = image.closest(".thumb, .strip-item");
   if (box) box.classList.add("broken");
+  const owner = image.closest("[data-check-kind][data-check-rel]");
+  if (owner) assetValidation.markError(owner.dataset.checkKind, owner.dataset.checkRel,
+                                       "Aperçu impossible à décoder.");
 }, true);
 
 /* ------------------------------------------------------------------ barre d'état */
@@ -234,8 +256,8 @@ function renderStatus() {
   const settings = state.settings || {};
   const node = $("#status-counts");
   if (node) {
-    node.textContent = `${count("model")} modèles · ${auxiliary} ressources auxiliaires · `
-      + `${count("texture")} textures · `
+    node.textContent = `${count("model")} modèles repérés · ${auxiliary} ressources auxiliaires · `
+      + `${count("texture")} textures repérées · `
       + `${state.project?.mobs?.length || 0} fiches de mobs`;
   }
   const scan = state.project || {};
@@ -267,8 +289,9 @@ function renderStatus() {
   const stats = $("#stats");
   if (stats) {
     stats.innerHTML = `
-      <span class="chip"><b>${count("texture")}</b> textures</span>
-      <span class="chip"><b>${count("model")}</b> modèles</span>
+      <span class="chip"><b>${count("texture")}</b> textures repérées</span>
+      <span class="chip"><b>${count("model")}</b> modèles repérés</span>
+      <span class="chip"><b>${count("sound")}</b> BWAV repérés</span>
       <span class="chip"><b>${auxiliary}</b> BFRES auxiliaires</span>
       <span class="chip"><b>${state.project?.mobs?.length || 0}</b> fiches de mobs</span>
       <span class="chip"><b>${state.project?.edited?.length || 0}</b> fichiers modifiés</span>
@@ -313,6 +336,47 @@ function renderCreation() {
 }
 
 /* ------------------------------------------------------------------ modèles */
+// L'inventaire est une liste de candidats, pas une preuve de décodage. Les
+// tuiles, liens de textures et listes déroulantes restent cachés tant que le
+// serveur n'a pas réellement construit le maillage ou décodé la texture.
+function updateValidatedAssets() {
+  $$("[data-check-kind][data-check-rel]").forEach((node) => {
+    const kind = node.dataset.checkKind, rel = node.dataset.checkRel;
+    const entry = assetValidation.entry(kind, rel);
+    node.hidden = entry?.status !== "valid";
+    if (entry?.status === "invalid" || entry?.status === "error") state.selection.delete(`${kind}:${rel}`);
+  });
+  const summary = (items, kind, label, selector) => {
+    const entries = (items || []).map((asset) => assetValidation.entry(kind, asset.rel));
+    const valid = entries.filter((entry) => entry?.status === "valid").length;
+    const invalid = entries.filter((entry) => entry?.status === "invalid").length;
+    const errors = entries.filter((entry) => entry?.status === "error").length;
+    const pending = entries.length - valid - invalid - errors;
+    const node = $(selector);
+    if (node) node.textContent = `${valid} ${label} vérifié(s)`
+      + (pending ? ` · ${pending} en vérification` : "")
+      + (invalid ? ` · ${invalid} non pris en charge masqué(s)` : "")
+      + (errors ? ` · ${errors} vérification(s) à réessayer` : "");
+    return { valid, errors };
+  };
+  state.models = (state.modelCandidates || []).filter((asset) => assetValidation.valid("model", asset.rel));
+  state.textures = (state.textureCandidates || []).filter((asset) => assetValidation.valid("texture", asset.rel));
+  let errors = 0;
+  if (state.view === "models") errors = summary(state.modelCandidates, "model", "modèle(s)", "#model-count").errors;
+  if (state.view === "textures") errors = summary(state.textureCandidates, "texture", "texture(s)", "#texture-count").errors;
+  if (state.view === "ensembles") errors = summary(state.ensembleCandidates, "model", "ensemble(s)", "#ensemble-count").errors;
+  if (state.view === "sounds") errors = summary(state.soundCandidates, "sound", "son(s)", "#sound-count").errors;
+  if (state.view === "mobs" || state.view === "blender") {
+    const selector = state.view === "mobs" ? "#mob-validation-status" : "#blend-validation-status";
+    const model = summary(state.chooserModels, "model", "modèle(s)", selector);
+    const texture = summary(state.chooserTextures, "texture", "texture(s)", "#mob-texture-validation-status");
+    errors = model.errors + (state.view === "mobs" ? texture.errors : 0);
+    fillMobSelects();
+  }
+  $$("[data-validate-retry]").forEach((button) => { button.hidden = !errors; });
+  updateSelectionBar();
+}
+
 function thumbFaces() {
   return state.settings?.thumb_faces || "";
 }
@@ -375,7 +439,8 @@ function tileMarkup(asset, kind) {
     : `<img decoding="async" alt="" data-thumb="${esc(textureThumb(asset))}">`;
   return `
     <article class="tile ${chosen ? "selected" : ""}" data-kind="${kind}"
-             data-rel="${esc(asset.rel)}" data-key="${esc(key)}">
+             data-rel="${esc(asset.rel)}" data-key="${esc(key)}"
+             data-check-kind="${kind}" data-check-rel="${esc(asset.rel)}" hidden>
       <button class="pick" data-pick="${esc(key)}" title="Sélectionner (Ctrl+clic)">✓</button>
       <div class="thumb ${shown === "aperçu désactivé" ? "placeholder" : ""} ${kind === "texture" ? "checker" : ""}">${shown}</div>
       <div class="meta">
@@ -443,18 +508,13 @@ async function renderEnsembles() {
   if (render !== ensembleRenderSequence || state.view !== "ensembles") return;
   const rows = state.ensembles.filter(ensembleMatches);
   const shown = rows.slice(0, state.shown.ensembles);
-  const count = $("#ensemble-count");
-  if (count) {
-    const complete = state.ensembles.filter((row) => row.complete).length;
-    count.textContent = `${state.ensembles.length} modèle(s) · ${complete} complet(s) `
-      + "(textures + animations repérées)"
-      + (state.filters.ensembles ? ` · filtre « ${state.filters.ensembles} »` : "");
-  }
+  state.ensembleCandidates = shown;
   thumbnailQueue.release(grid);
   grid.innerHTML = shown.length
     ? shown.map((row) => `
       <article class="tile ensemble" data-kind="model" data-rel="${esc(row.rel)}"
-               data-key="model:${esc(row.rel)}" data-ensemble="1">
+               data-key="model:${esc(row.rel)}" data-ensemble="1"
+               data-check-kind="model" data-check-rel="${esc(row.rel)}" hidden>
         <button class="pick" data-pick="model:${esc(row.rel)}" title="Sélectionner (Ctrl+clic)">✓</button>
         <div class="thumb">
           <img decoding="async" alt="" data-thumb="${esc(ensembleThumb(row))}">
@@ -470,6 +530,9 @@ async function renderEnsembles() {
       </article>`).join("")
     : `<p class="muted">Aucun modèle repéré dans ce dossier.</p>`;
   thumbnailQueue.observe(grid);
+  assetValidation.setScope("view", shown.map((row) => ({ kind: "model", rel: row.rel })),
+                           state.project?.image_revision);
+  updateValidatedAssets();
   const more = $("#ensemble-more");
   const button = $("#ensemble-more-btn");
   if (more && button) {
@@ -485,21 +548,16 @@ async function renderModels() {
   state.shots = $("#model-shots")?.checked !== false;
   const models = (state.project?.assets || [])
     .filter((asset) => asset.kind === "model" && matches(asset, state.filters.models));
-  state.models = models;
   const shown = models.slice(0, state.shown.models);
-  const count = $("#model-count");
-  if (count) {
-    count.textContent = `${models.length} modèle(s)`
-      + (state.filters.models ? ` pour « ${state.filters.models} »` : "")
-      + (shown.length < models.length ? ` — ${shown.length} affichés` : "");
-  }
+  state.modelCandidates = shown;
   thumbnailQueue.release(grid);
   grid.innerHTML = shown.length
     ? shown.map((asset) => tileMarkup(asset, "model")).join("")
     : `<p class="muted">Aucun modèle repéré dans ce dossier.</p>`;
   thumbnailQueue.observe(grid);
+  assetValidation.setScope("view", shown, state.project?.image_revision);
+  updateValidatedAssets();
   updateMore("model", models.length, shown.length);
-  updateSelectionBar();
 }
 
 /* Une frappe = un rendu différé : sans ça, chaque lettre relançait la
@@ -520,7 +578,7 @@ function matches(asset, filter) {
 }
 
 function focusSearch() {
-  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens" }[state.view];
+  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens", sounds: "#search-sound" }[state.view];
   if (selector) $(selector)?.focus();
 }
 
@@ -560,16 +618,17 @@ async function openModel(rel, options = {}) {
       <dt>Sommets</dt><dd>${info.vertices.toLocaleString("fr-FR")}</dd>
       <dt>Dimensions</dt><dd>${info.bounds.map((value) => value.toFixed(3)).join(" × ")}</dd>
       <dt>Matériaux</dt><dd>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
-      <dt>Textures</dt><dd>${info.textures.length ? info.textures.map((t) => esc(t.name)).join(", ") : "aucune trouvée"}</dd>
+      <dt>Textures</dt><dd>${info.textures.length ? "cartes associées à vérifier ci-dessous" : "aucune repérée"}</dd>
       <dt>Animations</dt><dd>${info.animations.length ? `${info.animations.length} fichier(s)` : "aucune repérée"}</dd>
       <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
     </dl>
     ${info.warnings.length ? `<details class="warns"><summary>${info.warnings.length} remarque(s) de décodage</summary>
       <ul class="todo">${info.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
     ${info.textures.length ? `<div class="ensemble-strip">
-      <h4>Cartes du modèle (${info.textures.length})</h4>
+      <h4>Cartes du modèle (après vérification)</h4>
       <div class="strip">${info.textures.map((t) => `
-        <button class="strip-item" data-open-texture="${esc(t.rel)}" title="${esc(t.rel)}">
+        <button class="strip-item" data-open-texture="${esc(t.rel)}" title="${esc(t.rel)}"
+                data-check-kind="texture" data-check-rel="${esc(t.rel)}" hidden>
           <img decoding="async" alt="" data-thumb="${esc(textureThumb(t, 192))}">
           <span>${esc(t.name)}</span>
           <span class="strip-role">${ROLE_BADGE(t.role)}</span>
@@ -593,6 +652,10 @@ async function openModel(rel, options = {}) {
     </label>
     <p class="hint" id="model-budget-note">Le budget et le culling se règlent dans Réglages.</p>`);
 
+  assetValidation.setScope("inspector", info.textures.map((texture) => ({
+    kind: "texture", rel: texture.rel,
+  })), state.project?.image_revision);
+  updateValidatedAssets();
   ensureTab({ id: `model:${rel}`, kind: "model", label: name, doc: { type: "model", rel } });
   state.tab = `model:${rel}`;
   renderTabs();
@@ -626,9 +689,12 @@ async function openModel(rel, options = {}) {
     node.onclick = () => openTexture(node.dataset.openTexture);
   });
   $("#btn-translate-model").onclick = () => {
+    const search = $("#blend-target-search");
+    if (search) search.value = rel;
+    state.shown.chooser = 48;
     showView("blender");
     const select = $("#blend-target");
-    if (select) select.value = rel;
+    if (select && assetValidation.entry("model", rel)?.injectable) select.value = rel;
   };
   $("#model-quality").onchange = (event) => {
     const chosen = qualities.find((q) => q.id === event.target.value) || qualities[0];
@@ -647,23 +713,16 @@ async function renderTextures() {
   const textures = (state.project?.assets || [])
     .filter((asset) => asset.kind === "texture" && matches(asset, state.filters.textures)
       && (!role || (asset.role || "autre") === role));
-  state.textures = textures;
   const shown = textures.slice(0, state.shown.textures);
-  const count = $("#texture-count");
-  if (count) {
-    const roleName = role ? (ROLE_NAMES[role] || role) : "";
-    count.textContent = `${textures.length} texture(s)`
-      + (role ? ` de type ${roleName}` : "")
-      + (state.filters.textures ? ` pour « ${state.filters.textures} »` : "")
-      + (shown.length < textures.length ? ` — ${shown.length} affichées` : "");
-  }
+  state.textureCandidates = shown;
   thumbnailQueue.release(grid);
   grid.innerHTML = shown.length
     ? shown.map((asset) => tileMarkup(asset, "texture")).join("")
     : `<p class="muted">Aucune texture repérée dans ce dossier.</p>`;
   thumbnailQueue.observe(grid);
+  assetValidation.setScope("view", shown, state.project?.image_revision);
+  updateValidatedAssets();
   updateMore("texture", textures.length, shown.length);
-  updateSelectionBar();
 }
 
 async function openTexture(rel) {
@@ -717,7 +776,9 @@ async function openTexture(rel) {
 
   $("#btn-export-png").onclick = async () => {
     try {
-      const result = await api(`/api/texture/export?path=${encodeURIComponent(rel)}&index=0`);
+      const result = await api("/api/texture/export", {
+        method: "POST", body: JSON.stringify({ path: rel, index: 0 }),
+      });
       toast(`PNG écrit : ${result.file}`);
     } catch (error) { toast(error.message, "error"); }
   };
@@ -748,31 +809,112 @@ async function openTexture(rel) {
   };
 }
 
+/* ------------------------------------------------------------------ sons (lecture seule) */
+async function renderSounds() {
+  const grid = $("#sound-grid");
+  if (!grid || state.view !== "sounds") return;
+  const sounds = (state.project?.assets || [])
+    .filter((asset) => asset.kind === "sound" && matches(asset, state.filters.sounds));
+  const shown = sounds.slice(0, state.shown.sounds);
+  state.soundCandidates = shown;
+  grid.innerHTML = shown.length ? shown.map((asset) => `
+    <article class="tile sound-tile" data-kind="sound" data-rel="${esc(asset.rel)}"
+             data-check-kind="sound" data-check-rel="${esc(asset.rel)}" hidden>
+      <div class="thumb" aria-hidden="true">♫</div>
+      <div class="meta"><strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
+        <small>${humanSize(asset.size)} · BWAV Opus</small></div>
+    </article>`).join("") : `<p class="muted">Aucun fichier BWAV repéré dans ce dossier.</p>`;
+  assetValidation.setScope("view", shown, state.project?.image_revision);
+  updateValidatedAssets();
+  updateMore("sound", sounds.length, shown.length);
+}
+
+async function openSound(rel) {
+  showInspector("Son", `<h3>Ouverture du son…</h3><p class="muted">${esc(rel)}</p>`);
+  const request = inspectionSequence;
+  let info;
+  try {
+    info = await api(`/api/sound/info?path=${encodeURIComponent(rel)}`);
+  } catch (error) {
+    if (request === inspectionSequence) {
+      showInspector("Son", `<h3>Son indisponible</h3><p>${esc(error.message)}</p>`);
+      toast(error.message, "error");
+    }
+    return;
+  }
+  if (request !== inspectionSequence) return;
+  const url = `/api/sound/ogg?path=${encodeURIComponent(rel)}` + imageRevisionQuery();
+  const filename = rel.split("/").pop().replace(/\.bwav(?:\.zs)?$/i, "") + ".opus";
+  showInspector("Son", `
+    <h3>${esc(filename)}</h3><div class="sub">${esc(rel)}</div>
+    <audio class="sound-player" id="sound-player" controls preload="none" src="${esc(url)}"></audio>
+    <dl class="kv">
+      <dt>Format source</dt><dd>${esc(info.format)}</dd>
+      <dt>Fréquence</dt><dd>${info.sample_rate.toLocaleString("fr-FR")} Hz</dd>
+      <dt>Durée</dt><dd>${info.seconds.toFixed(2)} s</dd>
+      <dt>Boucle</dt><dd>${info.loop_start === null ? "aucune repérée"
+        : `${info.loop_start} → ${info.loop_end} échantillons`}</dd>
+    </dl>
+    <a class="btn primary" href="${esc(url + "&download=1")}" download="${esc(filename)}">Télécharger en Ogg Opus</a>
+    <p class="hint">Conversion sans réencodage. L'import et la réinjection dans le jeu ne sont pas encore disponibles.</p>`);
+  $("#sound-player").onerror = () => {
+    assetValidation.markError("sound", rel, "Lecture audio impossible dans ce navigateur.");
+    toast("Lecture audio impossible dans ce navigateur.", "error");
+  };
+  ensureTab({ id: `sound:${rel}`, kind: "sound", label: filename, doc: { type: "sound", rel } });
+  state.tab = `sound:${rel}`;
+  renderTabs();
+}
+
 /* ------------------------------------------------------------------ mobs */
 function fillMobSelects() {
-  const models = (state.project?.assets || []).filter((asset) => asset.kind === "model");
-  const textures = (state.project?.assets || []).filter((asset) => asset.kind === "texture");
-  const modelSelect = $("#mob-model");
-  if (modelSelect) {
-    modelSelect.innerHTML = models.length
-      ? models.map((asset) => `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("")
-      : `<option value="">(aucun modèle)</option>`;
-  }
+  const models = (state.chooserModels || []).filter((asset) => assetValidation.valid("model", asset.rel));
+  const textures = (state.chooserTextures || []).filter((asset) => assetValidation.valid("texture", asset.rel));
+  const injectable = models.filter((asset) => assetValidation.entry("model", asset.rel)?.injectable);
+  const options = (items) => items.map((asset) =>
+    `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
+  const setSingle = (select, items, empty) => {
+    if (!select) return;
+    const html = items.length ? options(items) : `<option value="">${empty}</option>`;
+    if (select.dataset.optionsHtml === html) return;
+    const previous = select.value;
+    select.innerHTML = html;
+    select.dataset.optionsHtml = html;
+    if (items.some((item) => item.rel === previous)) select.value = previous;
+  };
+  setSingle($("#mob-model"), models, "(aucun modèle vérifié)");
+  setSingle($("#blend-target"), injectable, "(aucun modèle réinjectable vérifié)");
   const textureSelect = $("#mob-textures");
   if (textureSelect) {
-    textureSelect.innerHTML = textures
-      .map((asset) => `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
-  }
-  const target = $("#blend-target");
-  if (target) {
-    target.innerHTML = models.length
-      ? models.map((asset) => `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("")
-      : `<option value="">(aucun modèle)</option>`;
+    const html = options(textures);
+    if (textureSelect.dataset.optionsHtml !== html) {
+      const previous = new Set([...textureSelect.selectedOptions].map((option) => option.value));
+      textureSelect.innerHTML = html;
+      textureSelect.dataset.optionsHtml = html;
+      for (const option of textureSelect.options) option.selected = previous.has(option.value);
+    }
   }
 }
 
+function requestChooserChecks(includeTextures) {
+  const assets = state.project?.assets || [];
+  const cap = state.shown.chooser || 48;
+  const search = $(includeTextures ? "#mob-resource-search" : "#blend-target-search");
+  const filter = (search?.value || "").trim().toLowerCase();
+  const models = assets.filter((asset) => asset.kind === "model" && matches(asset, filter));
+  const textures = includeTextures
+    ? assets.filter((asset) => asset.kind === "texture" && matches(asset, filter)) : [];
+  state.chooserModels = models.slice(0, cap);
+  state.chooserTextures = textures.slice(0, cap);
+  assetValidation.setScope("view", [...state.chooserModels, ...state.chooserTextures],
+                           state.project?.image_revision);
+  const more = $(includeTextures ? "#mob-validate-more" : "#blend-validate-more");
+  if (more) more.hidden = models.length <= cap && textures.length <= cap;
+  updateValidatedAssets();
+}
+
 async function renderMobs() {
-  fillMobSelects();
+  requestChooserChecks(true);
   const mobs = state.project?.mobs || [];
   $("#mob-grid").innerHTML = mobs.map((mob) => `
     <article class="tile" data-kind="mob" data-slug="${esc(mob.slug)}">
@@ -806,13 +948,14 @@ function openMob(slug) {
 function openDoc(doc) {
   if (doc.type === "model") return openModel(doc.rel);
   if (doc.type === "texture") return openTexture(doc.rel);
+  if (doc.type === "sound") return openSound(doc.rel);
   if (doc.type === "mob") return openMob(doc.slug);
   if (doc.type === "blend") return selectBlend(doc.ref, { tab: true });
 }
 
 /* ------------------------------------------------------------------ blender */
 async function renderBlends() {
-  fillMobSelects();
+  requestChooserChecks(false);
   try {
     const payload = await api("/api/blend/list");
     state.blends = payload.blends || [];
@@ -1086,10 +1229,19 @@ async function flushSettings() {
     if (state.project && payload.image_revision && !obsolete) {
       state.project.image_revision = payload.image_revision;
       state.project.settings = payload.settings;
+      if (assetValidation.revision !== payload.image_revision) {
+        if (state.selection) { state.selection.clear(); updateSelectionBar(); }
+        assetValidation.setScope("view", [], payload.image_revision);
+      }
     }
     renderSettings();
     renderStatus();
     if (state.view === "models") await renderModels();
+    if (state.view === "textures") await renderTextures();
+    if (state.view === "ensembles") await renderEnsembles();
+    if (state.view === "sounds") await renderSounds();
+    if (state.view === "mobs") await renderMobs();
+    if (state.view === "blender") requestChooserChecks(false);
     if (notify) toast("Réglages enregistrés");
     saved = true;
   } catch (error) { toast(error.message, "error"); }
@@ -1213,23 +1365,12 @@ async function exportSelection(blend = false) {
   }
   status(`export de ${items.length} élément(s)…`, "busy");
   try {
-    const response = await fetch("/api/export/selection", {
+    const result = await api("/api/export/selection", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, blend }),
+      body: JSON.stringify({ items, blend, download_link: true }),
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-      throw new Error(payload.error || `HTTP ${response.status}`);
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = blend ? "hookycreator-blender.zip" : "hookycreator-selection.zip";
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-    toast(`${items.length} élément(s) exportés (${humanSize(blob.size)})`);
+    showExportResult(result, "ZIP de sélection prêt");
+    toast(`${items.length} élément(s) préparés dans le ZIP`);
     if (blend) log("info", "ZIP Blender : un dossier par modèle, .blend si Blender "
       + "est installé, sinon creer_blend.py + la commande dans LIRE-MOI.txt");
   } catch (error) { toast(error.message, "error"); }
@@ -1238,6 +1379,7 @@ async function exportSelection(blend = false) {
 /* ------------------------------------------------------------------ inspecteur */
 function showInspector(title, html) {
   inspectionSequence += 1;
+  assetValidation.clearScope("inspector");
   const body = $("#inspector-body");
   thumbnailQueue.release(body);
   $("#inspector-title").textContent = title;
@@ -1250,6 +1392,7 @@ function showInspector(title, html) {
 
 function hideInspector() {
   inspectionSequence += 1;
+  assetValidation.clearScope("inspector");
   thumbnailQueue.release($("#inspector-body"));
   $("#inspector").hidden = true;
   $(".workspace").classList.remove("with-inspector");
@@ -1270,8 +1413,9 @@ async function exportModel(rel) {
       method: "POST",
       body: JSON.stringify({ path: rel, textures: state.settings?.export_textures !== false }),
     });
-    toast(`Export Blender : ${result.files.length} fichier(s), ${result.faces.toLocaleString("fr-FR")} faces`);
-    log("ok", `export → ${result.folder}`);
+    showExportResult(result, "Export glTF / OBJ prêt");
+    toast(`Export prêt : ${result.files.length} fichier(s), ${result.faces.toLocaleString("fr-FR")} faces`);
+    log("ok", `export → ${result.absolute_folder || result.folder}`);
     log("info", `fichiers : ${result.files.join(", ")}`);
     if (!result.textures) {
       log("warn", "aucune texture trouvée pour ce modèle dans le dossier scanné : "
@@ -1291,7 +1435,7 @@ async function exportModel(rel) {
     toast(error.message, "error");
     log("error", error.message);
   } finally {
-    if (button) { button.disabled = false; button.textContent = "Exporter pour Blender"; }
+    if (button) { button.disabled = false; button.textContent = "Exporter pour Blender (glTF/OBJ)"; }
   }
 }
 
@@ -1357,6 +1501,27 @@ async function showUv(rel) {
   $("#uv-back").onclick = () => openModel(rel);
 }
 
+// Le dossier reste visible même après disparition des notifications. L'archive
+// est facultativement téléchargée par le navigateur ; le lien permet de réessayer.
+function showExportResult(result, title) {
+  if (!result.download_url || !result.download_url.startsWith("/api/export/download?id=")) return;
+  const panel = $("#export-result");
+  const link = $("#export-download");
+  if (!panel || !link) return;
+  $("#export-result-title").textContent = title;
+  $("#export-result-folder").textContent = result.absolute_folder || result.folder || "";
+  const note = $("#export-result-note");
+  if (note) note.textContent = result.temporary_archive
+    ? "Archive temporaire : télécharge-la maintenant ; le cache est nettoyé périodiquement."
+    : (result.stale_files || []).length
+      ? "Ce dossier contient aussi d'anciens fichiers. Le ZIP contient uniquement cet export."
+      : "Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.";
+  link.href = result.download_url;
+  link.download = result.download_name || "hookycreator-blender.zip";
+  panel.hidden = false;
+  if (typeof link.click === "function") link.click();
+}
+
 async function exportBlend(rel) {
   const request = inspectionSequence;
   const button = $("#btn-blend");
@@ -1367,6 +1532,8 @@ async function exportBlend(rel) {
       method: "POST",
       body: JSON.stringify({ path: rel, textures: state.settings?.export_textures !== false }),
     });
+    showExportResult(result, result.method === "blender"
+      ? "Export .blend prêt" : "glTF et script prêts — sans .blend");
     if (result.method === "blender") {
       toast(`.blend écrit : ${result.blend}`);
       log("ok", `${result.message}`);
@@ -1571,7 +1738,7 @@ const MENUS = {
     { label: "Exporter la texture sélectionnée en PNG", run: () => {
       const rel = state.tabs.find((tab) => tab.doc?.type === "texture")?.doc?.rel;
       if (!rel) { toast("Ouvre d'abord une texture", "error"); return; }
-      api(`/api/texture/export?path=${encodeURIComponent(rel)}&index=0`)
+      api("/api/texture/export", { method: "POST", body: JSON.stringify({ path: rel, index: 0 }) })
         .then((result) => toast(`PNG écrit : ${result.file}`))
         .catch((error) => toast(error.message, "error"));
     } },
@@ -1643,6 +1810,7 @@ function paletteCommands() {
     { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
     { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
+    { label: "Aller aux sons", group: "vue", run: () => showView("sounds") },
     { label: "Aller aux mobs", group: "vue", run: () => showView("mobs") },
     { label: "Aller à Blender → jeu", group: "vue", run: () => showView("blender") },
     { label: "Aller aux réglages", group: "vue", run: () => showView("settings") },
@@ -1664,12 +1832,14 @@ function paletteCommands() {
     { label: "Réduire l'interface", group: "fenêtre", run: () => toggleReduced() },
     { label: "Quitter l'atelier", group: "fenêtre", run: () => quitApp() },
   ];
-  (state.project?.assets || []).filter((asset) => asset.kind === "model").slice(0, 400)
+  (state.project?.assets || []).filter((asset) => asset.kind === "model"
+    && assetValidation.valid("model", asset.rel)).slice(0, 400)
     .forEach((asset) => commands.push({
       label: `Ouvrir le modèle ${asset.name}`, group: "modèle", hint: asset.rel,
       run: () => { showView("models"); openModel(asset.rel); },
     }));
-  (state.project?.assets || []).filter((asset) => asset.kind === "texture").slice(0, 400)
+  (state.project?.assets || []).filter((asset) => asset.kind === "texture"
+    && assetValidation.valid("texture", asset.rel)).slice(0, 400)
     .forEach((asset) => commands.push({
       label: `Ouvrir la texture ${asset.name}`, group: "texture", hint: asset.rel,
       run: () => { showView("textures"); openTexture(asset.rel); },
@@ -1882,10 +2052,14 @@ async function rescanProject() {
     state.shown.models = 48;
     state.shown.textures = 48;
     state.shown.ensembles = 48;
+    state.shown.sounds = 48;
     renderStatus();
     if (state.view === "models") await renderModels();
     if (state.view === "ensembles") await renderEnsembles();
     if (state.view === "textures") await renderTextures();
+    if (state.view === "sounds") await renderSounds();
+    if (state.view === "mobs") await renderMobs();
+    if (state.view === "blender") await renderBlends();
     if (state.view === "home") renderHome();
     if (state.view === "create") renderCreation();
     if (payload.scan.incomplete || payload.scan.truncated) {
@@ -1979,6 +2153,10 @@ function acceptProjectSnapshot(project, request) {
     ? { ...project, image_revision: state.project.image_revision }
     : project;
   state.settings = { ...(incomingSettings || {}), ...settingsInFlight, ...settingsPending };
+  if (assetValidation.revision !== state.project.image_revision) {
+    if (state.selection) { state.selection.clear(); updateSelectionBar(); }
+    assetValidation.setScope("view", [], state.project.image_revision);
+  }
   return true;
 }
 
@@ -1994,6 +2172,7 @@ async function refresh(options = {}) {
   if (state.view === "models") await renderModels();
   if (state.view === "ensembles") await renderEnsembles();
   if (state.view === "textures") await renderTextures();
+  if (state.view === "sounds") await renderSounds();
   if (state.view === "mobs") await renderMobs();
   if (state.view === "blender") await renderBlends();
   if (state.view === "settings") { renderSettings(); refreshSystem(); refreshBlender(); }
@@ -2056,6 +2235,19 @@ function wire() {
     state.shown.ensembles = 48;
     renderEnsembles();
   });
+  onInputDebounced("#search-sound", (value) => {
+    state.filters.sounds = value.trim().toLowerCase();
+    state.shown.sounds = 48;
+    renderSounds();
+  });
+  onInputDebounced("#mob-resource-search", () => {
+    state.shown.chooser = 48;
+    requestChooserChecks(true);
+  });
+  onInputDebounced("#blend-target-search", () => {
+    state.shown.chooser = 48;
+    requestChooserChecks(false);
+  });
   $("#model-shots").onchange = renderModels;
   const ensMore = $("#ensemble-more-btn");
   if (ensMore) ensMore.onclick = () => {
@@ -2076,6 +2268,29 @@ function wire() {
   $("#texture-more-btn").onclick = () => {
     state.shown.textures += 48;
     renderTextures();
+  };
+  $("#sound-more-btn").onclick = () => {
+    state.shown.sounds += 48;
+    renderSounds();
+  };
+  $$("[data-validate-retry]").forEach((button) => {
+    button.onclick = () => {
+      assetValidation.retryErrors();
+      if (state.view === "models") renderModels();
+      if (state.view === "textures") renderTextures();
+      if (state.view === "ensembles") renderEnsembles();
+      if (state.view === "sounds") renderSounds();
+      if (state.view === "mobs") requestChooserChecks(true);
+      if (state.view === "blender") requestChooserChecks(false);
+    };
+  });
+  $("#mob-validate-more").onclick = () => {
+    state.shown.chooser += 48;
+    requestChooserChecks(true);
+  };
+  $("#blend-validate-more").onclick = () => {
+    state.shown.chooser += 48;
+    requestChooserChecks(false);
   };
   $("#selection-export").onclick = () => exportSelection(false);
   const selBlend = $("#selection-blend");
@@ -2102,6 +2317,8 @@ function wire() {
     $("#win-max").title = state.fullscreen ? "Quitter le plein écran" : "Plein écran";
   });
   $("#inspector-close").onclick = hideInspector;
+  $("#export-dismiss").onclick = () => { $("#export-result").hidden = true; };
+  $("#native-download-dismiss").onclick = () => { $("#native-download-result").hidden = true; };
   $("#rail-console").onclick = () => toggleConsole();
   $("#console-clear").onclick = () => { state.logs = []; renderLogs(); };
   $("#console-close").onclick = () => toggleConsole(false);
@@ -2133,6 +2350,7 @@ function wire() {
       if (state.selection.size) clearSelection();
       if (tile.dataset.kind === "model") openModel(tile.dataset.rel);
       if (tile.dataset.kind === "texture") openTexture(tile.dataset.rel);
+      if (tile.dataset.kind === "sound") openSound(tile.dataset.rel);
       if (tile.dataset.kind === "mob") openMob(tile.dataset.slug);
     }
   });
@@ -2222,6 +2440,23 @@ function wire() {
 }
 
 async function boot() {
+  if (window.__HOOKY_DESKTOP__) {
+    document.documentElement.dataset.desktop = "1";
+    window.addEventListener("hooky:status", (event) => {
+      if (event.detail) toast(String(event.detail));
+    });
+    window.addEventListener("hooky:download", (event) => {
+      const detail = event.detail || {};
+      const title = detail.status === "ok" ? "Téléchargement terminé"
+        : detail.status === "started" ? "Téléchargement en cours" : "Téléchargement impossible";
+      $("#native-download-title").textContent = title;
+      $("#native-download-path").textContent = String(detail.path || detail.message || "");
+      $("#native-download-result").hidden = false;
+      if (detail.status !== "started") {
+        toast(`${title} : ${detail.path || detail.message || ""}`, detail.status === "ok" ? "ok" : "error");
+      }
+    });
+  }
   applyUiSettings();
   ensureViewTab("home", "Accueil");
   state.tabs[0].closable = false;

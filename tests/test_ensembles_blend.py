@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,7 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -245,6 +246,19 @@ class BlendScriptTests(unittest.TestCase):
         self.assertIn("save_as_mainfile", script)
         self.assertIn("pack_all", script)            # textures embarquées
         self.assertIn("Heros.gltf", script)          # repli sans argument
+
+    def test_script_escapes_untrusted_model_names(self) -> None:
+        folder = self.tmp / "export"
+        marker = self.tmp / "executed"
+        bad_name = f"a');__import__('pathlib').Path({str(marker)!r}).touch();#\n.gltf"
+        script = blendfile.write_script(folder, bad_name, 'un "nom".blend')
+        bpy = MagicMock()
+        bpy.ops.import_scene.gltf.return_value = {"FINISHED"}
+        with patch.dict(sys.modules, {"bpy": bpy}), patch.object(sys, "argv", [str(script)]):
+            runpy.run_path(str(script), run_name="__main__")
+        bpy.ops.import_scene.gltf.assert_called_once_with(filepath=str(folder / bad_name))
+        bpy.ops.wm.save_as_mainfile.assert_called_once_with(filepath=str(folder / 'un "nom".blend'))
+        self.assertFalse(marker.exists())
 
     def test_the_script_compiles(self) -> None:
         """Une faute de frappe dans le script se verrait seulement chez l'utilisateur."""

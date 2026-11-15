@@ -41,7 +41,9 @@ de `requirements.txt` restent nécessaires à HookyCreator ; l'outil en ligne de
 commande Rust décrit ci-dessous fonctionne, lui, sans Python.
 
 Linux/macOS : `python3 tools/build_rust.py`, puis redémarrer l'application.
-La compilation exige Rust **1.87 ou plus récent**.
+La compilation du noyau exige Rust **1.87 ou plus récent**. La fenêtre Tauri v2
+et son sidecar autonome se construisent séparément, avec des dépendances
+supplémentaires : voir [`DESKTOP.md`](DESKTOP.md).
 
 ## Périmètre et compatibilité
 

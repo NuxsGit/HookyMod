@@ -100,6 +100,8 @@ code, .mono { font-family: var(--mono); font-size: 11.5px; }
 }
 
 .win-dots { display: flex; gap: 7px; padding-right: 6px; }
+/* La fenêtre native possède ses propres boutons de fermeture/réduction. */
+:root[data-desktop="1"] .win-dots { display: none; }
 .dot {
   width: 12px; height: 12px;
   padding: 0;
@@ -395,7 +397,7 @@ kbd {
 }
 
 .view { display: flex; flex-direction: column; gap: 14px; }
-.view[hidden] { display: none; }
+.view[hidden], .tile[hidden], .strip-item[hidden] { display: none; }
 
 .view-head {
   display: flex;
@@ -809,6 +811,8 @@ input[type="range"]::-moz-range-thumb {
   content: "aperçu en attente…"; position: absolute; color: var(--faint); font-size: 11px;
 }
 .thumb.placeholder { color: var(--faint); font-size: 11px; }
+.sound-tile .thumb { color: var(--accent); font-size: 42px; }
+.sound-player { display: block; max-width: 100%; width: 100%; margin: 14px 0; }
 
 .tile .meta { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tile .meta strong { font-size: 12px; font-weight: 580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1018,6 +1022,37 @@ input[type="range"]::-moz-range-thumb {
 #status-clock { font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------------ toasts */
+.export-result {
+  position: fixed;
+  z-index: 85;
+  right: 16px;
+  top: 54px;
+  width: min(400px, calc(100vw - 32px));
+  padding: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.export-result[hidden] { display: none; }
+.export-result p { margin: 8px 0; }
+.export-result code { display: block; overflow-wrap: anywhere; color: var(--accent); }
+.export-dismiss { float: right; }
+.native-download-result {
+  position: fixed;
+  z-index: 85;
+  left: 16px;
+  bottom: 40px;
+  width: min(400px, calc(100vw - 32px));
+  padding: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.native-download-result[hidden] { display: none; }
+.native-download-result code { display: block; margin-top: 6px; overflow-wrap: anywhere; color: var(--accent); }
+
 .toasts {
   position: fixed;
   right: 16px;

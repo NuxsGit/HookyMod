@@ -25,6 +25,7 @@ function workspaceNavigation() {
   const $$ = (selector) => selector === ".view" ? views : rail;
   const ctx = vm.createContext({ state, $, $$, VIEW_LABELS: { edit: "Modification", create: "Création de mod" },
     thumbnailQueue: { release: (node) => calls.push(`release:${node.id}`) },
+    assetValidation: { clearScope() {} },
     hideInspector: () => calls.push("hide-inspector"),
     ensureViewTab: (view, label) => tabs.push([view, label]), renderTabs() {},
     renderHome() {}, renderCreation: () => calls.push("creation"), renderModels() {},

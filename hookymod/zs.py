@@ -29,6 +29,10 @@ ZSTD_MAGIC_SKIP = b"\x50\x2a\x4d\x18"
 DEFAULT_LEVEL = 16
 
 
+class DecompressionLimit(FormatError):
+    """La sortie dépasse le plafond demandé avant son allocation complète."""
+
+
 def zstd_available() -> bool:
     return zstd is not None
 
@@ -199,12 +203,20 @@ class ZstdDicts:
         return None
 
     def decompress(self, raw: bytes, dict_id: int | None = None,
-                   allow_try_all: bool = True) -> bytes:
-        """Décompresse une frame zstd, en trouvant le bon dictionnaire."""
+                   allow_try_all: bool = True, *, max_output_size: int | None = None) -> bytes:
+        """Décompresse une frame zstd, en trouvant le bon dictionnaire.
+
+        Avec ``max_output_size``, les frames complètes sont vérifiées et la
+        sortie est bornée, y compris lorsque sa taille n'est pas annoncée.
+        """
         require_zstd()
+        if max_output_size is not None and (type(max_output_size) is not int or max_output_size < 1):
+            raise ValueError("max_output_size doit être un entier strictement positif")
         if not is_zstd(raw):
             raise FormatError("Ce fichier n'est pas une frame zstd (.zs).")
-        did, _ = frame_info(raw)
+        did, size = frame_info(raw)
+        if max_output_size is not None and size is not None and size > max_output_size:
+            raise DecompressionLimit(f"Flux zstd trop volumineux (limite : {max_output_size} octets).")
         if dict_id is None:
             dict_id = did
 
@@ -221,7 +233,9 @@ class ZstdDicts:
             last_error: Exception | None = None
             for _, candidate in self.by_id.values():
                 try:
-                    return self._run(raw, candidate)
+                    return self._run(raw, candidate, max_output_size=max_output_size)
+                except DecompressionLimit:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - on essaie le suivant
                     last_error = exc
             if not self.by_id:
@@ -235,11 +249,12 @@ class ZstdDicts:
                 f"Aucun dictionnaire ne correspond à la frame zstd (id {dict_id}).\n"
                 "Le dump est peut-être incomplet ou issu d'une autre version du jeu."
             ) from last_error
-        return self._run(raw, dictionary)
+        return self._run(raw, dictionary, max_output_size=max_output_size)
 
-    def _run(self, raw: bytes, dictionary) -> bytes:
+    def _run(self, raw: bytes, dictionary, *, max_output_size: int | None = None) -> bytes:
         require_zstd()
-        if native.available():
+        # Le chemin natif a sa propre limite globale, pas celle demandée ici.
+        if max_output_size is None and native.available():
             # Forcer le dictionnaire choisi pour les éventuelles trames sans
             # id, comme le décodeur zstandard C. Un dictionnaire brut (id 0)
             # ne doit pas être renommé silencieusement si la frame annonce un
@@ -257,7 +272,7 @@ class ZstdDicts:
         dctx = (zstd.ZstdDecompressor(dict_data=dictionary)
                 if dictionary else zstd.ZstdDecompressor())
         try:
-            if self.require_complete:
+            if self.require_complete or max_output_size is not None:
                 # stream_reader accepte silencieusement une fin tronquée et
                 # peut rendre des octets partiels. Vérifier la fin de chaque
                 # frame, y compris les frames skippables et concaténées.
@@ -270,7 +285,11 @@ class ZstdDicts:
                         # quelques octets se décompressent en un grand tampon.
                         chunk = raw[offset:offset + (1 << 10)]
                         offset += len(chunk)
-                        out += decoder.decompress(chunk)
+                        decoded = decoder.decompress(chunk)
+                        if max_output_size is not None and len(decoded) > max_output_size - len(out):
+                            raise DecompressionLimit(
+                                f"Flux zstd trop volumineux (limite : {max_output_size} octets).")
+                        out += decoded
                         if decoder.eof:
                             offset -= len(decoder.unused_data)
                             break

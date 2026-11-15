@@ -1,0 +1,4 @@
+# Dépendances utilisées pour construire le sidecar autonome de la fenêtre Tauri.
+-r requirements.txt
+Pillow>=10
+pyinstaller>=6.13,<7

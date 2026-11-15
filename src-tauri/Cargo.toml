@@ -1,0 +1,20 @@
+[package]
+name = "hookycreator-desktop"
+version = "0.1.0"
+description = "Fenêtre native HookyCreator"
+edition = "2021"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.12", features = [] }
+tauri-plugin-dialog = "2.8"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

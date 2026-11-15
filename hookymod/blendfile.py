@@ -34,7 +34,7 @@ SCRIPT_NAME = "creer_blend.py"
 TIMEOUT = 300
 
 IMPORT_SCRIPT = '''\
-"""Crée {blend} depuis {gltf} — script généré par HookyCreator.
+"""Crée un .blend depuis le glTF voisin — script généré par HookyCreator.
 
 Deux façons de s'en servir :
 
@@ -54,8 +54,8 @@ import bpy
 # arguments après « -- » (Blender peut ajouter les siens avant)
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 here = os.path.dirname(os.path.abspath(__file__))
-gltf = argv[0] if argv else os.path.join(here, r"{gltf_name}")
-blend = argv[1] if len(argv) > 1 else os.path.join(here, r"{blend_name}")
+gltf = argv[0] if argv else os.path.join(here, {gltf_literal})
+blend = argv[1] if len(argv) > 1 else os.path.join(here, {blend_literal})
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 result = bpy.ops.import_scene.gltf(filepath=gltf)
@@ -261,9 +261,10 @@ def write_script(folder, gltf_name: str, blend_name: str) -> Path:
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / SCRIPT_NAME
-    path.write_text(IMPORT_SCRIPT.format(blend=blend_name, gltf=gltf_name,
-                                         gltf_name=gltf_name, blend_name=blend_name),
-                    encoding="utf-8")
+    # Les noms viennent du projet et peuvent contenir des guillemets, retours à
+    # la ligne ou antislashs : seuls des littéraux Python échappés sont insérés.
+    path.write_text(IMPORT_SCRIPT.format(gltf_literal=repr(gltf_name),
+                                         blend_literal=repr(blend_name)), encoding="utf-8")
     return path
 
 

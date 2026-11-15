@@ -1,0 +1,12 @@
+{
+  "name": "hookycreator-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Construction de la fenêtre Tauri v2 de HookyCreator",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

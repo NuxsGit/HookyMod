@@ -23,6 +23,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hookymod import audio as audio_mod
 from hookymod import bfres as bfres_mod
 from hookymod import bntx as bntx_mod
 from hookymod import blendfile, bntx_encode, blender, native, render, zs
@@ -40,6 +41,7 @@ from . import vram
 
 MODEL_SUFFIXES = (".bfres.zs", ".bfres")
 TEXTURE_SUFFIXES = (".bntx.zs", ".bntx")
+SOUND_SUFFIXES = (".bwav.zs", ".bwav")
 # Garde-fou configurable : 0 désactive le plafond. Une troncature est signalée.
 MAX_SCAN_FILES = 200_000
 
@@ -297,6 +299,8 @@ class Project:
         self._flatten_flights = cache_mod.KeyedLocks()
         self._sampler_flights = cache_mod.KeyedLocks()
         self._edit_flights = cache_mod.KeyedLocks()
+        self._export_flights = cache_mod.KeyedLocks()
+        self._downloads_lock = threading.Lock()
         self._json_flights = cache_mod.KeyedLocks()
         # géométrie décodée : rouvrir un modèle ne doit pas repayer le décodage
         self.geo_folder = self.work / "cache" / "geo"
@@ -611,6 +615,8 @@ class Project:
                         kind = "model"
                 elif low.endswith(TEXTURE_SUFFIXES):
                     kind = "texture"
+                elif low.endswith(SOUND_SUFFIXES):
+                    kind = "sound"
                 elif low.endswith((".byml", ".bgyml", ".bcett.byml")):
                     kind = "bytecode"
                 elif low.endswith((".pack.zs", ".pack", ".sarc", ".szs", ".sarc.zs")):
@@ -670,6 +676,7 @@ class Project:
             "animations": sum(1 for a in assets if a.kind == "animation"),
             "auxiliary": sum(1 for a in assets if a.kind == "auxiliary"),
             "textures": sum(1 for a in assets if a.kind == "texture"),
+            "sounds": sum(1 for a in assets if a.kind == "sound"),
             "bytecode": sum(1 for a in assets if a.kind == "bytecode"),
             "archives": sum(1 for a in assets if a.kind == "archive"),
             "scanned_at": self.scanned_at,
@@ -1002,6 +1009,80 @@ class Project:
         result["geo_removed"] = removed
         return result
 
+    # ------------------------------------------------------------------ validation progressive
+    def check_asset(self, rel: str, kind: str) -> dict:
+        """Vérifie le décodage réel d'un seul candidat, sans scanner tout le dump.
+
+        Un nom ou un en-tête ne suffit pas : les modèles sont construits et la
+        texture de niveau 0 est décodée. Une erreur ne rend jamais l'asset visible.
+        Le contrôle reste une preuve de décodage, pas de fidélité visuelle en jeu.
+        """
+        if kind not in {"model", "texture", "sound"}:
+            raise ProjectError("Type d'asset à vérifier inconnu.")
+        name = Path(rel).name
+        low = name.lower()
+        if ((kind == "model" and (not low.endswith(MODEL_SUFFIXES)
+                                  or is_auxiliary_bfres(name) or is_animation_bfres(name)))
+                or (kind == "texture" and not low.endswith(TEXTURE_SUFFIXES))
+                or (kind == "sound" and not low.endswith(SOUND_SUFFIXES))):
+            return {"kind": kind, "rel": rel, "valid": False, "reason": "Type non pris en charge."}
+        try:
+            before = self._version(rel)
+            if kind == "model":
+                meshes, meta, stamp = self._model_mesh_entry(rel)
+                if not any(mesh.positions and mesh.faces for mesh in meshes):
+                    raise ProjectError("Aucun maillage avec des faces exploitables.")
+                # Valider aussi le chemin de rendu, pas seulement l'en-tête BFRES.
+                self.model_preview(rel, 160, 120, face_limit=2000, textured=False)
+                injectable = meta.get("injectable")
+                if injectable is None:  # ancien cache de géométrie, sans cette information
+                    from .blend import why_not_injectable
+                    injectable = not why_not_injectable(self.read_asset(rel))
+            elif kind == "texture":
+                # max_size=None force le niveau 0, également utilisé à l'export.
+                self.texture_png(rel, 0)
+                stamp, injectable = before, None
+            else:
+                # Vérification du conteneur et de tous les paquets, pas un test
+                # de rendu audio : le navigateur décodera l'Opus au playback.
+                audio_mod.read_bwav_opus(self._read_sound(rel))
+                stamp, injectable = before, None
+            if before != stamp or self._version(rel) != before:
+                return {"kind": kind, "rel": rel, "valid": False,
+                        "retry": True, "reason": "Fichier modifié pendant la vérification."}
+            return {"kind": kind, "rel": rel, "valid": True, "injectable": injectable}
+        except (ProjectError, HookyError, OSError, ValueError, IndexError) as exc:
+            return {"kind": kind, "rel": rel, "valid": False, "reason": str(exc)}
+
+    # ------------------------------------------------------------------ audio (lecture seule)
+    def _read_sound(self, rel: str) -> bytes:
+        if not rel.lower().endswith(SOUND_SUFFIXES):
+            raise ProjectError("Seul un fichier BWAV peut être ouvert ici.")
+        path, _edited = self._current_asset(rel)
+        limit = audio_mod.MAX_BWAV_BYTES
+        # Lire au maximum la limite, même si le fichier grandit entre stat et
+        # read ; une petite frame zstd peut elle aussi cacher un son énorme.
+        with path.open("rb") as source:
+            raw = source.read(limit + 1)
+        if len(raw) > limit:
+            raise ProjectError("Son trop volumineux pour cette première conversion (64 Mio maximum).")
+        if not zs.is_zstd(raw):
+            return raw
+        dict_id, _size = zs.frame_info(raw)
+        dictionaries = self._load_dicts() if dict_id else zs.ZstdDicts(require_complete=True)
+        if dict_id and not dictionaries:
+            raise ProjectError(f"Dictionnaire zstd id {dict_id} introuvable pour ce son.")
+        try:
+            return dictionaries.decompress(raw, max_output_size=limit)
+        except zs.DecompressionLimit as exc:
+            raise ProjectError("Son décompressé trop volumineux (64 Mio maximum).") from exc
+
+    def sound_info(self, rel: str) -> dict:
+        return {"rel": rel, **audio_mod.read_bwav_opus(self._read_sound(rel)).info()}
+
+    def sound_ogg(self, rel: str) -> bytes:
+        return audio_mod.to_ogg_opus(self._read_sound(rel))[0]
+
     # ------------------------------------------------------------------ textures
     def texture_file(self, rel: str) -> bntx_mod.BntxFile:
         data = self.read_asset(rel)
@@ -1232,6 +1313,7 @@ class Project:
             "version": f"{file.version >> 16}.{(file.version >> 8) & 0xFF}.{file.version & 0xFF}",
             "model": (file.models[0].name if file.models else ""),
             "materials": [m.name for m in file.models[0].materials] if file.models else [],
+            "injectable": any(model.shapes for model in file.models),
             "dropped": getattr(report, "dropped", 0) if report else 0,
             "submeshes": getattr(report, "submeshes", len(meshes)) if report else len(meshes),
         }
@@ -1464,23 +1546,38 @@ class Project:
         files: list[dict] = []
         warnings: list[str] = []
         raw: dict[str, bytes] = {}
+        used: set[str] = set()
         written = 0
 
+        def unique_name(stem: str, identity: str) -> str:
+            name = f"{stem}.png"
+            if name.casefold() in used:
+                name = f"{stem}--{cache_mod.digest(identity)[:8]}.png"
+                number = 2
+                while name.casefold() in used:
+                    name = f"{stem}--{cache_mod.digest(identity)[:8]}-{number}.png"
+                    number += 1
+            used.add(name.casefold())
+            return name
+
         for role in ROLE_ORDER:
-            for asset in buckets.get(role, [])[:1]:
+            for asset in buckets.get(role, []):
                 if written >= limit:
-                    warnings.append(f"plus de {limit} cartes : les suivantes sont "
-                                    "ignorées (exporte-les seules)")
+                    message = f"plus de {limit} cartes : les suivantes sont ignorées (exporte-les seules)"
+                    if message not in warnings:
+                        warnings.append(message)
                     break
                 try:
                     png = self.texture_png(asset.rel, 0)
-                except ProjectError as error:
+                except (ProjectError, HookyError, OSError, IndexError, ValueError) as error:
                     warnings.append(f"{Path(asset.rel).name} illisible : {error}")
                     continue
-                name = f"{_png_stem(asset.stem)}.png"
+                name = unique_name(_png_stem(asset.stem), asset.rel)
                 (folder / name).write_bytes(png)
-                maps[role] = name
-                raw[role] = png
+                # Le raccord global reste le premier par rôle ; les autres PNG
+                # sont également livrés et les albédos sont indexés par matériau.
+                maps.setdefault(role, name)
+                raw.setdefault(role, png)
                 files.append({"role": role, "label": ROLE_LABELS.get(role, "?"),
                               "file": name, "source": asset.rel})
                 written += 1
@@ -1490,7 +1587,7 @@ class Project:
             composed = texture_maps.compose_metal_roughness(raw.get("roughness"),
                                                            raw.get("metallic"))
             if composed:
-                name = f"{base}_MetalRough.png"
+                name = unique_name(f"{base}_MetalRough", f"{rel}:metalrough")
                 (folder / name).write_bytes(composed)
                 maps["metalrough"] = name
                 parts = [label for role, label in (("roughness", "Rgh"),
@@ -1514,17 +1611,22 @@ class Project:
         lines = [f"# Textures de {base}", "",
                  f"Modèle : `{rel}`", "",
                  "Chaque fichier va sur **une** entrée du shader. Dans Blender, ouvre le",
-                 "matériau → Principled BSDF, puis glisse l'image sur l'entrée indiquée.",
-                 "",
-                 "Pour ne pas le faire à la main : **`assembler_shaders.py`** (dans ce",
-                 "dossier) branche tout d'un coup — onglet Scripting ▸ Open ▸ Run Script,",
-                 "ou `blender --background --python assembler_shaders.py`.", "",
-                 "| Fichier | Rôle | Entrée Blender |", "| --- | --- | --- |"]
+                 "matériau → Principled BSDF, puis glisse l'image sur l'entrée indiquée.", ""]
+        if files:
+            lines += ["Pour ne pas le faire à la main : **`assembler_shaders.py`** (dans ce",
+                      "dossier) branche tout d'un coup — onglet Scripting ▸ Open ▸ Run Script,",
+                      "ou `blender --background --python assembler_shaders.py`.", ""]
+        lines += ["| Fichier | Rôle | Entrée Blender |", "| --- | --- | --- |"]
         for item in files:
             help_text = texture_maps.ROLE_HELP.get(item["role"], "")
             lines.append(f"| `{item['file']}` | {item['label']} | {help_text} |")
         if not files:
-            lines.append("| — | — | aucune texture trouvée pour ce modèle |")
+            lines.append("| — | — | aucune texture exportée |")
+            if warnings:
+                lines += ["", "## Remarques", ""] + [f"* {w}" for w in warnings]
+            path = Path(folder) / "TEXTURES.md"
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return path
         lines += ["", "## Espace colorimétrique (la cause n°1 d'un rendu « lavé »)", "",
                   "* **Albédo** : sRGB (c'est une couleur).",
                   "* **Tout le reste** (normale, rugosité, métal, AO) : **Non-Color**.",
@@ -1545,9 +1647,9 @@ class Project:
                   "  Blender : nœud `Separate Color`, puis G → Roughness et B → Metallic.",
                   "",
                   "## Sortie glTF", "",
-                  "Le `.gltf` porte déjà : `baseColorTexture`, `normalTexture`,",
-                  "`metallicRoughnessTexture` (rugosité en G, métal en B) et",
-                  "`occlusionTexture`. Les cartes sans équivalent glTF (spéculaire,",
+                  "Le `.gltf` peut utiliser les cartes disponibles : `baseColorTexture`,",
+                  "`normalTexture`, `metallicRoughnessTexture` (rugosité en G, métal en B)",
+                  "et `occlusionTexture`. Les cartes sans équivalent glTF (spéculaire,",
                   "masque) sont écrites quand même et listées ci-dessus."]
         if warnings:
             lines += ["", "## Remarques", ""] + [f"* {w}" for w in warnings]
@@ -1613,71 +1715,210 @@ class Project:
         self.thumbs.put(key, result)
         return result
 
-    def export_blend(self, rel: str, textures: bool = True) -> dict:
-        """Exporte le modèle puis produit ``.blend`` (via Blender s'il est là).
+    def _model_export_folder(self, rel: str) -> Path:
+        """Garde l'ancien nom sauf si deux modèles auraient le même dossier."""
+        name = Path(rel).name.split(".")[0] or "modele"
+        collisions = sum(1 for asset in self.by_kind("model")
+                         if (Path(asset.rel).name.split(".")[0] or "modele").casefold()
+                         == name.casefold())
+        if collisions > 1:
+            name += "--" + cache_mod.digest(rel)[:8]
+        folder = self.work / "export" / name
+        if not folder.resolve().is_relative_to(self.work):
+            raise ProjectError("Le dossier d'export sort du dossier de travail.")
+        return folder
 
-        Sans Blender installé, l'export glTF/OBJ/PNG reste complet et le script
-        ``creer_blend.py`` est déposé à côté : la fonction le dit explicitement
-        au lieu de laisser croire qu'un ``.blend`` a été écrit.
-        """
-        meshes = self._model_meshes(rel)
-        folder = self.work / "export" / Path(rel).name.split(".")[0]
-        found = self.export_maps_for(rel, folder) if textures else {
-            "maps": {}, "files": [], "textures": 0, "warnings": []}
-        written = blender.export_bundle(meshes, folder, folder.name,
-                                        textures=self._albedo_index(rel, folder),
-                                        maps=found["maps"] or None)
-        executable = blendfile.find_blender(self.settings.blender_path)
-        result = blendfile.make_blend(folder, folder.name, blender=executable)
-        files = {path.name for path in written.values()}
-        files.add(Path(result["script"]).name)
-        if result["blend"]:
-            files.add(Path(result["blend"]).name)
-        return {
-            "folder": self.shown_path(folder),
-            "files": sorted(files),
-            "textures": found["textures"],
-            "maps": found["files"],
-            "faces": sum(len(mesh.faces) for mesh in meshes),
-            "method": result["method"],
-            "blend": self.shown_path(Path(result["blend"])) if result["blend"] else "",
-            "script": Path(result["script"]).name,
-            "command": result["command"],
-            "message": result["message"],
-            "output": (result.get("output") or "")[-1500:],
-            "blender": str(executable) if executable else "",
-            "platform_note": blendfile.platform_note(),
-        }
+    def export_blend(self, rel: str, textures: bool = True, *, archive: bool = False) -> dict:
+        """Export glTF et, si possible, vrai .blend ; sinon une recette explicite."""
+        return self._export_model_bundle(rel, textures, make_blend=True, archive=archive)
 
-    def export_model(self, rel: str, textures: bool = True) -> dict:
-        """Exporte géométrie **et toutes les cartes** de texture du modèle."""
+    def export_model(self, rel: str, textures: bool = True, *, archive: bool = False) -> dict:
+        """Exporte la géométrie et les cartes ; le ZIP optionnel ne contient que cet export."""
+        return self._export_model_bundle(rel, textures, make_blend=False, archive=archive)
+
+    def _export_model_bundle(self, rel: str, textures: bool, *,
+                             make_blend: bool, archive: bool) -> dict:
+        import tempfile
+        import zipfile
+
         meshes, meta, _stamp = self._model_mesh_entry(rel)
-        folder = self.work / "export" / Path(rel).name.split(".")[0]
-        found = self.export_maps_for(rel, folder) if textures else {
-            "maps": {}, "files": [], "textures": 0, "warnings": []}
-        written = blender.export_bundle(meshes, folder, folder.name,
-                                        textures=self._albedo_index(rel, folder),
-                                        maps=found["maps"] or None)
-        files = sorted({path.name for path in written.values()}
-                       | {item["file"] for item in found["files"]}
-                       | {"TEXTURES.md"})
-        warnings = meta.get("warnings", [])[:6] + found["warnings"]
-        return {"folder": self.shown_path(folder),
-                "files": files,
-                "textures": found["textures"],
-                "maps": found["files"],
-                "faces": sum(len(m.faces) for m in meshes),
-                "submeshes": len(meshes),
-                "warnings": warnings}
+        folder = self._model_export_folder(rel)
+        # Un autre export du même dossier ne peut pas mélanger ses fichiers avec
+        # celui-ci. La préparation isolée évite d'utiliser d'anciennes textures.
+        with self._export_flights.hold(str(folder)):
+            try:
+                with tempfile.TemporaryDirectory(prefix="model-export-", dir=self.work / "cache") as tmp:
+                    stage = Path(tmp) / folder.name
+                    stage.mkdir()
+                    if textures:
+                        found = self.export_maps_for(rel, stage)
+                    else:
+                        found = {"maps": {}, "files": [], "textures": 0, "warnings": []}
+                        self._write_textures_note(stage, folder.name, rel, [],
+                                                  ["Export des textures désactivé."])
+                    blender.export_bundle(meshes, stage, folder.name,
+                                          textures=self._albedo_index(rel, stage, found["files"]) if textures else {},
+                                          maps=found["maps"] or None)
+                    blend_result = None
+                    executable = None
+                    if make_blend:
+                        executable = blendfile.find_blender(self.settings.blender_path)
+                        blend_result = blendfile.make_blend(stage, folder.name, blender=executable)
 
-    def _albedo_index(self, rel: str, folder: Path) -> dict[str, str]:
-        """PNG d'albédo indexés par nom de matériau (Blender les y retrouve)."""
+                    # Lister les fichiers physiques, dont MTL et scripts, et non
+                    # seulement ceux renvoyés par le générateur glTF/OBJ.
+                    produced = sorted(path for path in stage.iterdir()
+                                      if path.is_file() and not path.name.endswith(".blend1"))
+                    if not produced or not (stage / f"{folder.name}.gltf").is_file() \
+                            or not (stage / f"{folder.name}.bin").is_file():
+                        raise ProjectError("Export incomplet : le glTF ou son fichier .bin manque.")
+                    archive_id = uuid.uuid4().hex if archive else ""
+                    staged_zip = Path(tmp) / "result.zip"
+                    if archive:
+                        with zipfile.ZipFile(staged_zip, "w", compression=zipfile.ZIP_DEFLATED,
+                                             compresslevel=1, allowZip64=True) as output:
+                            for path in produced:
+                                # Les PNG et .blend sont déjà comprimés ; les
+                                # recompresser coûte du CPU sans gain notable.
+                                compression = (zipfile.ZIP_STORED if path.suffix.lower()
+                                               in {".png", ".blend"} else zipfile.ZIP_DEFLATED)
+                                output.write(path, f"{folder.name}/{path.name}",
+                                             compress_type=compression)
+                    folder.mkdir(parents=True, exist_ok=True)
+                    produced_names = {path.name for path in produced}
+                    stale_files = sorted(path.name for path in folder.iterdir()
+                                         if path.is_file() and path.name not in produced_names)
+                    # Remplacer chaque fichier atomiquement ; un ancien .blend
+                    # n'est pas touché si Blender a échoué ou est absent.
+                    for path in produced:
+                        os.replace(path, folder / path.name)
+                    if archive:
+                        downloads = (self.work / "cache" / "downloads").resolve()
+                        if not downloads.is_relative_to(self.work):
+                            raise ProjectError("Dossier de téléchargement hors du travail.")
+                        with self._downloads_lock:
+                            downloads.mkdir(parents=True, exist_ok=True)
+                            os.replace(staged_zip, downloads / f"{archive_id}.zip")
+                            self._prune_export_downloads(downloads, keep=archive_id)
+            except OSError as exc:
+                raise ProjectError(f"Impossible d'écrire l'export dans {folder} : {exc}") from exc
+
+        response = {"folder": self.shown_path(folder), "absolute_folder": str(folder),
+                    "files": [path.name for path in produced],
+                    "textures": found["textures"], "maps": found["files"],
+                    "faces": sum(len(mesh.faces) for mesh in meshes),
+                    "submeshes": len(meshes), "stale_files": stale_files,
+                    "warnings": meta.get("warnings", [])[:6] + found["warnings"]
+                    + (["Le dossier contient aussi des fichiers plus anciens ; "
+                        "le ZIP ne contient que cet export."] if stale_files else [])}
+        if archive_id:
+            response["download_url"] = f"/api/export/download?id={archive_id}"
+            response["download_name"] = f"{folder.name}-blender.zip"
+        if blend_result is not None:
+            # La commande doit viser le dossier final, jamais le temporaire supprimé.
+            command = blendfile._display_command(blendfile._blender_command(
+                executable or "blender", folder / blendfile.SCRIPT_NAME,
+                folder / f"{folder.name}.gltf", folder / f"{folder.name}.blend"))
+            message = blend_result["message"]
+            if blend_result.get("command"):
+                message = message.replace(blend_result["command"], command)
+            response.update({
+                "method": blend_result["method"],
+                "blend": self.shown_path(folder / f"{folder.name}.blend")
+                if blend_result["blend"] else "",
+                "script": blendfile.SCRIPT_NAME, "command": command,
+                "message": message, "output": (blend_result.get("output") or "")[-1500:],
+                "blender": str(executable) if executable else "",
+                "platform_note": blendfile.platform_note(),
+            })
+        return response
+
+    @staticmethod
+    def _prune_export_downloads(folder: Path, *, keep: str) -> None:
+        """Limite les seuls ZIP temporaires à 24 fichiers / 2 Gio / 7 jours.
+
+        Jamais de suppression dans le dossier d'export utilisateur. Le nouveau
+        ZIP est conservé même s'il dépasse le budget ; un téléchargement déjà
+        ouvert peut empêcher l'effacement sous Windows, ce qui n'est pas fatal.
+        """
+        candidates = []
+        for path in folder.glob("*.zip"):
+            token = path.stem
+            if (len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token)
+                    or path.is_symlink()):
+                continue
+            try:
+                stat = path.stat()
+                if path.is_file():
+                    candidates.append((stat.st_mtime, stat.st_size, token, path))
+            except OSError:
+                continue
+        candidates.sort(reverse=True)
+        count = total = 0
+        cutoff = time.time() - 7 * 24 * 60 * 60
+        for modified, size, token, path in candidates:
+            count += 1
+            total += size
+            if token != keep and (modified < cutoff or count > 24 or total > 2 * 1024**3):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                count -= 1
+                total -= size
+
+    def store_export_download(self, content: bytes) -> dict:
+        """Publie une archive temporaire sous un jeton, sans exposer son chemin à l'API.
+
+        La sélection utilisait un Blob navigateur ; certaines webviews ne savent
+        pas le télécharger. Un lien HTTP authentifié permet aussi de réessayer.
+        """
+        import tempfile
+
+        downloads = (self.work / "cache" / "downloads").resolve()
+        if not downloads.is_relative_to(self.work):
+            raise ProjectError("Dossier de téléchargement hors du travail.")
+        archive_id = uuid.uuid4().hex
+        try:
+            with self._downloads_lock:
+                downloads.mkdir(parents=True, exist_ok=True)
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(prefix="selection-", suffix=".tmp",
+                                                     dir=downloads, delete=False) as out:
+                        temporary = Path(out.name)
+                        out.write(content)
+                    os.replace(temporary, downloads / f"{archive_id}.zip")
+                finally:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+                self._prune_export_downloads(downloads, keep=archive_id)
+        except OSError as exc:
+            raise ProjectError(f"Impossible de préparer le ZIP : {exc}") from exc
+        return {"download_url": f"/api/export/download?id={archive_id}&kind=selection",
+                "download_name": "hookycreator-selection.zip",
+                "absolute_folder": str(downloads), "temporary_archive": True}
+
+    def export_download(self, token: str) -> Path:
+        """Résout uniquement une archive créée par cet atelier, pas un chemin fourni."""
+        if len(token) != 32 or any(char not in "0123456789abcdef" for char in token):
+            raise ProjectError("Téléchargement introuvable.")
+        base = (self.work / "cache" / "downloads").resolve()
+        path = (base / f"{token}.zip").resolve()
+        if not base.is_relative_to(self.work) or path.parent != base or not path.is_file():
+            raise ProjectError("Téléchargement introuvable ou expiré : relance l'export.")
+        return path
+
+    def _albedo_index(self, rel: str, folder: Path, files: list[dict]) -> dict[str, str]:
+        """Indexe uniquement les PNG d'albédo produits par cet export."""
         buckets = self.texture_maps_for(rel)
+        names = {item["source"]: item["file"] for item in files if item["role"] == "albedo"}
         found: dict[str, str] = {}
-        # un albédo par matériau : on ne tronque pas la liste, sinon un modèle à
-        # six matériaux n'en garde que quatre et les autres sortent en gris
-        for asset in buckets.get("albedo", [])[:32]:
-            target = folder / f"{_png_stem(asset.stem)}.png"
+        for asset in buckets.get("albedo", []):
+            name = names.get(asset.rel)
+            if not name:
+                continue
+            target = folder / name
             if not target.is_file():
                 continue
             base = _base_name(asset.stem)
@@ -1771,35 +2012,45 @@ class Project:
         buffer = io.BytesIO()
         lines = ["Sélection exportée par HookyCreator", ""]
         models = textures = 0
+        used: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, int]] = set()
         with tempfile.TemporaryDirectory() as folder, \
-                zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
             for item in items:
                 rel = str(item.get("rel") or "")
                 kind = str(item.get("kind") or "")
-                if not rel:
+                if not rel or kind not in {"model", "texture"}:
                     continue
+                index = int(item.get("index", 0)) if kind == "texture" else 0
+                key = (kind, rel, index)
+                if key in seen:
+                    continue
+                seen.add(key)
+                stem = Path(rel).name.split(".")[0] or "asset"
+                # Deux fichiers homonymes de répertoires différents ne doivent
+                # ni fusionner leurs dossiers ni créer des entrées ZIP dupliquées.
+                unique = stem
+                if (kind, unique.casefold()) in used:
+                    unique = f"{stem}--{cache_mod.digest(rel, index)[:8]}"
+                used.add((kind, unique.casefold()))
                 if kind == "texture":
-                    png = self.texture_png(rel, int(item.get("index", 0)))
-                    stem = Path(rel).name.split(".")[0]
-                    archive.writestr(f"textures/{stem}.png", png)
+                    png = self.texture_png(rel, index)
+                    archive.writestr(f"textures/{unique}.png", png, compress_type=zipfile.ZIP_STORED)
                     lines.append(f"[texture] {rel}")
                     textures += 1
                     continue
-                if kind != "model":
-                    continue
-                stem = Path(rel).name.split(".")[0]
-                target = Path(folder) / stem
+                target = Path(folder) / unique
                 maps = self.export_maps_for(rel, target)
                 written = blender.export_bundle(
                     self._model_meshes(rel), target, stem,
-                    textures=self._albedo_index(rel, target),
+                    textures=self._albedo_index(rel, target, maps["files"]),
                     maps=maps["maps"] or None)
                 # tout ce que l'export a produit : le .bin du glTF et les PNG
                 # compris (sans le .bin, Blender refuse le glTF)
                 for produced in sorted(target.rglob("*")):
                     if produced.is_file():
                         relative = produced.relative_to(target)
-                        archive.write(produced, f"modeles/{stem}/{relative.as_posix()}")
+                        archive.write(produced, f"modeles/{unique}/{relative.as_posix()}")
                 lines.append(f"[modèle] {rel} ({len(written)} fichier(s) + "
                              f"{maps['textures']} carte(s) de texture)")
                 models += 1
@@ -1820,8 +2071,10 @@ class Project:
         import io
         import zipfile
 
-        models = [str(item.get("rel") or "") for item in items
-                  if str(item.get("kind") or "") == "model" and item.get("rel")]
+        if not isinstance(items, list):
+            raise ProjectError("Sélection invalide.")
+        models = list(dict.fromkeys(str(item.get("rel") or "") for item in items
+                                   if str(item.get("kind") or "") == "model" and item.get("rel")))
         if not models:
             raise ProjectError("Sélectionne au moins un modèle pour un export .blend.")
         if len(models) > 50:
@@ -1838,24 +2091,22 @@ class Project:
         blends = 0
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             for rel in models:
-                name = Path(rel).name.split(".")[0]
+                name = self._model_export_folder(rel).name
                 try:
-                    result = self.export_blend(rel)
-                except ProjectError as error:
+                    # L'archive isolée garantit que deux exports simultanés ne
+                    # mélangent jamais leurs textures ou un ancien .blend.
+                    result = self.export_blend(rel, archive=True)
+                    download = self.export_download(result["download_url"].split("=", 1)[1])
+                    try:
+                        with zipfile.ZipFile(download) as current:
+                            for info in current.infolist():
+                                with current.open(info) as source, archive.open(info, "w") as target:
+                                    shutil.copyfileobj(source, target, length=1024 * 1024)
+                    finally:
+                        download.unlink(missing_ok=True)
+                except (ProjectError, OSError, zipfile.BadZipFile) as error:
                     notes.append(f"{name} : échec ({error})")
                     continue
-                source = self.work / "export" / name
-                for produced in sorted(source.iterdir()):
-                    # Un ancien .blend peut être conservé après l'échec de
-                    # Blender : ne jamais le présenter dans le ZIP comme le
-                    # résultat de cet export. Les sauvegardes .blend1 sont
-                    # également exclues.
-                    suffix = produced.suffix.lower()
-                    if suffix == ".blend1" or (suffix == ".blend" and (
-                            result["method"] != "blender" or produced.name != f"{name}.blend")):
-                        continue
-                    if produced.is_file():
-                        archive.write(produced, f"{name}/{produced.name}")
                 if result["method"] == "blender":
                     blends += 1
                     notes.append(f"{name} : {name}.blend écrit par Blender.")

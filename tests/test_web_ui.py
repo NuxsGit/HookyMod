@@ -22,7 +22,7 @@ DYNAMIC_IDS = {
     "btn-blender", "btn-blend", "btn-export-png", "btn-import", "btn-uv",
     "btn-translate-model", "btn-turntable", "copy-command", "file-import",
     "model-budget", "model-budget-note", "model-quality", "model-shot",
-    "uv-back", "uv-flip", "uv-normal", "uv-shot",
+    "uv-back", "uv-flip", "uv-normal", "uv-shot", "sound-player",
 }
 
 
@@ -46,7 +46,7 @@ class WebContractTests(unittest.TestCase):
         sections = set(re.findall(r'id="view-([a-z]+)"', self.html))
         rail = set(re.findall(r'data-view="([a-z]+)"', self.html))
         labels = set(re.findall(
-            r'^\s+(home|edit|create|models|ensembles|textures|mobs|blender|settings):',
+            r'^\s+(home|edit|create|models|ensembles|textures|sounds|mobs|blender|settings):',
             self.js, re.M))
         self.assertEqual(sections, rail)
         self.assertTrue(sections <= labels | {"home"})
@@ -175,6 +175,7 @@ class WebContractTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "node absent")
     def test_javascript_behaviour(self) -> None:
         for script, message in (("thumbnail_queue_test.js", "ThumbnailQueue: OK"),
+                                ("asset_checks_test.js", "Asset validation queue: OK"),
                                 ("settings_ui_test.js", "Settings UI: OK"),
                                 ("image_revision_ui_test.js", "Image revision UI: OK"),
                                 ("interaction_ui_test.js", "Interaction UI: OK"),

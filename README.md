@@ -21,9 +21,10 @@ reverse-engineering tool for the *Ocarina of Time Remake* romfs. It is designed 
 alongside PC decompilations and mod loaders like **Hookshot**, and lets modders inspect,
 extract, edit, convert and repackage assets.
 
-The application is primarily Python (Tkinter for the desktop explorer), with an
-optional Rust core for texture layout, BFRES geometry checks and preview rendering.
-No proprietary library or game asset is bundled.
+The original explorer is primarily Python/Tkinter. HookyCreator also has a Tauri v2
+native-window build backed by a bundled Python sidecar and the existing Rust core;
+the standalone browser mode remains available. The Rust port is partial. No
+proprietary library or game asset is bundled.
 
 ## ⚡ Features
 
@@ -98,7 +99,8 @@ python -m hookycreator dump/romfs --open     # http://127.0.0.1:8765/
 python -m hookycreator export-all dump/romfs -o export_all   # assets reconnus : PNG + glTF/OBJ
 ```
 
-Application web locale (pas de Tkinter) organisée en deux espaces :
+Fenêtre native Tauri v2 (construction Windows/Linux décrite dans
+[`docs/DESKTOP.md`](docs/DESKTOP.md)) ou application web locale, organisée en deux espaces :
 **Modification** pour explorer, exporter et retoucher les ressources existantes ;
 **Création de mod** pour préparer des fiches et assembler les copies dans
 `mods/<nom>/romfs/`. Les assets d'origine restent intacts et les aperçus
@@ -108,8 +110,11 @@ l'interface demande confirmation, sans faire de sauvegarde. Les vignettes
 visibles se chargent progressivement ; le bouton **Pause vignettes** les suspend
 et la préparation complète du cache reste facultative dans les réglages. Un scan
 limité ou des fichiers illisibles sont signalés ; `--scan-limit 0` retire le
-plafond de scan (et peut nécessiter plus de mémoire). Détails et limites :
-`docs/HOOKYCREATOR.md`.
+plafond de scan (et peut nécessiter plus de mémoire). Les modèles et textures
+ne sont montrés qu'après vérification progressive ; certains formats restent
+masqués. Les exports Blender indiquent leur dossier absolu et proposent un ZIP.
+La vue **Sons** commence la conversion expérimentale BWAV Opus mono → Ogg Opus,
+en lecture seule. Détails et limites : `docs/HOOKYCREATOR.md`.
 
 **Moteur Rust (première étape du portage).** Sous Windows, ferme HookyCreator,
 puis double-clique sur `Compiler_Rust.bat` ou lance `py -3 tools\build_rust.py`.
