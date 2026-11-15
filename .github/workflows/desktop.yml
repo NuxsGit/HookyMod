@@ -68,16 +68,9 @@ jobs:
       - name: Format and test Tauri Rust
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
-          python .github/scripts/run_ci_command.py -- cargo test --manifest-path src-tauri/Cargo.toml
-      # Temporaire : récupérer le lock généré par ce premier build pour le versionner.
-      - name: Record Tauri dependency lock 1
-        if: runner.os == 'Linux'
-        run: python .github/scripts/export_ci_lock.py 0
-      - name: Record Tauri dependency lock 2
-        if: runner.os == 'Linux'
-        run: python .github/scripts/export_ci_lock.py 1
+          python .github/scripts/run_ci_command.py -- cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build real app for WebDriver
-        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --debug --no-bundle
+        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --debug --no-bundle -- --locked
       - name: Install tauri-driver
         run: python .github/scripts/run_ci_command.py -- cargo install tauri-driver --locked
       - name: Exercise WebKitGTK window and downloads
@@ -87,7 +80,9 @@ jobs:
         if: runner.os == 'Windows'
         run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_webview.py
       - name: Build native installer
-        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --bundles ${{ matrix.bundle }}
+        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --bundles ${{ matrix.bundle }} -- --locked
+      - name: Verify packaged backend and executable
+        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_package.py
       - name: Keep test installer
         uses: actions/upload-artifact@v4
         with:

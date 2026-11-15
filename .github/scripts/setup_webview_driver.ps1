@@ -18,7 +18,12 @@ if (-not $version) { throw 'Version du runtime WebView2 introuvable' }
 $major = $version.Split('.')[0]
 Write-Host "Runtime WebView2 : $version"
 try {
-    $driverVersion = (Invoke-RestMethod "https://msedgedriver.microsoft.com/LATEST_RELEASE_$major").Trim()
+    # Microsoft peut retourner ce texte en UTF-16 avec BOM ; RestMethod le
+    # décode parfois comme UTF-8. StreamReader détecte le BOM correctement.
+    $latest = Join-Path $env:RUNNER_TEMP 'webview2-driver-version.txt'
+    Invoke-WebRequest "https://msedgedriver.microsoft.com/LATEST_RELEASE_$major" -OutFile $latest
+    $reader = [System.IO.StreamReader]::new($latest, [System.Text.Encoding]::UTF8, $true)
+    try { $driverVersion = $reader.ReadToEnd().Trim() } finally { $reader.Dispose() }
 } catch {
     Write-Host "Recherche de la dernière version impossible : $($_.Exception.Message). Essai de la version exacte."
     $driverVersion = $version

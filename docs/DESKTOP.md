@@ -18,10 +18,10 @@ Blender reste nécessaire pour produire automatiquement un vrai `.blend`.
    peut prendre du temps ; **Projet → Annuler l'ouverture** permet de l'annuler.
 3. L'export d'un modèle indique le chemin absolu du dossier et démarre un ZIP.
    Dans la fenêtre native, les ZIP et sons sont enregistrés avec des noms uniques
-   dans le dossier système **Téléchargements/HookyCreator/**. L'application
-   affiche le chemin après le transfert. Si nécessaire, utilise le lien de
-   secours de l'export. Le mode navigateur utilise les réglages de téléchargement
-   habituels du navigateur.
+   dans le dossier système **Téléchargements/HookyCreator/** (à défaut sous
+   `~/Downloads/HookyCreator/`). L'application affiche le chemin après le
+   transfert. Si nécessaire, utilise le lien de secours de l'export. Le mode
+   navigateur utilise les réglages de téléchargement habituels du navigateur.
 4. **Exporter en .blend** exige Blender installé ; indique son chemin dans
    Réglages s'il n'est pas détecté. Sinon le ZIP contient un glTF et un script,
    mais pas de nouveau `.blend`.
@@ -52,17 +52,20 @@ Depuis la racine du dépôt :
 python -m pip install -r requirements-desktop-build.txt
 npm ci
 python tools/build_desktop_backend.py
-npm run tauri -- build
+npm run tauri -- build -- --locked
 ```
 
 Sous Windows, `py -3` peut remplacer `python`. Le script compile d'abord le noyau
 Rust existant puis le sidecar avec PyInstaller et le place dans
 `src-tauri/binaries/` avec le suffixe de la plateforme. La CLI Tauri produit les
 paquets dans `src-tauri/target/release/bundle/` (par exemple NSIS sous Windows,
-`.deb` sous Linux). Ces sorties et les données de jeu restent hors Git. Ne pas
-empaqueter ni distribuer de dump du jeu. Les bibliothèques et crates de Tauri
-nécessitent leur propre téléchargement ; seul le noyau `rust/` dispose de
-crates vendorizées.
+`.deb` sous Linux). La CI cible Windows x64 et Ubuntu 24.04 x64 ; le paquet Linux
+n'est pas garanti sur les autres distributions ou versions de glibc. Ces builds
+de test ne sont pas signés et Windows peut afficher un avertissement. Ces sorties
+et les données de jeu restent hors Git. Ne pas empaqueter ni distribuer de dump
+du jeu. Les bibliothèques et crates de Tauri nécessitent leur propre téléchargement ;
+le fichier `src-tauri/Cargo.lock` fige leurs versions, mais seul le noyau `rust/`
+dispose de crates vendorizées.
 
 Pour un exécutable non empaqueté de développement :
 
@@ -87,9 +90,11 @@ permission Tauri pour ouvrir arbitrairement des dossiers ou exécuter des comman
 
 Le workflow `.github/workflows/desktop.yml` construit le sidecar et la fenêtre
 sur Linux et Windows, puis exécute un parcours WebDriver avec des données
-synthétiques (session, fichiers masqués, export ZIP, sélection et son). Les
-installateurs de test sont conservés comme artefacts de CI lorsque le workflow
-réussit. Le dialogue de choix lui-même n'est pas automatisé : le mode debug
+synthétiques (session, fichiers masqués, export ZIP, sélection et son). Elle
+extrait le `.deb` ou installe silencieusement le NSIS, vérifie la présence des
+exécutables et reteste le backend livré. Les installateurs de test sont conservés
+comme artefacts de CI lorsque le workflow réussit. Le dialogue de choix lui-même
+n'est pas automatisé : le mode debug
 accepte une racine de fixture par variable d'environnement pour ce test, option
 absente des builds release. Un autre test ouvre le `.blend` avec un vrai Blender
 sur Linux.
@@ -98,7 +103,7 @@ Pour lancer ces vérifications localement après construction :
 
 ```bash
 python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-<target-triple>
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --locked --manifest-path src-tauri/Cargo.toml
 # Après installation de tauri-driver et du WebDriver natif, sous un écran ou Xvfb :
 python tools/smoke_desktop_webview.py
 python -m pytest -q tests/test_real_blender.py
