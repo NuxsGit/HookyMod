@@ -15,12 +15,20 @@ Ce que cela implique concrètement :
 | `hookymod/bntx_encode.py`, `bfres_import.py`, `blender.py` | idem, pour l'écriture (côté mod) |
 | Code de Nintendo (SDK, moteur, exécutables) | **absent** — et le restera |
 | Code décompilé (jeu, firmwares, homebrew dérivé) | **absent** |
-| Bibliothèques tierces | seulement des dépendances génériques, installées par `pip` : `zstandard`, `texture2ddecoder`, `Pillow` ; aucun code d'outil de modding |
-| Dumps du jeu (`*.zs`, `*.bntx`, `*.bfres`, `*.nup`) | fournis par l'utilisateur, **hors Git**, uniquement pour valider les lecteurs |
+| Bibliothèques tierces | dépendances génériques `zstandard`, `texture2ddecoder`, `Pillow`, Tauri et PyInstaller ; le noyau Rust possède aussi des crates vendorizées documentées dans `rust/vendor/README.md` |
+| Dumps du jeu (`*.zs`, `*.bntx`, `*.bfres`, `*.nup`, `*.bwav`, `*.bars`) | fournis par l'utilisateur, **hors Git**, uniquement pour valider les lecteurs |
 
 Les commentaires du code citent des formats publics (« documentation BFRES »)
 pour expliquer une structure ; aucune ligne n'est recopiée d'un projet tiers.
 Quand un comportement vient d'un autre outil, c'est dit en clair — jamais dupliqué.
+Pour la première conversion audio, les structures publiques
+[BWAV](https://gota7.github.io/Citric-Composer/specs/binaryWav.html), les RFC
+[Opus](https://www.rfc-editor.org/rfc/rfc6716) et
+[Ogg Opus](https://www.rfc-editor.org/rfc/rfc7845) ont été consultées ; le sens
+de la sentinelle de boucle a aussi été confronté au comportement documenté de
+[vgmstream](https://github.com/vgmstream/vgmstream/blob/master/src/meta/bwav.c).
+Le lecteur et le remultiplexeur ici ont été écrits pour HookyMod ; aucun code
+vgmstream n'est inclus. Les nouveaux tests utilisent des paquets synthétiques.
 
 ## Pourquoi c'est important
 

@@ -72,6 +72,10 @@
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-4 4 3 4-4 5 5"/></svg>
         <span>Textures</span>
       </button>
+      <button class="rail-btn" data-view="sounds" title="Sons BWAV (expérimental)">
+        <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
+        <span>Sons</span>
+      </button>
       <button class="rail-btn" data-view="blender" title="Blender (Ctrl+5)">
         <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 12 21 6"/></svg>
         <span>Blender</span>
@@ -188,8 +192,12 @@
               <span class="tool-number">03</span><b>Textures</b>
               <small>Exporter ou remplacer une image dans les formats pris en charge.</small>
             </button>
+            <button class="quick-card" type="button" data-goto="sounds">
+              <span class="tool-number">04</span><b>Sons (expérimental)</b>
+              <small>Écouter et convertir les fichiers BWAV Opus mono compatibles.</small>
+            </button>
             <button class="quick-card" type="button" data-goto="blender">
-              <span class="tool-number">04</span><b>Blender → jeu</b>
+              <span class="tool-number">05</span><b>Blender → jeu</b>
               <small>Analyser un .blend et injecter sa géométrie dans un modèle compatible.</small>
             </button>
           </div>
@@ -268,6 +276,7 @@
             </div>
             <div class="toolbar">
               <input type="search" class="search" id="search" placeholder="Filtrer… (Ctrl+F)">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
               <label class="check"><input type="checkbox" id="model-shots"> vignettes 3D</label>
             </div>
           </div>
@@ -287,6 +296,7 @@
             </div>
             <div class="toolbar">
               <input type="search" class="search" id="search-ens" placeholder="Filtrer…">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
               <label class="check"><input type="checkbox" id="ens-textures" checked>
                 couleurs des textures</label>
             </div>
@@ -306,6 +316,7 @@
             </div>
             <div class="toolbar">
               <input type="search" class="search" id="search-tex" placeholder="Filtrer…">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
               <select id="tex-role" title="Ne montrer qu'un type de carte">
                 <option value="">Toutes les cartes</option>
                 <option value="albedo">Albédo (Alb)</option>
@@ -323,6 +334,26 @@
           <div class="grid" id="texture-grid"></div>
           <div class="more" id="texture-more" hidden>
             <button class="btn ghost" id="texture-more-btn">Afficher plus</button>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- sons -->
+        <section class="view" id="view-sounds" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Sons <span class="badge">expérimental</span></h2>
+              <p class="muted" id="sound-count">—</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search-sound" placeholder="Filtrer…">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+            </div>
+          </div>
+          <p class="hint">Première étape : BWAV Opus mono complet → Ogg Opus, sans réencodage.
+            Les banques BARS, autres codecs, sons multicanaux et l'import vers le jeu ne sont pas encore pris en charge.</p>
+          <div class="grid" id="sound-grid"></div>
+          <div class="more" id="sound-more" hidden>
+            <button class="btn ghost" id="sound-more-btn">Vérifier plus de sons</button>
           </div>
         </section>
 
@@ -347,10 +378,17 @@
                   <input name="name" id="mob-name" placeholder="Cheval de Link" required></label>
                 <label class="field"><span>Parent à noter sur la fiche (facultatif)</span>
                   <input name="parent" id="mob-parent" placeholder="Animal_Horse"></label>
+                <label class="field"><span>Rechercher une ressource</span>
+                  <input type="search" id="mob-resource-search" placeholder="Nom ou chemin"></label>
                 <label class="field"><span>Modèle source</span>
                   <select id="mob-model" name="model"></select></label>
                 <label class="field"><span>Textures (plusieurs possibles)</span>
                   <select id="mob-textures" multiple size="6"></select></label>
+                <p class="hint">Seules les ressources décodées sont proposées, progressivement.</p>
+                <p class="hint" id="mob-validation-status" role="status"></p>
+                <p class="hint" id="mob-texture-validation-status" role="status"></p>
+                <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+                <button class="btn ghost tiny" id="mob-validate-more" type="button" hidden>Vérifier 48 ressources de plus</button>
                 <button class="btn primary" type="submit">Créer la fiche</button>
               </form>
             </section>
@@ -412,8 +450,14 @@
                   <input id="blend-only" placeholder="ex. Corps"></label>
                 <label class="check"><input type="checkbox" id="blend-fit" checked>
                   adapter à la taille du modèle du jeu</label>
+                <label class="field"><span>Rechercher le modèle cible</span>
+                  <input type="search" id="blend-target-search" placeholder="Nom ou chemin"></label>
                 <label class="field"><span>Modèle cible</span>
                   <select id="blend-target"></select></label>
+                <p class="hint">Seuls les modèles vérifiés et réinjectables sont proposés.</p>
+                <p class="hint" id="blend-validation-status" role="status"></p>
+                <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+                <button class="btn ghost tiny" id="blend-validate-more" type="button" hidden>Vérifier 48 modèles de plus</button>
                 <button class="btn primary" id="blend-translate">Injecter dans le modèle</button>
                 <p class="hint">Le modèle d'origine n'est jamais écrasé : le résultat part
                   dans le dossier de travail et sera repris par l'assemblage du mod.</p>
@@ -585,9 +629,25 @@
     <ul class="palette-list" id="palette-list"></ul>
   </div>
 </div>
+<section class="export-result" id="export-result" aria-live="polite" hidden>
+  <button class="icon-btn export-dismiss" id="export-dismiss" type="button" title="Fermer">✕</button>
+  <strong id="export-result-title">Export prêt</strong>
+  <p>Le dossier sur cet ordinateur :</p>
+  <code id="export-result-folder"></code>
+  <div class="actions">
+    <a class="btn primary tiny" id="export-download" download>Télécharger le ZIP</a>
+  </div>
+  <p class="hint" id="export-result-note">Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.</p>
+</section>
+<section class="native-download-result" id="native-download-result" aria-live="polite" hidden>
+  <button class="icon-btn export-dismiss" id="native-download-dismiss" type="button" title="Fermer">✕</button>
+  <strong id="native-download-title"></strong>
+  <code id="native-download-path"></code>
+</section>
 <div class="toasts" id="toasts"></div>
 
 <script src="/static/thumbnails.js"></script>
+<script src="/static/asset_checks.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

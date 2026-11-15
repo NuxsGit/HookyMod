@@ -26,6 +26,16 @@ previews/
 *.bntx.zs
 *.zsdic
 *.nup
+*.bwav
+*.bars
+*.bfstm
+*.bfsar
+# Exports sonores et sources utilisateur : éviter de versionner des données du jeu.
+*.opus
+*.ogg
+*.wav
+# Téléchargements temporaires du Drive de l'utilisateur : jamais versionnés.
+/google_drive/
 # HookyCreator (démo locale, dossier de travail)
 demo/
 hookycreator_work/
@@ -33,3 +43,8 @@ hookycreator_work/
 # Bibliothèques locales compilées par tools/build_rust.py (reproductibles).
 /rust/target/
 /hookymod/_native_lib/
+# Exécutables de backend assemblés localement pour Tauri.
+/src-tauri/target/
+/src-tauri/binaries/
+/src-tauri/gen/
+/node_modules/

@@ -21,6 +21,7 @@ sortie et la taille du fichier avant de rendre la main.
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 import sys
@@ -34,7 +35,7 @@ SCRIPT_NAME = "creer_blend.py"
 TIMEOUT = 300
 
 IMPORT_SCRIPT = '''\
-"""Crée {blend} depuis {gltf} — script généré par HookyCreator.
+"""Crée un .blend depuis le glTF voisin — script généré par HookyCreator.
 
 Deux façons de s'en servir :
 
@@ -54,8 +55,8 @@ import bpy
 # arguments après « -- » (Blender peut ajouter les siens avant)
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 here = os.path.dirname(os.path.abspath(__file__))
-gltf = argv[0] if argv else os.path.join(here, r"{gltf_name}")
-blend = argv[1] if len(argv) > 1 else os.path.join(here, r"{blend_name}")
+gltf = argv[0] if argv else os.path.join(here, {gltf_literal})
+blend = argv[1] if len(argv) > 1 else os.path.join(here, {blend_literal})
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 result = bpy.ops.import_scene.gltf(filepath=gltf)
@@ -261,9 +262,10 @@ def write_script(folder, gltf_name: str, blend_name: str) -> Path:
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / SCRIPT_NAME
-    path.write_text(IMPORT_SCRIPT.format(blend=blend_name, gltf=gltf_name,
-                                         gltf_name=gltf_name, blend_name=blend_name),
-                    encoding="utf-8")
+    # Les noms viennent du projet et peuvent contenir des guillemets, retours à
+    # la ligne ou antislashs : seuls des littéraux Python échappés sont insérés.
+    path.write_text(IMPORT_SCRIPT.format(gltf_literal=repr(gltf_name),
+                                         blend_literal=repr(blend_name)), encoding="utf-8")
     return path
 
 
@@ -281,8 +283,18 @@ def _blender_command(blender, script, gltf, blend) -> list[str]:
             "--python", str(script), "--", str(gltf), str(blend)]
 
 
-def _display_command(command: list[str]) -> str:
-    return " ".join(f'"{part}"' if " " in part else part for part in command)
+def _display_command(command: list[str], *, windows: bool | None = None) -> str:
+    """Recette à copier dans un shell sans interpréter les noms du projet.
+
+    Sous Windows la recette vise PowerShell : une chaîne simple est littérale,
+    et deux apostrophes successives représentent une apostrophe. L'appel réel
+    utilise toujours ``subprocess`` avec une liste d'arguments, sans shell.
+    """
+    if windows is None:
+        windows = sys.platform.startswith("win")
+    if windows:
+        return "& " + " ".join("'" + part.replace("'", "''") + "'" for part in command)
+    return shlex.join(command)
 
 
 def run_script(blender, script, gltf, blend, timeout: int = TIMEOUT) -> dict:
@@ -388,7 +400,7 @@ def make_blend(folder, name: str, blender=None, timeout: int = TIMEOUT) -> dict:
 def platform_note() -> str:
     """Petite phrase d'aide selon le système (affichée dans l'atelier)."""
     if sys.platform.startswith("win"):
-        return ("Sous Windows, le chemin habituel est "
+        return ("Sous Windows, copie la commande dans PowerShell. Le chemin habituel est "
                 r"C:\Program Files\Blender Foundation\Blender 4.x\blender.exe")
     if sys.platform == "darwin":
         return "Sous macOS : /Applications/Blender.app/Contents/MacOS/Blender"

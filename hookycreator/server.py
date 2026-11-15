@@ -14,14 +14,17 @@ from __future__ import annotations
 import base64
 import gzip
 import hashlib
+import hmac
 import json
 import mimetypes
+import re
+from http.cookies import CookieError, SimpleCookie
 import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from hookymod import bntx, native, restbl, sarc, zs
 from hookymod.util import HookyError
@@ -33,6 +36,30 @@ WEB_DIR = Path(__file__).parent / "web"
 
 #: routes qui coûtent un rendu CPU (limitées en parallèle)
 IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png", "/api/blend/preview")
+
+# Dans la fenêtre native, une navigation GET ne doit jamais modifier le disque.
+# Les routes sont explicites afin qu'une nouvelle action ne devienne pas
+# accidentellement accessible comme image ou lien depuis un autre site.
+DESKTOP_READ_ROUTES = frozenset({
+    "/api/state", "/api/settings", "/api/model/plan", "/api/textures", "/api/models",
+    "/api/asset/check", "/api/sound/info", "/api/sound/ogg", "/api/texture/info",
+    "/api/texture/png", "/api/ensembles", "/api/blender", "/api/model/info",
+    "/api/model/preview", "/api/model/uv", "/api/model/uv/info", "/api/mobs",
+    "/api/bulk/status", "/api/blend/list", "/api/blend/inspect", "/api/blend/preview",
+    "/api/system", "/api/thumbs/status", "/api/export/download",
+})
+DESKTOP_WRITE_ROUTES = frozenset({
+    "/api/settings", "/api/texture/import", "/api/texture/export", "/api/model/blend",
+    "/api/model/export", "/api/mobs", "/api/bulk/start", "/api/blend/inspect",
+    "/api/blend/upload", "/api/blend/translate", "/api/mod/build", "/api/thumbs/warm",
+    "/api/thumbs/stop", "/api/cache/clear", "/api/scan", "/api/export/selection",
+    "/api/shutdown",
+})
+DESKTOP_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+)
 
 
 class ThumbnailActivity:
@@ -68,7 +95,13 @@ class HookyCreatorServer:
 
     def __init__(self, root: str | Path, work: str | Path | None = None,
                  host: str = "0.0.0.0", port: int = 8765, *,
-                 scan_limit: int = MAX_SCAN_FILES) -> None:
+                 scan_limit: int = MAX_SCAN_FILES, desktop_token: str | None = None) -> None:
+        if desktop_token is not None:
+            if host != "127.0.0.1" or port != 0:
+                raise ValueError("Le serveur de l'application native doit écouter sur une boucle locale et un port aléatoire.")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", desktop_token):
+                raise ValueError("Jeton de session desktop invalide.")
+        self.desktop_token = desktop_token
         self.project = Project(Path(root), Path(work) if work else None, scan_limit=scan_limit)
         self.scan_summary = self.project.scan()
         self.host = host
@@ -76,6 +109,7 @@ class HookyCreatorServer:
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.stopped = False
+        self._stop_lock = threading.Lock()
         # Au plus un rendu de vignette et deux rendus au total : une action
         # interactive garde toujours une place, même avec plusieurs onglets.
         self.render_slots = threading.BoundedSemaphore(2)
@@ -100,12 +134,17 @@ class HookyCreatorServer:
         return self
 
     def stop(self) -> None:
-        self.project.stop_warming()
-        if self.httpd:
-            self.httpd.shutdown()
-            self.httpd.server_close()
-            self.httpd = None
-        self.stopped = True
+        # La fenêtre native peut se fermer pendant qu'une requête /shutdown
+        # s'achève ; ne pas fermer deux fois le même serveur dans deux fils.
+        with self._stop_lock:
+            if self.stopped:
+                return
+            self.project.stop_warming()
+            if self.httpd:
+                self.httpd.shutdown()
+                self.httpd.server_close()
+                self.httpd = None
+            self.stopped = True
 
     @property
     def url(self) -> str:
@@ -144,6 +183,16 @@ class HookyCreatorServer:
                 "models": [a.as_json() for a in project.by_kind("model")]}), \
                 "application/json"
 
+        if route == "/api/asset/check":
+            return _json(project.check_asset(query.get("path", [""])[0],
+                                             query.get("kind", [""])[0]))
+
+        if route == "/api/sound/info":
+            return _json(project.sound_info(query.get("path", [""])[0]))
+
+        if route == "/api/sound/ogg":
+            return project.sound_ogg(query.get("path", [""])[0]), "audio/ogg"
+
         if route == "/api/texture/info":
             return _json(project.texture_info(query["path"][0]))
 
@@ -160,10 +209,12 @@ class HookyCreatorServer:
             return _json(project.import_texture(body["path"], int(body.get("index", 0)), image))
 
         if route == "/api/texture/export":
-            data = project.texture_png(query["path"][0], int(query.get("index", ["0"])[0]))
+            rel = str(body.get("path", "")) if method == "POST" else query["path"][0]
+            index = int(body.get("index", 0)) if method == "POST" else int(query.get("index", ["0"])[0])
+            data = project.texture_png(rel, index)
             directory = project.work / "export"
             directory.mkdir(parents=True, exist_ok=True)
-            target = directory / f"{Path(query['path'][0]).name.split('.')[0]}.png"
+            target = directory / f"{Path(rel).name.split('.')[0]}.png"
             target.write_bytes(data)
             return _json({"file": project.shown_path(target)})
 
@@ -207,10 +258,13 @@ class HookyCreatorServer:
 
         if route == "/api/model/blend":
             return _json(project.export_blend(body["path"],
-                                              textures=bool(body.get("textures", True))))
+                                              textures=bool(body.get("textures", True)),
+                                              archive=True))
 
         if route == "/api/model/export":
-            return _json(project.export_model(body["path"], textures=bool(body.get("textures", True))))
+            return _json(project.export_model(body["path"],
+                                              textures=bool(body.get("textures", True)),
+                                              archive=True))
 
         if route == "/api/mobs":
             if method == "POST":
@@ -289,10 +343,12 @@ class HookyCreatorServer:
             return _json({"scan": summary, "project": project.state()})
 
         if route == "/api/export/selection":
-            if body.get("blend"):
-                return project.export_selection_blend(body.get("items") or []), \
-                    "application/zip"
-            return project.export_selection(body.get("items") or []), "application/zip"
+            content = (project.export_selection_blend(body.get("items") or []) if body.get("blend")
+                       else project.export_selection(body.get("items") or []))
+            if body.get("download_link") is True:
+                return _json(project.store_export_download(content))
+            # Compatibilité avec les clients historiques de l'API.
+            return content, "application/zip"
 
         if route == "/api/shutdown":
             threading.Thread(target=self._stop_soon, daemon=True).start()
@@ -423,6 +479,56 @@ def _make_handler(server: HookyCreatorServer):
                 # Le navigateur peut annuler une vignette en changeant de vue.
                 self.close_connection = True
 
+        def end_headers(self) -> None:
+            if server.desktop_token is not None:
+                self.send_header("Content-Security-Policy", DESKTOP_CSP)
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Referrer-Policy", "no-referrer")
+            super().end_headers()
+
+        def _desktop_allowed(self, route: str, method: str) -> bool:
+            """Mode natif : boucle locale, Host/Origin exacts et session secrète.
+
+            Le cookie est HttpOnly/SameSite et distinct par port. Même un autre
+            service sur 127.0.0.1 ne peut pas lancer une écriture par formulaire :
+            elle exige un POST avec l'origine exacte, pas seulement le cookie.
+            """
+            if server.desktop_token is None:
+                return True
+            expected = f"127.0.0.1:{server.port}"
+            hosts = self.headers.get_all("Host", [])
+            origins = self.headers.get_all("Origin", [])
+            sites = self.headers.get_all("Sec-Fetch-Site", [])
+            if (hosts != [expected] or len(origins) > 1 or len(sites) > 1
+                    or (origins and origins[0] != f"http://{expected}")
+                    or (sites and sites[0] not in ("same-origin", "none"))
+                    or (method == "POST" and origins != [f"http://{expected}"])):
+                self.close_connection = True
+                self._error("Origine locale refusée.", 403)
+                return False
+            if route == "/api/desktop/session" and method == "POST":
+                return True  # le jeton du premier échange est vérifié séparément
+            if not route.startswith("/api/"):
+                return method == "GET"
+            allowed = DESKTOP_READ_ROUTES if method == "GET" else DESKTOP_WRITE_ROUTES
+            if route not in allowed:
+                self.close_connection = True
+                self._error("Méthode ou action non autorisée.", 405)
+                return False
+            cookies = SimpleCookie()
+            try:
+                cookies.load(self.headers.get("Cookie", ""))
+                session = cookies.get(f"hooky_session_{server.port}")
+                token = session.value if session is not None else ""
+            except CookieError:
+                token = ""
+            if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token) or not hmac.compare_digest(token, server.desktop_token):
+                self.close_connection = True
+                self._error("Session native absente ou expirée.", 403)
+                return False
+            return True
+
         # -- utilitaires
         def _send(self, body: bytes, kind: str, status: int = 200,
                   headers: dict | None = None) -> None:
@@ -460,10 +566,38 @@ def _make_handler(server: HookyCreatorServer):
 
         def do_GET(self) -> None:                # noqa: N802 (API HTTP)
             parsed = urlparse(self.path)
+            if not self._desktop_allowed(parsed.path, "GET"):
+                return
+            if parsed.path == "/desktop-login" and server.desktop_token is not None:
+                parsed = parsed._replace(path="/static/desktop-login.html")
+            if parsed.path == "/api/export/download":
+                import shutil
+
+                try:
+                    parameters = parse_qs(parsed.query)
+                    token = parameters.get("id", [""])[0]
+                    path = server.project.export_download(token)
+                    name = ("hookycreator-selection.zip" if parameters.get("kind") == ["selection"]
+                            else "hookycreator-blender.zip")
+                    with path.open("rb") as source:
+                        size = path.stat().st_size
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/zip")
+                        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                        self.send_header("Content-Length", str(size))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
+                except ProjectError as exc:
+                    return self._error(str(exc), 404)
+                except OSError:
+                    self.close_connection = True
+                return
             if parsed.path.startswith("/api/"):
                 query = parse_qs(parsed.query)
                 rendered = parsed.path in IMAGE_ROUTES
-                background = rendered and query.get("thumb", [""])[0] == "1"
+                background = ((rendered or parsed.path == "/api/asset/check")
+                              and query.get("thumb", [""])[0] == "1")
                 if background:
                     server.thumbnail_activity.note()
 
@@ -507,6 +641,13 @@ def _make_handler(server: HookyCreatorServer):
                     return self._send(body, kind, headers={
                         "ETag": etag,
                         "Cache-Control": "public, max-age=0, must-revalidate"})
+                if parsed.path == "/api/sound/ogg" and query.get("download") == ["1"]:
+                    source = Path(query.get("path", ["son"])[0]).name
+                    name = re.sub(r"\.bwav(?:\.zs)?$", "", source, flags=re.IGNORECASE) + ".opus"
+                    # filename* n'embarque jamais directement de caractères de
+                    # contrôle ou de guillemets dans l'en-tête HTTP.
+                    disposition = "attachment; filename=\"hookycreator-son.opus\"; filename*=UTF-8''" + quote(name, safe="")
+                    return self._send(body, kind, headers={"Content-Disposition": disposition})
                 return self._send(body, kind)
             found = server.static(parsed.path)
             if not found:
@@ -524,7 +665,30 @@ def _make_handler(server: HookyCreatorServer):
 
         def do_POST(self) -> None:               # noqa: N802
             parsed = urlparse(self.path)
-            length = int(self.headers.get("Content-Length") or 0)
+            if not self._desktop_allowed(parsed.path, "POST"):
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                self.close_connection = True
+                return self._error("Longueur de requête invalide.")
+            if length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024):
+                self.close_connection = True
+                return self._error("Requête trop volumineuse.", 413)
+            if parsed.path == "/api/desktop/session" and server.desktop_token is not None:
+                if length > 1024 or self.headers.get_content_type() != "application/json":
+                    self.close_connection = True
+                    return self._error("Session invalide.", 403)
+                try:
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    token = payload.get("token", "") if isinstance(payload, dict) else ""
+                except (ValueError, UnicodeError):
+                    token = ""
+                if (not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token)
+                        or not hmac.compare_digest(token, server.desktop_token)):
+                    return self._error("Session invalide.", 403)
+                cookie = f"hooky_session_{server.port}={token}; Path=/; HttpOnly; SameSite=Strict"
+                return self._send(*_json({"ok": True}), headers={"Set-Cookie": cookie})
             if parsed.path == "/api/blend/upload":
                 # envoi binaire brut : le nom arrive dans l'en-tête, pas dans du JSON
                 data = self.rfile.read(length) if length else b""

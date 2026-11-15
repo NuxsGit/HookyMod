@@ -7,6 +7,7 @@ class ThumbnailQueue {
     this.fetcher = options.fetcher || globalThis.fetch.bind(globalThis);
     this.createURL = options.createURL || ((blob) => URL.createObjectURL(blob));
     this.revokeURL = options.revokeURL || ((url) => URL.revokeObjectURL(url));
+    this.onFailure = options.onFailure || (() => {});
     this.timeoutMs = options.timeoutMs || 30000;
     this.retryMinMs = options.retryMinMs ?? 500;
     this.items = new Map();
@@ -132,6 +133,7 @@ class ThumbnailQueue {
     box?.classList.remove("pending");
     box?.classList.add("broken");
     if (this.observer) this.observer.unobserve(item.image);
+    this.onFailure(item.image, message);
   }
 
   async start(item) {

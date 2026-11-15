@@ -53,6 +53,10 @@ MAGICS: tuple[Magic, ...] = (
     Magic("byml", "données BYML (binaire YAML)", "Nintendo", b"BYML"),
     Magic("byml_text", "BYML au format texte", "Nintendo", b"YAML"),
     Magic("beln", "table de messages BELN", "Nintendo", b"BELN"),
+    Magic("bwav", "audio BWAV (Nintendo)", "Nintendo", b"BWAV"),
+    Magic("bars", "banque audio BARS (Nintendo)", "Nintendo", b"BARS"),
+    Magic("bfstm", "flux audio BFSTM (Nintendo)", "Nintendo", b"FSTM"),
+    Magic("bfsar", "banque audio BFSAR (Nintendo)", "Nintendo", b"FSAR"),
     # ---------------- 3DS (Grezzo)
     Magic("cmb", "modèle CMB (3DS)", "Nintendo 3DS", b"CMB "),
     Magic("ctex", "texture CTEX (3DS)", "Nintendo 3DS", b"CTEX"),
@@ -124,6 +128,10 @@ EXTENSIONS: dict[str, tuple[str, str]] = {
     ".png": ("png", "image PNG"),
     ".bfstm": ("bfstm", "audio BFSTM"),
     ".bfsar": ("bfsar", "banque audio BFSAR"),
+    ".bwav": ("bwav", "audio BWAV Nintendo"),
+    ".bwav.zs": ("bwav", "audio BWAV Nintendo compressé"),
+    ".bars": ("bars", "banque audio BARS"),
+    ".bars.zs": ("bars", "banque audio BARS compressée"),
     ".bar": ("bar", "archive BAR"),
     ".nca": ("nca", "contenu NCA (Switch)"),
     ".nsp": ("nsp", "paquet NSP (Switch)"),
@@ -159,7 +167,7 @@ def extension_of(name: str) -> str:
     """Extension « double » quand elle existe (``.bntx.zs``), sinon simple."""
     lower = name.lower()
     stem, dot, tail = lower.rpartition(".")
-    if dot and stem.rpartition(".")[2] in {"bntx", "bfres", "bntx.zs"}:
+    if dot and stem.rpartition(".")[2] in {"bntx", "bfres", "bwav", "bars", "bntx.zs"}:
         return "." + stem.rpartition(".")[2] + "." + tail
     return "." + tail if dot else ""
 

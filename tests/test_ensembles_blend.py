@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import io
 import json
+import runpy
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -20,7 +22,7 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -246,6 +248,27 @@ class BlendScriptTests(unittest.TestCase):
         self.assertIn("pack_all", script)            # textures embarquées
         self.assertIn("Heros.gltf", script)          # repli sans argument
 
+    def test_script_escapes_untrusted_model_names(self) -> None:
+        folder = self.tmp / "export"
+        marker = self.tmp / "executed"
+        bad_name = f"a');__import__('pathlib').Path({str(marker)!r}).touch();#\n.gltf"
+        script = blendfile.write_script(folder, bad_name, 'un "nom".blend')
+        bpy = MagicMock()
+        bpy.ops.import_scene.gltf.return_value = {"FINISHED"}
+        with patch.dict(sys.modules, {"bpy": bpy}), patch.object(sys, "argv", [str(script)]):
+            runpy.run_path(str(script), run_name="__main__")
+        bpy.ops.import_scene.gltf.assert_called_once()
+        self.assertEqual(Path(bpy.ops.import_scene.gltf.call_args.kwargs["filepath"]), folder / bad_name)
+        bpy.ops.wm.save_as_mainfile.assert_called_once_with(filepath=str(folder / 'un "nom".blend'))
+        self.assertFalse(marker.exists())
+
+    def test_displayed_command_quotes_shell_metacharacters(self) -> None:
+        parts = ["/tmp/Blender's tools/blender", "--python", "a $(touch marker);'nom'.py"]
+        self.assertEqual(shlex.split(blendfile._display_command(parts, windows=False)), parts)
+        powershell = blendfile._display_command(parts, windows=True)
+        self.assertTrue(powershell.startswith("& '/tmp/Blender''s tools/blender'"))
+        self.assertIn("'a $(touch marker);''nom''.py'", powershell)
+
     def test_the_script_compiles(self) -> None:
         """Une faute de frappe dans le script se verrait seulement chez l'utilisateur."""
         compile(blendfile.IMPORT_SCRIPT, blendfile.SCRIPT_NAME, "exec")
@@ -423,6 +446,7 @@ class BlendExportProjectTests(unittest.TestCase):
         self.assertIn("Heros/Heros.gltf", names)
         self.assertIn("Heros/creer_blend.py", names)
         self.assertIn("pas de nouveau .blend", notes)
+        self.assertNotIn("Heros.gltf Heros.blend", notes)  # le script connaît déjà ces noms
         self.assertEqual((folder / "Heros.blend").read_bytes(), b"ancien")
 
     def test_selection_zip_contains_only_the_new_blend_on_success(self) -> None:

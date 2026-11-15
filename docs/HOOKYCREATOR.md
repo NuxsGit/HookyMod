@@ -1,7 +1,9 @@
 # HookyCreator — l'atelier de contenu
 
-Une application locale (navigateur) pour préparer des modifications : textures
-retouchées, modèles passés par Blender, fiches de mobs et dossier de mod.
+Une application locale (fenêtre Tauri v2 ou navigateur) pour préparer des
+modifications : textures retouchées, modèles passés par Blender, fiches de mobs
+et dossier de mod. Pour construire et utiliser la fenêtre native, voir
+[`DESKTOP.md`](DESKTOP.md).
 Distincte de l'explorateur (`hookymod/app.py`), elle travaille sur des copies.
 L'assemblage de fichiers ne garantit pas leur fonctionnement en jeu : notamment,
 une fiche de mob ne crée pas un nouvel acteur jouable.
@@ -80,10 +82,57 @@ ou à `Project.build_mod()` ne la demandent pas.
 |---|---|---|
 | **Textures** | aperçu décodé, infos (format, taille, mips, Orin), remplacer par une image (PNG/JPG), exporter en PNG | ✅ formats encodables (BC1/BC3/BC4/BC5, non compressés). ASTC/BC7 : refusé explicitement |
 | **Modèles** | aperçu 3D rendu côté serveur, planche de rotations, export glTF + OBJ (+ textures voisines) pour Blender | ✅ BFRES v9 et v10 reconnus, lecture partielle |
+| **Sons** | écouter et télécharger un BWAV Opus mono en Ogg Opus | 🧪 conversion sans réencodage, lecture seule, limites ci-dessous |
 | **Blender → jeu** | analyse d'un `.blend` et injection dans un BFRES compatible | ✅ modèles compatibles ; sous-maillages 10.x non réécrits, tampons de taille fixe |
 | **Mobs** | fiche de mob : modèle + textures copiés sous un nouveau nom, liste de ce qui reste à faire côté jeu | ✅ préparation des fichiers |
 | **Création de mod** | assemble `mods/<nom>/romfs/…` (chemins d'origine) + `hookycreator.json` | ✅ assemblage de fichiers, sans garantie en jeu |
 | **Tout exploiter** | parcourt aussi l'intérieur des packs (`.pack.zs`, SARC) et exporte les textures et modèles reconnus (PNG, glTF + OBJ) avec un `rapport.json` | ✅ avec limites ci-dessous |
+
+## Éléments visibles et export Blender
+
+Le scan trouve des **candidats**, pas une garantie qu'ils fonctionnent. Les
+vues Modèles, Textures, Ensembles et les listes de choix vérifient progressivement
+les fichiers avant de les afficher : maillage et aperçu pour un modèle, décodage
+de l'image d'index 0 pour un BNTX. Les éléments refusés restent masqués ; un
+compteur indique les vérifications en cours, les formats non pris en charge et
+les erreurs à réessayer. Cette vérification n'assure pas la fidélité en jeu, et
+ne garantit pas que les autres images d'un BNTX sont prises en charge. Les
+comptes d'animations et de textures associées restent des rapprochements de noms.
+
+Dans la fiche d'un modèle, **Exporter pour Blender** prépare glTF + `.bin`, OBJ,
+MTL et cartes décodées. Le résultat affiche le **dossier absolu** dans
+`<projet>/hookycreator_work/export/` (sauf dossier de travail personnalisé) et
+propose un ZIP contenant uniquement les fichiers de cet export. Si le transfert
+n'a pas démarré, utilise le lien de téléchargement ou ouvre le dossier indiqué.
+Les anciennes sorties éventuelles ne sont pas effacées, sont signalées et ne
+sont pas incluses dans le nouveau ZIP. L'export d'une sélection fournit également
+un ZIP, temporaire : télécharge-le tout de suite. Les archives temporaires sont
+élaguées lors des créations suivantes (7 jours, 24 archives ou 2 Gio, au mieux).
+
+Le bouton **Exporter en .blend** appelle Blender installé localement. S'il est
+absent ou échoue, l'application le dit : le ZIP contient le glTF et un
+`creer_blend.py`, **pas un nouveau `.blend`**. Un ancien `.blend` éventuellement
+présent dans le dossier ne prouve pas la réussite. Le chemin de Blender se règle
+dans Réglages. Le rattachement des cartes est heuristique, certaines cartes
+inconnues restent à brancher à la main, et les animations ne sont pas exportées.
+
+## Premiers sons (expérimental)
+
+La vue Sons accepte seulement des fichiers `.bwav` ou `.bwav.zs` **complets,
+mono, Opus à 48 kHz** dont les paquets sont reconnus. Elle les remultiplexe en
+`.opus` (Ogg Opus) sans réencodage ni modification des sources. Le navigateur ou
+la webview doit savoir décoder Ogg Opus. Les en-têtes et paquets sont contrôlés,
+mais cela ne constitue pas un décodage complet avant affichage ; un échec de
+lecture masque de nouveau le son. Une taille maximale de 64 Mio s'applique au
+fichier et à sa sortie décompressée.
+
+Si des points de boucle valides sont présents, ils sont écrits comme commentaires
+`LOOPSTART`/`LOOPEND` expérimentaux ; beaucoup de lecteurs les ignorent et le
+lecteur intégré ne reproduit pas automatiquement la boucle. Le marqueur de fin
+`0xffffffff` signifie absence de boucle même lorsque le mot de drapeau vaut 1.
+Ce comportement a été vérifié sur des données synthétiques, pas sur un morceau
+réel en boucle. **BARS/BFSAR, BFSTM, PCM, DSP-ADPCM, stéréo/multicanal,
+préchargements, modification et réinjection ne sont pas encore pris en charge.**
 
 ## Tout exploiter (lots)
 
