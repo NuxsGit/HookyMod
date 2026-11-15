@@ -29,13 +29,14 @@ from urllib.parse import parse_qs, quote, urlparse
 from hookymod import bntx, native, restbl, sarc, zs
 from hookymod.util import HookyError
 
-from . import blend as blend_mod
+from . import model_import as model_import_mod
+from . import session as session_mod
 from .project import MAX_SCAN_FILES, Project, ProjectError
 
 WEB_DIR = Path(__file__).parent / "web"
 
 #: routes qui coûtent un rendu CPU (limitées en parallèle)
-IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png", "/api/blend/preview")
+IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png")
 
 # Dans la fenêtre native, une navigation GET ne doit jamais modifier le disque.
 # Les routes sont explicites afin qu'une nouvelle action ne devienne pas
@@ -43,17 +44,17 @@ IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png", "/api/blend/preview")
 DESKTOP_READ_ROUTES = frozenset({
     "/api/state", "/api/settings", "/api/model/plan", "/api/textures", "/api/models",
     "/api/asset/check", "/api/sound/info", "/api/sound/ogg", "/api/texture/info",
-    "/api/texture/png", "/api/ensembles", "/api/blender", "/api/model/info",
+    "/api/texture/png", "/api/ensembles", "/api/model/info",
     "/api/model/preview", "/api/model/uv", "/api/model/uv/info", "/api/mobs",
-    "/api/bulk/status", "/api/blend/list", "/api/blend/inspect", "/api/blend/preview",
-    "/api/system", "/api/thumbs/status", "/api/export/download",
+    "/api/bulk/status",
+    "/api/system", "/api/thumbs/status", "/api/export/download", "/api/ui-state",
 })
 DESKTOP_WRITE_ROUTES = frozenset({
-    "/api/settings", "/api/texture/import", "/api/texture/export", "/api/model/blend",
-    "/api/model/export", "/api/mobs", "/api/bulk/start", "/api/blend/inspect",
-    "/api/blend/upload", "/api/blend/translate", "/api/mod/build", "/api/thumbs/warm",
+    "/api/settings", "/api/texture/import", "/api/texture/export",
+    "/api/model/export", "/api/model/import", "/api/model/inspect", "/api/mobs", "/api/bulk/start",
+    "/api/mod/build", "/api/thumbs/warm",
     "/api/thumbs/stop", "/api/cache/clear", "/api/scan", "/api/export/selection",
-    "/api/shutdown",
+    "/api/shutdown", "/api/ui-state",
 })
 DESKTOP_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -103,6 +104,7 @@ class HookyCreatorServer:
                 raise ValueError("Jeton de session desktop invalide.")
         self.desktop_token = desktop_token
         self.project = Project(Path(root), Path(work) if work else None, scan_limit=scan_limit)
+        self.ui_session = session_mod.SessionStore(self.project.work, self.project.root)
         self.scan_summary = self.project.scan()
         self.host = host
         self.port = port
@@ -114,6 +116,9 @@ class HookyCreatorServer:
         # interactive garde toujours une place, même avec plusieurs onglets.
         self.render_slots = threading.BoundedSemaphore(2)
         self.thumbnail_slot = threading.BoundedSemaphore(1)
+        # L'import peut allouer des tampons et des maillages volumineux : une
+        # seule requête à la fois, avant même de lire son corps HTTP.
+        self.model_import_slot = threading.BoundedSemaphore(1)
         self.thumbnail_activity = ThumbnailActivity()
         self._job_lock = threading.Lock()
         self.job: dict = {"running": False, "done": 0, "total": 0, "label": "",
@@ -156,7 +161,18 @@ class HookyCreatorServer:
         project = self.project
 
         if route == "/api/state":
-            return project.state_payload(), "application/json"
+            return project.state_payload(quick=query.get("quick") == ["1"]), "application/json"
+
+        if route == "/api/ui-state":
+            if method == "GET":
+                return _json({"state": self.ui_session.load()})
+            if not isinstance(body, dict):
+                raise ProjectError("Sauvegarde d'interface invalide.")
+            try:
+                saved = self.ui_session.save(body.get("client"), body.get("sequence"), body.get("state"))
+            except session_mod.SessionError as exc:
+                raise ProjectError(str(exc)) from exc
+            return _json({"saved": saved})
 
         if route == "/api/settings":
             if method == "POST":
@@ -211,20 +227,11 @@ class HookyCreatorServer:
         if route == "/api/texture/export":
             rel = str(body.get("path", "")) if method == "POST" else query["path"][0]
             index = int(body.get("index", 0)) if method == "POST" else int(query.get("index", ["0"])[0])
-            data = project.texture_png(rel, index)
-            directory = project.work / "export"
-            directory.mkdir(parents=True, exist_ok=True)
-            target = directory / f"{Path(rel).name.split('.')[0]}.png"
-            target.write_bytes(data)
-            return _json({"file": project.shown_path(target)})
+            return _json(project.export_texture(rel, index))
 
         if route == "/api/ensembles":
             return project.cached_json("ensembles", lambda: {
-                "ensembles": project.ensembles(),
-                "blender": _blender_state(project)}), "application/json"
-
-        if route == "/api/blender":
-            return _json(_blender_state(project))
+                "ensembles": project.ensembles()}), "application/json"
 
         if route == "/api/model/info":
             return _json(project.model_info(query["path"][0]))
@@ -256,15 +263,16 @@ class HookyCreatorServer:
                 raise ProjectError("Paramètre « path » manquant.")
             return _json(project.uv_info(query["path"][0]))
 
-        if route == "/api/model/blend":
-            return _json(project.export_blend(body["path"],
-                                              textures=bool(body.get("textures", True)),
-                                              archive=True))
-
         if route == "/api/model/export":
             return _json(project.export_model(body["path"],
                                               textures=bool(body.get("textures", True)),
                                               archive=True))
+
+        if route == "/api/model/inspect" and method == "POST":
+            return _json(model_import_mod.inspect_model(body))
+
+        if route == "/api/model/import" and method == "POST":
+            return _json(model_import_mod.import_model(project, body))
 
         if route == "/api/mobs":
             if method == "POST":
@@ -280,34 +288,6 @@ class HookyCreatorServer:
         if route == "/api/bulk/status":
             with self._job_lock:
                 return _json(self.job)
-
-        # -- traduction .blend → modèle du jeu
-        if route == "/api/blend/list":
-            return _json({"blends": blend_mod.list_blends(project)})
-
-        if route == "/api/blend/inspect":
-            ref = body.get("ref") if method == "POST" else query.get("ref", [""])[0]
-            return _json(blend_mod.inspect(
-                project, ref,
-                axis=str((body or {}).get("axis", "y_up")),
-                scale=_scale(body or {}),
-                only=(body or {}).get("only") or None))
-
-        if route == "/api/blend/preview":
-            return blend_mod.preview_png(
-                project, query.get("ref", [""])[0], _size(query, "w", 640),
-                _size(query, "h", 480),
-                axis=str(query.get("axis", ["y_up"])[0]),
-                scale=_scale(query),
-                only=query.get("only", [None])[0] or None,
-                views=max(1, min(8, int(query.get("views", ["1"])[0])))), "image/png"
-
-        if route == "/api/blend/translate":
-            return _json(blend_mod.translate(
-                project, body.get("ref", ""), body.get("target", ""),
-                model=int(body.get("model", 0) or 0), shape=int(body.get("shape", 0) or 0),
-                axis=str(body.get("axis", "y_up")), scale=_scale(body),
-                only=body.get("only") or None, fit=bool(body.get("fit", True))))
 
         if route == "/api/mod/build":
             return _json(project.build_mod(body.get("name", "HookyMod")))
@@ -343,8 +323,9 @@ class HookyCreatorServer:
             return _json({"scan": summary, "project": project.state()})
 
         if route == "/api/export/selection":
-            content = (project.export_selection_blend(body.get("items") or []) if body.get("blend")
-                       else project.export_selection(body.get("items") or []))
+            if body.get("blend"):
+                raise ProjectError("Cet export a été retiré : utilise le ZIP glTF / OBJ.")
+            content = project.export_selection(body.get("items") or [])
             if body.get("download_link") is True:
                 return _json(project.store_export_download(content))
             # Compatibilité avec les clients historiques de l'API.
@@ -424,19 +405,6 @@ class HookyCreatorServer:
         return body, kind, etag
 
 
-def _blender_state(project) -> dict:
-    """Où est Blender, et que faire s'il n'est pas là (affiché dans l'atelier)."""
-    from hookymod import blendfile
-
-    executable = blendfile.find_blender(project.settings.blender_path)
-    return {
-        "found": bool(executable),
-        "path": str(executable) if executable else "",
-        "configured": project.settings.blender_path,
-        "note": blendfile.platform_note(),
-    }
-
-
 def _size(query: dict, name: str, default: int) -> int:
     """Taille d'aperçu bornée : un PNG de 20 000 px de large n'aide personne."""
     try:
@@ -444,20 +412,6 @@ def _size(query: dict, name: str, default: int) -> int:
     except (TypeError, ValueError):
         value = default
     return max(64, min(1600, value))
-
-
-def _scale(payload: dict) -> float:
-    """Facteur d'échelle borné : 0,001 à 1000 (au-delà, c'est une faute de frappe)."""
-    raw = payload.get("scale", 1.0)
-    if isinstance(raw, list):
-        raw = raw[0] if raw else 1.0
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        value = 1.0
-    if not 0.001 <= value <= 1000.0:
-        value = 1.0
-    return value
 
 
 def _json(payload: dict) -> tuple[bytes, str]:
@@ -541,7 +495,9 @@ def _make_handler(server: HookyCreatorServer):
             if (compressible and len(body) >= 1024
                     and "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
                     and "Content-Encoding" not in headers):
-                body = gzip.compress(body, 6)
+                # Sur la boucle locale, privilégier la latence plutôt que les
+                # derniers pourcents de compression d'un grand inventaire.
+                body = gzip.compress(body, 1)
                 headers["Content-Encoding"] = "gzip"
                 headers["Vary"] = "Accept-Encoding"
             self.send_response(status)
@@ -578,7 +534,7 @@ def _make_handler(server: HookyCreatorServer):
                     token = parameters.get("id", [""])[0]
                     path = server.project.export_download(token)
                     name = ("hookycreator-selection.zip" if parameters.get("kind") == ["selection"]
-                            else "hookycreator-blender.zip")
+                            else "hookycreator-modele.zip")
                     with path.open("rb") as source:
                         size = path.stat().st_size
                         self.send_response(200)
@@ -672,7 +628,9 @@ def _make_handler(server: HookyCreatorServer):
             except ValueError:
                 self.close_connection = True
                 return self._error("Longueur de requête invalide.")
-            if length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024):
+            if (length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024)
+                    or (parsed.path == "/api/ui-state" and length > session_mod.MAX_BYTES)
+                    or (parsed.path in ("/api/model/import", "/api/model/inspect") and length > model_import_mod.MAX_REQUEST)):
                 self.close_connection = True
                 return self._error("Requête trop volumineuse.", 413)
             if parsed.path == "/api/desktop/session" and server.desktop_token is not None:
@@ -689,17 +647,22 @@ def _make_handler(server: HookyCreatorServer):
                     return self._error("Session invalide.", 403)
                 cookie = f"hooky_session_{server.port}={token}; Path=/; HttpOnly; SameSite=Strict"
                 return self._send(*_json({"ok": True}), headers={"Set-Cookie": cookie})
-            if parsed.path == "/api/blend/upload":
-                # envoi binaire brut : le nom arrive dans l'en-tête, pas dans du JSON
-                data = self.rfile.read(length) if length else b""
+            if parsed.path in ("/api/model/import", "/api/model/inspect"):
+                if not server.model_import_slot.acquire(blocking=False):
+                    self.close_connection = True
+                    return self._send(*_json({"error": "Un import est déjà en cours. Réessaie après sa fin."}),
+                                      status=429, headers={"Retry-After": "2"})
                 try:
-                    name = self.headers.get("X-Hooky-Filename") or "modele.blend"
-                    return self._send(*_json(blend_mod.save_upload(
-                        server.project, name, data)))
-                except (ProjectError, HookyError) as exc:
-                    return self._error(str(exc))
-                except Exception as exc:         # jamais de trace dans l'UI
-                    return self._error(f"Erreur interne : {exc}", 500)
+                    self.connection.settimeout(30)
+                    return self._post_json(parsed, length)
+                except TimeoutError:
+                    self.close_connection = True
+                    return self._error("Lecture de l'import interrompue.", 408)
+                finally:
+                    server.model_import_slot.release()
+            return self._post_json(parsed, length)
+
+        def _post_json(self, parsed, length: int) -> None:
             raw = self.rfile.read(length) if length else b"{}"
             try:
                 body = json.loads(raw.decode("utf-8") or "{}")

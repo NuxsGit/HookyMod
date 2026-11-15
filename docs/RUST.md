@@ -55,8 +55,8 @@ supplémentaires : voir [`DESKTOP.md`](DESKTOP.md).
 | BC6 / BC7 / ASTC en lecture | `texture2ddecoder` reste nécessaire |
 | Rastérisation 3D, profondeur et réduction anticrénelée | Rust ; projection, éclairage et sélection des faces restent en Python |
 | Table de couleurs des albédos pour les aperçus | Rust (jusqu'à 64 millions de pixels et une grille de 256²), repli Python ; décodage BNTX partagé sans détour PNG |
-| Tables de formes et d'attributs BFRES 10.x | Recherche et validation heuristique Rust pour les octets compatibles, repli Python ; objets et reste de la lecture toujours en Python |
-| Indices et positions BFRES 10.x | Rust pour les gros tampons compatibles, avec les mêmes arrêts et sous-maillages ; repli Python |
+| Tables de formes et d'attributs BFRES 10.x | Lecture structurée en Python quand reconnue ; recherche heuristique Rust possible en repli, avec validation Python |
+| Indices et positions BFRES 10.x | Lecture structurée en Python ; accélération Rust sur certains gros tampons du repli heuristique |
 | Filtre des triangles BFRES 10.x | Rust pour les gros lots compatibles ; mêmes seuils et mêmes indices que le filtre Python |
 | Décompression Zstandard | Rust via `ZstdDicts` lorsque compatible, sinon repli `zstandard` ; certaines lectures directes restent en `zstandard` |
 | Compression Zstandard | `zstandard` dans l'application ; sans dictionnaire seulement dans l'outil Rust autonome |
@@ -73,9 +73,9 @@ garantie que tous les modèles seront correctement interprétés. Elle accepte
 1 Gio d'entrée et 64 Mio de métadonnées au maximum (250 000 formes) ; au-delà,
 ou si les règles Python de formats sont modifiées, le chemin Python prend le
 relais. Les tampons de conversion géométrique sont bornés ; les réglages mémoire
-des aperçus restent appliqués. La reconstruction BFRES 10.x depuis un `.blend`
-n'est **pas** rendue possible par ce portage :
-elle est toujours refusée lorsqu'elle ne peut pas être vérifiée.
+des aperçus restent appliqués. L'injection OBJ/glTF/GLB en BFRES 10.x n'est
+**pas** rendue possible par ce portage : elle reste refusée ; seules certaines
+structures BFRES 9.x sont réécrites après contrôle.
 
 ## Commandes Rust autonomes (expérimental)
 

@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from hookycreator import blend as blend_mod
+from hookymod import bfres_safe
 from hookycreator.project import ProjectError
 from hookycreator.server import HookyCreatorServer
 from tests import synth, test_bfres_v10 as v10_fixtures
@@ -120,7 +120,7 @@ class ModelLoadingTests(unittest.TestCase):
 
     def test_recovered_v10_is_still_not_claimed_as_reinjectable(self):
         data = (self.root / "Model" / "Valide.bfres").read_bytes()
-        reason = blend_mod.why_not_injectable(data)
+        reason = bfres_safe.why_not_injectable(data)
         self.assertIn("10.x", reason)
         self.assertIn("réécriture", reason)
         self.assertIn("sous-maillages", reason)

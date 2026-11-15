@@ -130,13 +130,14 @@ class BfresImportTests(unittest.TestCase):
         self.assertIn("Position", " ".join(report.attributes))
 
     def test_import_from_obj_file(self):
-        obj = b"v 1 2 3\nv 4 5 6\nv 7 8 9\nvn 0 0 1\nvn 0 0 1\nvn 0 0 1\nf 1//1 2//2 3//3\n"
+        obj = b"v 1 2 3\nv 4 5 6\nv 7 8 10\nvn 0 0 1\nvn 0 0 1\nvn 0 0 1\nf 1//1 2//2 3//3\n"
         data, _ = bfres_import.import_obj_bytes(self.original, obj)
         mesh = bfres.BfresFile.parse(data).models[0].build_meshes(0)[0]
         self.assertEqual(mesh.positions[0], (1.0, 2.0, 3.0))
 
     def test_import_refuses_more_vertices(self):
-        mesh = self._mesh([(float(i), 0.0, 0.0) for i in range(8)],
+        mesh = self._mesh([(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)]
+                          + [(float(i), 0., 0.) for i in range(3, 8)],
                           faces=[(0, 1, 2)])
         with self.assertRaises(HookyError) as caught:
             bfres_import.import_obj(self.original, [mesh])

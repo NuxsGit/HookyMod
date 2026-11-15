@@ -10,27 +10,31 @@ Exemples ::
     python -m hookymod.cli textures model.bntx --list
     python -m hookymod.cli textures model.bntx -o textures_png
     python -m hookymod.cli obj model.bfres -o model.obj
-    python -m hookymod.cli blender model.bfres -o model_blender
+    python -m hookymod.cli export-model model.bfres -o model_export
     python -m hookymod.cli patch asset.zs --find Link --replace Hero -o asset.patched.zs
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
+from collections import Counter
 from pathlib import Path
 
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
 from . import blender as blender_mod
 from . import identify
+from . import modelio
 from . import nup as nup_mod
 from . import restbl as restbl_mod
+from . import texturemaps
 from . import translate as translate_mod
 from .container import Level, detect_kind
 from .mesh import export_obj, load_obj
 from .sarc import SarcArchive, is_sarc
-from .util import FormatError, HookyError, human_size, safe_child, write_atomic
+from .util import FormatError, HookyError, human_size, safe_child, safe_filename_stem, write_atomic
 from .zs import (DictMissing, ZstdDicts, find_dict_files, find_dictionaries_near,
                  frame_info, is_zstd, zstd_available)
 
@@ -434,18 +438,12 @@ def _bundle_stem(path: Path) -> str:
 
 
 def _neighbour_textures(model_path: Path, stem: str, dicts: ZstdDicts,
-                        out: Path, verbose: bool = False) -> dict[str, str]:
-    """Décode les PNG posés à côté du modèle (``<préfixe>_Alb.bntx.zs`` & co).
-
-    On ne branche que ce qui existe réellement : aucune texture inventée, aucun
-    nom deviné. Le préfixe est le nom du modèle sans son extension
-    (``Animal_Butterfly…`` → ``Mt_Body_Animal_Butterfly_Alb``).
-    """
+                        out: Path, verbose: bool = False,
+                        warnings: list[str] | None = None) -> dict[str, str]:
+    """Prépare des PNG candidats voisins ; leur association reste heuristique."""
     folder = model_path.parent
     found: dict[str, str] = {}
-    # Le nom du modèle est découpé en mots : « Animal_Butterfly » → {butterfly}.
-    # Un asset voisin est une texture possible s'il contient TOUS ces mots
-    # (Mt_Body_Animal_Butterfly_Alb.bntx.zs en contient bien « butterfly »).
+    # Un candidat doit contenir tous les mots spécifiques du nom du modèle.
     key = stem.split(".")[0]
     generic = {"animal", "mt", "body", "model", "obj", "tex"}
     tokens = {t.lower() for t in key.replace("-", "_").split("_") if t and t.lower() not in generic}
@@ -454,38 +452,82 @@ def _neighbour_textures(model_path: Path, stem: str, dicts: ZstdDicts,
     candidates = []
     for pattern in ("*.bntx.zs", "*.bntx", "*.png"):
         candidates += sorted(folder.glob(pattern))
+    planned = []
     for candidate in candidates:
         words = {t.lower() for t in candidate.name.split(".")[0].split("_")}
-        if not tokens <= words:
+        if tokens <= words:
+            name = safe_filename_stem(candidate.name.split(".")[0]) + ".png"
+            planned.append((candidate, name))
+    counts = Counter(name.casefold() for _, name in planned)
+    ambiguous = set()
+
+    def note(message: str) -> None:
+        if warnings is not None:
+            warnings.append(message)
+        elif verbose:
+            print(f"  ⚠ {message}", file=sys.stderr)
+
+    for candidate, name in planned:
+        if counts[name.casefold()] > 1:
+            if name.casefold() not in ambiguous:
+                note(f"Plusieurs textures voisines produiraient {name} : candidates ignorées.")
+                ambiguous.add(name.casefold())
             continue
-        material_hint = candidate.name.split(".")[0]
-        if candidate.suffix.lower() == ".png":
-            found[material_hint] = str(candidate)
-            continue
+        target = out / name
         try:
-            raw = candidate.read_bytes()
-            data = dicts.decompress(raw) if is_zstd(raw) else raw
-            file = bntx_mod.BntxFile.parse(data, candidate.name)
-            texture = file.textures[0]
-            target = out / f"{material_hint}.png"
-            texture.save_png(target, 0)
-            found[material_hint] = str(target)
-            if verbose:
-                print(f"  texture {material_hint} : {texture.format_name} "
-                      f"{texture.width}×{texture.height}")
-        except (HookyError, IndexError, ValueError) as exc:
-            print(f"  ⚠ texture {candidate.name} ignorée : {exc}", file=sys.stderr)
+            if candidate.suffix.lower() == ".png":
+                # Une copie atomique remplace un éventuel lien, sans suivre sa
+                # cible. Le plafond évite de charger un PNG arbitraire sans borne.
+                if candidate.stat().st_size > 64 * 1024 * 1024:
+                    raise HookyError("PNG supérieur à 64 Mio")
+                if candidate.resolve() != target.resolve():
+                    with candidate.open("rb") as stream:
+                        png = stream.read(64 * 1024 * 1024 + 1)
+                    if len(png) > 64 * 1024 * 1024:
+                        raise HookyError("PNG supérieur à 64 Mio")
+                    write_atomic(target, png)
+            else:
+                raw = candidate.read_bytes()
+                data = dicts.decompress(raw) if is_zstd(raw) else raw
+                file = bntx_mod.BntxFile.parse(data, candidate.name)
+                if len(file.textures) != 1:
+                    raise HookyError("conteneur sans image unique ; utiliser l'atelier pour choisir l'index")
+                texture = file.textures[0]
+                texture.save_png(target, 0)
+                if verbose:
+                    print(f"  texture {candidate.name} : {texture.format_name} "
+                          f"{texture.width}×{texture.height}")
+            found[candidate.name] = str(target)
+        except (HookyError, IndexError, ValueError, OSError) as exc:
+            note(f"Texture {candidate.name} ignorée : {exc}")
     return found
 
 
 def cmd_blender(args) -> int:
     path = Path(args.path)
     stem = _bundle_stem(path)
-    out = Path(args.output) if args.output else path.parent / f"{stem}_blender"
+    out = Path(args.output) if args.output else path.parent / f"{stem}_export"
+    formats = tuple(part.strip().lower() for part in args.formats.split(",") if part.strip())
+    if not formats or not set(formats) <= {"gltf", "obj"}:
+        raise HookyError("Formats d'export attendus : gltf, obj ou gltf,obj.")
+    if not math.isfinite(args.scale) or args.scale <= 0 or args.model < 0 or args.lod < 0:
+        raise HookyError("L'échelle doit être positive et finie ; modèle et LOD doivent être positifs ou nuls.")
+    if (path.suffix.lower() == ".obj" and "obj" in formats
+            and (out / f"{stem}.obj").resolve() == path.resolve()):
+        raise HookyError("Le dossier de sortie écraserait l'OBJ source ; choisis un autre dossier.")
     dicts = load_dicts(args.romfs, path, args.verbose)
+    warnings: list[str] = []
 
     if path.suffix.lower() == ".obj":
-        meshes = [load_obj(path)]
+        # L'ancien lecteur d'aperçu ignore les indices UV/normales par coin et
+        # synthétise des normales. Utiliser le lecteur d'échange borné pour ne
+        # pas attribuer aux sommets des données qui n'étaient pas les leurs.
+        with path.open("rb") as stream:
+            source = modelio.read_model(path.name, stream.read(modelio.MAX_BYTES + 1))
+        meshes = source.meshes
+        warnings.extend(source.warnings)
+        warnings.append("OBJ : bibliothèques MTL et textures source non importées ; "
+                        "seuls les noms des matériaux sont conservés.")
     else:
         level = open_level(path, dicts, _auto_romfs(path))
         data = _decompress_maybe(_pick_entry(level, args.entry), dicts)
@@ -503,26 +545,46 @@ def cmd_blender(args) -> int:
                 + "\nRien n'est exporté plutôt que d'envoyer une géométrie fausse "
                   "vers Blender."
             )
+        warnings.extend(file.warnings)
 
     out.mkdir(parents=True, exist_ok=True)
     textures = {}
     if args.textures:
-        textures = _neighbour_textures(path, stem, dicts, out, args.verbose)
+        textures = _neighbour_textures(path, stem, dicts, out, args.verbose, warnings)
         if not textures:
-            print("Aucune texture reconnue à côté du modèle "
-                  "(l'export reste valable, matériaux sans image).")
+            warnings.append("Aucune texture reconnue à côté du modèle : export sans image.")
+    else:
+        warnings.append("Export des textures désactivé.")
+    materials = {mesh.material or mesh.name for mesh in meshes}
+    unique_images = {str(source) for source in textures.values()}
+    albedos = {str(source) for name, source in textures.items()
+               if texturemaps.classify(name) == "albedo"}
+    material_maps = {}
+    if len(materials) == 1 and len(albedos) == 1:
+        material_maps[next(iter(materials))] = {"albedo": Path(next(iter(albedos))).name}
+        warnings.append("Association d'albédo par nom : heuristique, à vérifier.")
+    elif textures and not albedos:
+        warnings.append("Aucun albédo identifié par son nom : PNG à relier manuellement.")
+    elif textures:
+        warnings.append("Plusieurs matériaux ou albédos candidats : PNG à relier manuellement.")
+    if unique_images - albedos:
+        warnings.append("Les autres cartes candidates ne sont pas reliées automatiquement par la CLI.")
     written = blender_mod.export_bundle(
-        meshes, out, stem, textures=textures, scale=args.scale,
-        formats=tuple(args.formats.split(",")) if args.formats else ("gltf", "obj"),
+        meshes, out, stem, textures=textures, material_maps=material_maps, scale=args.scale,
+        formats=formats, warnings=warnings,
     )
     triangles = sum(len(m.faces) for m in meshes)
     print(f"Modèle : {stem} — {len(meshes)} maillage(s), {triangles:,} face(s)")
-    for key in ("gltf", "obj", "note"):
+    for key in ("gltf", "obj", "note", "report"):
         if key in written:
             print(f"  • {written[key]}")
     if textures:
-        print(f"  textures : {len(textures)} PNG branché(s)")
-    print(f"\nBlender : Fichier ▸ Importer ▸ glTF 2.0 → {written.get('gltf', written['obj'])}")
+        print(f"  textures : {len(unique_images)} PNG candidat(s)")
+    for warning in warnings[:20]:
+        print(f"  ⚠ {warning}")
+    target = written.get("gltf") or written.get("obj")
+    kind = "glTF 2.0" if "gltf" in written else "Wavefront OBJ"
+    print(f"\nBlender : Fichier ▸ Importer ▸ {kind} → {target}")
     return 0
 
 
@@ -647,13 +709,6 @@ def cmd_translate(args) -> int:
             print(f"⚠ {len(manifest.errors)} avertissement(s) :")
             for error in manifest.errors[:10]:
                 print(f"  • {error}")
-        return 0
-    if args.action == "blend":
-        if not args.blend or not args.obj:
-            raise HookyError("précise --blend et --obj.")
-        path = translate_mod.blender_export_obj(args.blend, args.obj, args.blender)
-        print(f"OBJ écrit : {path} ({human_size(path.stat().st_size)})")
-        print("Réimporte-le ensuite avec : translate pack")
         return 0
     if args.action == "status":
         for line in translate_mod.status(args.project):
@@ -904,18 +959,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scale", type=float, default=1.0)
     p.set_defaults(func=cmd_obj)
 
-    p = sub.add_parser("blender", parents=[common],
-                       help="prépare le modèle pour Blender (glTF + OBJ + textures)")
+    p = sub.add_parser("export-model", aliases=["blender"], parents=[common],
+                       help="exporte la géométrie en glTF / OBJ et les PNG candidats")
     p.add_argument("path")
     p.add_argument("--entry", "-e")
-    p.add_argument("--output", "-o", help="dossier de sortie (défaut : <nom>_blender)")
+    p.add_argument("--output", "-o", help="dossier de sortie (défaut : <nom>_export)")
     p.add_argument("--model", type=int, default=0)
     p.add_argument("--lod", type=int, default=0)
     p.add_argument("--scale", type=float, default=1.0)
     p.add_argument("--formats", default="gltf,obj",
                    help="formats à écrire (gltf,obj — défaut les deux)")
     p.add_argument("--textures", action="store_true", default=True,
-                   help="décode et branche les textures voisines (défaut)")
+                   help="prépare les PNG voisins ; albédo unique relié de façon heuristique (défaut)")
     p.add_argument("--no-textures", dest="textures", action="store_false")
     p.set_defaults(func=cmd_blender)
 
@@ -948,18 +1003,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("translate", parents=[common],
                        help="traduit un romfs en projet PC éditable (PNG/OBJ) et retour")
-    p.add_argument("action", choices=["unpack", "pack", "status", "blend"])
+    p.add_argument("action", choices=["unpack", "pack", "status"])
     p.add_argument("--project", "-p", help="dossier du projet (unpack/pack/status)")
     p.add_argument("--output", "-o", help="dossier de sortie (pack)")
     p.add_argument("--all", action="store_true",
                    help="pack : réécrire tous les fichiers, pas seulement les modifiés")
-    p.add_argument("--mod-name", help="pack : écrire dans <sortie>/<nom>/romfs (mod Hookshot)")
+    p.add_argument("--mod-name", help="pack : écrire dans <sortie>/<nom>/romfs")
     p.add_argument("--no-table", action="store_true",
                    help="pack : ne pas mettre à jour la table des tailles")
     p.add_argument("--filter", "-f", help="unpack : filtre sur le chemin")
-    p.add_argument("--blend", help="blend : fichier .blend à convertir")
-    p.add_argument("--obj", help="blend : OBJ de sortie")
-    p.add_argument("--blender", help="blend : chemin de l'exécutable Blender")
     p.add_argument("--limit", type=int, help="unpack : nombre maximum de fichiers")
     p.set_defaults(func=cmd_translate)
 

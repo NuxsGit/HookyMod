@@ -127,7 +127,11 @@ class DesktopBackendTests(unittest.TestCase):
             body=json.dumps({"path": "Model/Heros_Alb.bntx", "index": 0}).encode(),
         )
         self.assertEqual(status, 200, body)
-        self.assertTrue((self.project.work / "export" / "Heros_Alb.png").is_file())
+        result = json.loads(body)
+        output = Path(result["absolute_file"])
+        self.assertTrue(output.is_relative_to(self.project.work))
+        self.assertTrue(output.is_file())
+        self.assertEqual(result["index"], 0)
 
     def test_selection_returns_a_retryable_authenticated_http_archive(self) -> None:
         cookie, _ = self.login()

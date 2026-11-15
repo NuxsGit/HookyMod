@@ -204,6 +204,165 @@ class CliTests(unittest.TestCase):
         self.assertTrue((folder / "sortie" / "aile.obj").is_file())
         self.assertIn("Blender", buffer.getvalue())
 
+    def test_cli_obj_export_preserves_seams_and_does_not_invent_normals(self):
+        import contextlib
+        import io
+        from hookymod import cli, modelio
+
+        source_bytes = (b"mtllib absent.mtl\no Plan\nusemtl Surface\n"
+                        b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
+                        b"vt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\nvt .5 .5\n"
+                        b"f 1/1 2/2 3/3\nf 2/5 4/4 3/3\n")
+        expected = modelio.read_model("forme.obj", source_bytes).meshes[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source, output = folder / "forme.obj", folder / "sortie"
+            source.write_bytes(source_bytes)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["export-model", str(source), "-o", str(output),
+                                           "--no-textures"]), 0)
+            report = (output / "RAPPORT_MODELE.txt").read_text(encoding="utf-8")
+            self.assertIn("MTL et textures source non importées", report)
+            gltf = json.loads((output / "forme.gltf").read_text(encoding="utf-8"))
+            self.assertNotIn("NORMAL", gltf["meshes"][0]["primitives"][0]["attributes"])
+            decoded = (modelio.read_model("forme.gltf", (output / "forme.gltf").read_bytes(),
+                                          {"forme.bin": (output / "forme.bin").read_bytes()}),
+                       modelio.read_model("forme.obj", (output / "forme.obj").read_bytes()))
+            for result in decoded:
+                mesh = result.meshes[0]
+                self.assertEqual(mesh.positions, expected.positions)
+                self.assertEqual(mesh.uvs, expected.uvs)
+                self.assertEqual(mesh.faces, expected.faces)
+                self.assertEqual(mesh.material, "Surface")
+                self.assertIsNone(mesh.normals)
+
+    def test_cli_obj_export_refuses_invalid_and_oversized_input(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        from hookymod import cli, modelio
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source, output = folder / "forme.obj", folder / "sortie"
+            source.write_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 4\n")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(cli.main(["export-model", str(source), "-o", str(output)]), 0)
+            self.assertFalse(output.exists())
+            source.write_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+            with patch.object(modelio, "MAX_BYTES", 16), contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(cli.main(["export-model", str(source), "-o", str(output)]), 0)
+            self.assertFalse(output.exists())
+
+    def test_cli_does_not_bind_normal_or_ambiguous_images_as_albedo(self):
+        import contextlib
+        import io
+        from hookymod import cli, util
+
+        cases = ((["forme_Nrm.png"], None, "Aucun albédo identifié"),
+                 (["forme_Weird.png"], None, "Aucun albédo identifié"),
+                 (["forme_Alb.png", "forme_Nrm.png"], "forme_Alb.png", "heuristique"),
+                 (["forme_Alb.png", "forme_BaseColor.png"], None, "Plusieurs matériaux ou albédos"),
+                 (["forme_#_Alb.png"], "forme___Alb.png", "heuristique"))
+        for names, expected, message in cases:
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source, output = root / "forme.obj", root / "sortie"
+                source.write_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Surface\nf 1 2 3\n")
+                for index, name in enumerate(names):
+                    (root / name).write_bytes(util.png_bytes(1, 1, bytes((index, 0, 0, 255))))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cli.main(["export-model", str(source), "-o", str(output)]), 0)
+                doc = json.loads((output / "forme.gltf").read_text(encoding="utf-8"))
+                pbr = doc["materials"][0]["pbrMetallicRoughness"]
+                if expected is None:
+                    self.assertNotIn("baseColorTexture", pbr)
+                    self.assertNotIn("map_Kd", (output / "forme.mtl").read_text(encoding="utf-8"))
+                else:
+                    texture = doc["textures"][pbr["baseColorTexture"]["index"]]
+                    self.assertEqual(doc["images"][texture["source"]]["uri"], expected)
+                    self.assertIn(f"map_Kd {expected}", (output / "forme.mtl").read_text(encoding="utf-8"))
+                    self.assertTrue((output / expected).is_file())
+                report = (output / "RAPPORT_MODELE.txt").read_text(encoding="utf-8")
+                self.assertIn(message, report)
+
+    def test_cli_ignores_ambiguous_filenames_and_multi_image_containers(self):
+        import contextlib
+        import io
+        from hookymod import cli, util
+        from tests.test_bulk import _multi_texture_bntx
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, output = root / "forme.obj", root / "sortie"
+            source.write_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Surface\nf 1 2 3\n")
+            png = util.png_bytes(1, 1, bytes((2, 3, 4, 255)))
+            (root / "forme_Alb.png").write_bytes(png)
+            (root / "forme_Alb.bntx").write_bytes(_multi_texture_bntx(["une", "deux"]))
+            (root / "forme_Dif.bntx").write_bytes(_multi_texture_bntx(["une", "deux"]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["export-model", str(source), "-o", str(output)]), 0)
+            doc = json.loads((output / "forme.gltf").read_text(encoding="utf-8"))
+            self.assertNotIn("baseColorTexture", doc["materials"][0]["pbrMetallicRoughness"])
+            report = (output / "RAPPORT_MODELE.txt").read_text(encoding="utf-8")
+            self.assertIn("candidates ignorées", report)
+            self.assertIn("sans image unique", report)
+            self.assertEqual((root / "forme_Alb.png").read_bytes(), png)
+            self.assertFalse((output / "forme_Alb.png").exists())
+            self.assertFalse((output / "forme_Dif.png").exists())
+
+    def test_cli_preserves_obj_source_and_does_not_follow_png_output_links(self):
+        import contextlib
+        import io
+        from hookymod import cli, util
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "forme.obj"
+            original = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
+            source.write_bytes(original)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(cli.main(["export-model", str(source), "-o", str(root)]), 0)
+            self.assertEqual(source.read_bytes(), original)
+            png = util.png_bytes(1, 1, bytes((8, 9, 10, 255)))
+            (root / "forme_Alb.png").write_bytes(png)
+            output = root / "sortie"
+            output.mkdir()
+            victim = root / "important.txt"
+            victim.write_bytes(b"ne pas modifier")
+            link = output / "forme_Alb.png"
+            try:
+                link.symlink_to(victim)
+            except (OSError, NotImplementedError):
+                self.skipTest("liens symboliques indisponibles")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["export-model", str(source), "-o", str(output)]), 0)
+            self.assertEqual(victim.read_bytes(), b"ne pas modifier")
+            self.assertFalse(link.is_symlink())
+            self.assertEqual(link.read_bytes(), png)
+
+    def test_cli_single_format_and_invalid_options(self):
+        import contextlib
+        import io
+        from hookymod import cli
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "forme.obj"
+            source.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+            for fmt in ("gltf", "obj"):
+                output = folder / fmt
+                with self.subTest(fmt=fmt), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cli.main(["export-model", str(source), "-o", str(output),
+                                               "--formats", fmt, "--no-textures"]), 0)
+                    self.assertTrue((output / f"forme.{fmt}").is_file())
+                    report = (output / "RAPPORT_MODELE.txt").read_text(encoding="utf-8")
+                    self.assertIn("textures désactivé", report)
+            for options in (("--formats", "unsupported"), ("--scale", "nan"), ("--model", "-1")):
+                output = folder / ("bad-" + options[0][2:])
+                with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertNotEqual(cli.main(["export-model", str(source), "-o", str(output), *options]), 0)
+                    self.assertFalse(output.exists())
+
 
 class DictionaryDiscoveryTests(unittest.TestCase):
     def test_dictionary_next_to_the_file_is_found(self):

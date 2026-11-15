@@ -22,15 +22,14 @@ import struct
 from dataclasses import dataclass, field
 
 from . import bfres as bfres_mod
-from .mesh import MeshData
+from .mesh import MeshData, triangle_has_area
 from .util import FormatError, HookyError
 
 # attributs que l'on sait réécrire
 SEMANTICS = {
-    "position": "positions",
-    "normal": "normals",
-    "texcoord0": "uvs",
-    "texcoord01": "uvs",
+    "position": "positions", "position0": "positions", "_position": "positions",
+    "normal": "normals", "normal0": "normals", "_normal": "normals",
+    "texcoord0": "uvs", "texcoord01": "uvs", "uv0": "uvs", "_texcoord0": "uvs",
 }
 
 SKIPPED_HINTS = ("tangent", "binormal", "color", "skin", "blend", "fog", "user")
@@ -132,10 +131,18 @@ def _triangles(meshes: list[MeshData]) -> list[tuple[int, int, int]]:
     faces: list[tuple[int, int, int]] = []
     offset = 0
     for mesh in meshes:
+        # _flatten ignore aussi les maillages sans faces : leurs sommets ne
+        # doivent donc pas décaler les indices des maillages suivants.
+        if not mesh.faces:
+            continue
         for face in mesh.faces:
             if len(face) != 3:
                 raise HookyError("Seuls les triangles sont acceptés "
                                  f"(face à {len(face)} sommets).")
+            if any(not isinstance(index, int) or index < 0 or index >= len(mesh.positions) for index in face):
+                raise HookyError("Indice de triangle hors du maillage source.")
+            if len(set(face)) != 3 or not triangle_has_area(*(mesh.positions[index] for index in face)):
+                raise HookyError("Triangle source dégénéré ou d'aire nulle.")
             faces.append((face[0] + offset, face[1] + offset, face[2] + offset))
         offset += len(mesh.positions)
     return faces
@@ -240,8 +247,8 @@ def import_obj(data: bytes, meshes: list[MeshData], model: int = 0, shape: int =
     width = {0: ("B", 1), 1: ("H", 2), 2: ("I", 4)}[mesh.index_format]
     fmt, size = width
     flat = [index for face in faces for index in face]
-    if fmt == "H" and max(flat) > 0xFFFF:
-        raise HookyError("Trop de sommets pour des indices 16 bits.")
+    if (fmt == "B" and max(flat) > 0xFF) or (fmt == "H" and max(flat) > 0xFFFF):
+        raise HookyError(f"Trop de sommets pour des indices {size * 8} bits.")
     packed = struct.pack(f"<{len(flat)}{fmt}", *flat)
     leftover = len(mesh.indices_raw) - len(packed)
     if leftover > 0:

@@ -62,6 +62,7 @@ class Driver:
     def __init__(self, port: int, application: Path):
         self.origin = f"http://127.0.0.1:{port}"
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.started = time.perf_counter()
         result = self.call("POST", "/session", {
             "capabilities": {"alwaysMatch": {
                 "browserName": "wry", "tauri:options": {
@@ -118,38 +119,57 @@ def close_panels(driver: Driver) -> None:
             driver.click("#" + button)
 
 
+def launch_driver(application: Path, env: dict, log) -> tuple[subprocess.Popen, Driver]:
+    port, native_port = free_port(), free_port()
+    while port == native_port:
+        native_port = free_port()
+    command = ["tauri-driver", "--port", str(port), "--native-port", str(native_port)]
+    if env.get("HOOKY_WEBDRIVER_BINARY"):
+        command.extend(["--native-driver", env["HOOKY_WEBDRIVER_BINARY"]])
+    process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
+    try:
+        def driver_ready():
+            if process.poll() is not None:
+                raise RuntimeError("tauri-driver s'est arrêté avant de démarrer.")
+            return listening(port)
+        wait_for("démarrage tauri-driver", driver_ready, timeout=30)
+        wait_for("démarrage du WebDriver natif", lambda: listening(native_port), timeout=30)
+        return process, Driver(port, application)
+    except BaseException:
+        stop_driver(process)
+        raise
+
+
+def stop_driver(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+
+
 def run(application: Path) -> None:
     if not application.is_file():
         raise SystemExit(f"Application debug introuvable : {application}")
     with tempfile.TemporaryDirectory(prefix="hooky-webview-test-") as tmp:
         root = make_desktop_fixture(Path(tmp) / "dump")
-        port, native_port = free_port(), free_port()
-        while port == native_port:
-            native_port = free_port()
-        env = {**os.environ, "HOOKY_DESKTOP_TEST_PROJECT": str(root), "PYTHONUTF8": "1"}
+        env = {**os.environ, "HOOKY_DESKTOP_TEST_PROJECT": str(root), "PYTHONUTF8": "1",
+               "HOOKY_DESKTOP_TEST_CONFIG": str(Path(tmp) / "config")}
         env.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
         downloads: list[Path] = []
         driver = None
+        process = None
         backend_port = None
         with tempfile.TemporaryFile() as log:
-            command = ["tauri-driver", "--port", str(port), "--native-port", str(native_port)]
-            if env.get("HOOKY_WEBDRIVER_BINARY"):
-                command.extend(["--native-driver", env["HOOKY_WEBDRIVER_BINARY"]])
-            process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
             try:
-                def driver_ready():
-                    if process.poll() is not None:
-                        raise RuntimeError("tauri-driver s'est arrêté avant de démarrer.")
-                    return listening(port)
-                wait_for("démarrage tauri-driver", driver_ready, timeout=30)
-                # Le proxy tauri-driver écoute avant que le WebDriver natif ait
-                # fini son démarrage ; attendre les deux évite un faux échec.
-                wait_for("démarrage du WebDriver natif", lambda: listening(native_port), timeout=30)
-                driver = Driver(port, application)
+                process, driver = launch_driver(application, env, log)
                 driver.wait("chargement de l'atelier", """
                     const el = document.querySelector('#home-sub');
                     return !!(window.__HOOKY_DESKTOP__ && el && !el.textContent.includes('Chargement'));
                 """, timeout=120)
+                print(f"Démarrage fenêtre + WebDriver (fixture synthétique) : {time.perf_counter() - driver.started:.3f} s")
                 origin = driver.script("return location.origin")
                 backend_port = urlparse(origin).port
                 assert urlparse(origin).hostname == "127.0.0.1" and backend_port
@@ -163,8 +183,8 @@ def run(application: Path) -> None:
                 """)
                 assert driver.script("return document.querySelectorAll('#model-grid .tile:not([hidden])').length") == 1
                 driver.click('#model-grid .tile:not([hidden])')
-                driver.wait("fiche du modèle", "return !!document.querySelector('#btn-blender')")
-                driver.click('#btn-blender')
+                driver.wait("fiche du modèle", "return !!document.querySelector('#btn-export-model')")
+                driver.click('#btn-export-model')
                 first = completed_download(driver)
                 downloads.append(first)
                 folder = Path(driver.script("return document.querySelector('#export-result-folder').textContent"))
@@ -232,10 +252,82 @@ def run(application: Path) -> None:
                 assert audio.name.startswith('Silence--') and audio.suffix == '.opus'
                 assert audio.read_bytes().startswith(b'OggS')
                 print("Webview native : session, filtres, ZIP, sélection et son OK")
-                driver.close()
+
+                # Une sauvegarde finale > 64 Kio et artificiellement retardée
+                # doit être confirmée avant l'arrêt, pas confiée à keepalive.
+                close_panels(driver)
+                driver.click('button[data-view="models"]')
+                driver.wait("modèle revalidé", "return !!document.querySelector('#model-grid .tile:not([hidden])')")
+                driver.click('#model-grid .tile:not([hidden])')
+                driver.wait("fiche rouverte", "return !!document.querySelector('#btn-export-model')")
+                driver.wait("session prête", "return !!uiSessionWriter && uiSessionWriter.enabled")
+                driver.script("""
+                    const original = uiSessionWriter.fetcher;
+                    uiSessionWriter.fetcher = async (...args) => {
+                      await new Promise(resolve => setTimeout(resolve, 1600));
+                      return original(...args);
+                    };
+                    state.selection.add('model:Model/Heros.bfres');
+                    for (let i = 0; i < 800; i++) state.selection.add('model:missing-' + i + '-' + 'x'.repeat(120));
+                    const name = document.querySelector('#mod-name');
+                    name.value = 'Brouillon conservé';
+                    name.dispatchEvent(new Event('input', { bubbles: true }));
+                    const search = document.querySelector('#search');
+                    search.value = 'Heros';
+                    search.dispatchEvent(new Event('input', { bubbles: true }));
+                    document.querySelector('#win-close').click();
+                """)
+                time.sleep(1.1)
+                assert listening(backend_port), "le backend s'est arrêté avant la confirmation de sauvegarde"
+                wait_for("arrêt du backend après sauvegarde", lambda: not listening(backend_port), timeout=25)
+                with contextlib.suppress(Exception):
+                    driver.close()
                 driver = None
-                wait_for("arrêt du backend après fermeture", lambda: not listening(backend_port), timeout=20)
-                print("Arrêt du backend avec la fenêtre : OK")
+                stop_driver(process)
+                process = None
+                sessions = list((root / "hookycreator_work" / "sessions").glob("*.json"))
+                assert len(sessions) == 1 and sessions[0].stat().st_size > 64 * 1024, sessions
+                saved = json.loads(sessions[0].read_text(encoding="utf-8"))["state"]
+                assert saved["fields"]["mod-name"] == "Brouillon conservé"
+                assert saved["fields"]["search"] == "Heros"
+                assert "model:Model/Heros.bfres" in saved["selection"]
+                recent = json.loads((Path(tmp) / "config" / "recent-project.json").read_text(encoding="utf-8"))
+                assert Path(recent["project"]) == root
+
+                # Redémarrage sans la variable de sélection de la fixture : la
+                # vraie fenêtre doit rouvrir le projet et ignorer les fichiers
+                # manquants de l'ancienne sélection.
+                env = dict(env)
+                env.pop("HOOKY_DESKTOP_TEST_PROJECT")
+                process, driver = launch_driver(application, env, log)
+                driver.wait("reprise du projet et de la fiche", """
+                    const models = document.querySelector('#view-models');
+                    return !!(models && !models.hidden && document.querySelector('#btn-export-model')
+                      && document.querySelector('#search').value === 'Heros'
+                      && document.querySelector('#mod-name').value === 'Brouillon conservé');
+                """, timeout=120)
+                assert driver.script("return [...state.selection]") == ["model:Model/Heros.bfres"]
+                assert driver.script("return !document.querySelector('#inspector').hidden")
+                new_origin = driver.script("return location.origin")
+                new_port = urlparse(new_origin).port
+                assert urlparse(new_origin).hostname == "127.0.0.1" and new_port
+
+                # Cette fois, fermer la fenêtre elle-même (et non le bouton de
+                # l'interface) immédiatement après la dernière modification.
+                driver.script("""
+                    const name = document.querySelector('#mod-name');
+                    name.value = 'Après redémarrage';
+                    name.dispatchEvent(new Event('input', { bubbles: true }));
+                """)
+                with contextlib.suppress(WebDriverError, urllib.error.URLError, OSError):
+                    driver.call("DELETE", f"/session/{driver.session}/window")
+                wait_for("arrêt après fermeture de fenêtre", lambda: not listening(new_port), timeout=25)
+                with contextlib.suppress(Exception):
+                    driver.close()
+                driver = None
+                saved = json.loads(sessions[0].read_text(encoding="utf-8"))["state"]
+                assert saved["fields"]["mod-name"] == "Après redémarrage"
+                print("Reprise native, fermeture confirmée et grande session : OK")
             except Exception as error:
                 # Afficher d'abord l'erreur précise : les annotations de CI
                 # peuvent tronquer les longs journaux de la webview.
@@ -269,12 +361,8 @@ def run(application: Path) -> None:
                 if driver is not None:
                     with contextlib.suppress(Exception):
                         driver.close()
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=10)
+                if process is not None:
+                    stop_driver(process)
                 for path in downloads:
                     with contextlib.suppress(OSError):
                         path.unlink()

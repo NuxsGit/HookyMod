@@ -1,4 +1,9 @@
-# Couverture de la famille « ennemis » (11 ennemis, 15 fichiers)
+# Couverture historique de la famille « ennemis » (11 ennemis, 15 fichiers)
+
+> Archive de l'ancien lecteur heuristique : ces chiffres et jugements visuels
+> datent d'une version antérieure et ne valident pas le lecteur structuré actuel.
+> Les aperçus de référence ne sont pas conservés ici. Voir les
+> [limites actuelles](../HOOKYCREATOR.md) et les [mesures récentes](../PERFORMANCE.md).
 
 Rapport produit par :
 

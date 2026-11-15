@@ -191,7 +191,9 @@ class BfresTests(unittest.TestCase):
         self.assertEqual(len(mesh.positions), 3)
         self.assertEqual(mesh.faces, [(0, 1, 2)])
         self.assertEqual(mesh.positions[1], (1.0, 0.0, 0.0))
-        self.assertIsNotNone(mesh.normals)
+        # La fixture n'a pas de canal normal : ne pas le fabriquer à l'export.
+        self.assertIsNone(mesh.normals)
+        self.assertTrue(any("normales absentes" in warning for warning in file.warnings))
 
     def test_export_obj(self):
         file = bfres.BfresFile.parse(synth.make_bfres())
@@ -200,7 +202,8 @@ class BfresTests(unittest.TestCase):
             file.export_obj(out)
             text = out.read_text()
             self.assertIn("v 0 0 0", text)
-            self.assertIn("f 1//1 2//2 3//3", text)
+            self.assertIn("f 1 2 3", text)
+            self.assertNotIn("\nvn ", text)
             self.assertTrue(out.with_suffix(".mtl").exists())
 
     def test_wiiu_rejected(self):

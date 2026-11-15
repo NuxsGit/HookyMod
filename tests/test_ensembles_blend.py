@@ -1,28 +1,15 @@
-"""Vue « Ensembles » (modèle + textures + animations) et export ``.blend``.
-
-Deux promesses à tenir, donc deux séries de tests :
-
-* **un objet vu en entier** — le modèle assemblé, coloré par son albédo, ses
-  textures et ses animations retrouvées par leur nom, et une liste qui s'affiche
-  sans décoder un seul fichier (elle doit rester instantanée sur un gros dump) ;
-* **un ``.blend`` honnête** — soit Blender l'écrit, soit on fournit le script et
-  la commande exacte, jamais un fichier vide ni un message trompeur.
-"""
+"""Vue Ensembles, association de textures et performance de la liste."""
 
 from __future__ import annotations
 
 import io
 import json
-import runpy
-import shlex
-import subprocess
 import sys
 import tempfile
 import time
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -32,32 +19,8 @@ import synth  # noqa: E402
 
 from hookycreator.project import Project, _make_sampler  # noqa: E402
 from hookycreator.server import HookyCreatorServer  # noqa: E402
-from hookymod import blendfile  # noqa: E402
 from hookymod.mesh import MeshData  # noqa: E402
 from hookymod.viewer import build_render_data  # noqa: E402
-
-
-def _blender_stub(test: unittest.TestCase, directory: Path, body: str) -> Path:
-    """Lance un faux Blender Python avec les vrais arguments, même sous Windows.
-
-    Une ligne ``#!`` exécutable ne fonctionne pas avec CreateProcess sur
-    Windows. On intercepte uniquement le lancement, puis on démarre réellement
-    l'interpréteur Python avec le script et les arguments construits par l'app.
-    """
-    stub = directory / "blender stub.py"
-    stub.write_text(body + "\n", encoding="utf-8")
-    real_run = subprocess.run
-
-    def launch(command, *args, **kwargs):
-        test.assertEqual(command[0], str(stub))
-        test.assertEqual(command[1:4], ["--background", "--factory-startup", "--python"])
-        test.assertEqual(command[5], "--")
-        test.assertEqual(Path(command[-1]).parent.resolve(), Path(command[-2]).parent.resolve())
-        test.assertEqual(Path(command[-1]).stat().st_size, 0)
-        return real_run([sys.executable, str(stub), *command[1:]], *args, **kwargs)
-
-    test.enterContext(patch.object(blendfile.subprocess, "run", side_effect=launch))
-    return stub
 
 
 def _red_blue_image() -> tuple[int, int, bytes]:
@@ -212,261 +175,6 @@ class EnsembleScaleTests(unittest.TestCase):
             self.assertLess(elapsed, 0.5, f"liste des ensembles trop lente : {elapsed:.2f} s")
 
 
-class BlendScriptTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.tmp = Path(self._tmp.name)
-
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
-
-    def _stub(self, body: str) -> Path:
-        return _blender_stub(self, self.tmp, body)
-
-    def test_without_blender_the_script_and_command_are_ready(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        result = blendfile.make_blend(folder, "Heros", blender=None)
-        if result["method"] == "blender":            # Blender présent : autre test
-            self.skipTest("Blender est installé sur cette machine")
-        self.assertEqual(result["method"], "script")
-        self.assertFalse((folder / "Heros.blend").exists())
-        self.assertTrue((folder / blendfile.SCRIPT_NAME).is_file())
-        self.assertIn("blender", result["command"])
-        self.assertIn("Heros.blend", result["command"])
-        self.assertIn("Réglages", result["message"])
-
-    def test_script_is_runnable_on_its_own(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        blendfile.write_script(folder, "Heros.gltf", "Heros.blend")
-        script = (folder / blendfile.SCRIPT_NAME).read_text(encoding="utf-8")
-        self.assertIn("import_scene.gltf", script)
-        self.assertIn("save_as_mainfile", script)
-        self.assertIn("pack_all", script)            # textures embarquées
-        self.assertIn("Heros.gltf", script)          # repli sans argument
-
-    def test_script_escapes_untrusted_model_names(self) -> None:
-        folder = self.tmp / "export"
-        marker = self.tmp / "executed"
-        bad_name = f"a');__import__('pathlib').Path({str(marker)!r}).touch();#\n.gltf"
-        script = blendfile.write_script(folder, bad_name, 'un "nom".blend')
-        bpy = MagicMock()
-        bpy.ops.import_scene.gltf.return_value = {"FINISHED"}
-        with patch.dict(sys.modules, {"bpy": bpy}), patch.object(sys, "argv", [str(script)]):
-            runpy.run_path(str(script), run_name="__main__")
-        bpy.ops.import_scene.gltf.assert_called_once()
-        self.assertEqual(Path(bpy.ops.import_scene.gltf.call_args.kwargs["filepath"]), folder / bad_name)
-        bpy.ops.wm.save_as_mainfile.assert_called_once_with(filepath=str(folder / 'un "nom".blend'))
-        self.assertFalse(marker.exists())
-
-    def test_displayed_command_quotes_shell_metacharacters(self) -> None:
-        parts = ["/tmp/Blender's tools/blender", "--python", "a $(touch marker);'nom'.py"]
-        self.assertEqual(shlex.split(blendfile._display_command(parts, windows=False)), parts)
-        powershell = blendfile._display_command(parts, windows=True)
-        self.assertTrue(powershell.startswith("& '/tmp/Blender''s tools/blender'"))
-        self.assertIn("'a $(touch marker);''nom''.py'", powershell)
-
-    def test_the_script_compiles(self) -> None:
-        """Une faute de frappe dans le script se verrait seulement chez l'utilisateur."""
-        compile(blendfile.IMPORT_SCRIPT, blendfile.SCRIPT_NAME, "exec")
-
-    def test_a_working_blender_produces_a_real_blend(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        (folder / "Heros.blend").write_bytes(b"ancien fichier")
-        stub = self._stub("import sys\n"
-                          "target = sys.argv[-1]\n"
-                          "open(target + '1', 'wb').write(b'sauvegarde')\n"
-                          "open(target, 'wb').write(b'BLENDER-v300')\n"
-                          "print('HOOKY_OK', target)")
-        result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "blender")
-        self.assertEqual(Path(result["blend"]).read_bytes(), b"BLENDER-v300")
-        self.assertIn("Ko", result["message"])
-        self.assertIn(str(folder / "Heros.blend"), result["command"])
-        self.assertNotIn(".hookymod-blend-", result["command"])
-        self.assertFalse(list(folder.glob(".hookymod-blend-*")))
-
-    def test_a_blender_that_writes_nothing_is_reported(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        stub = self._stub("print('je ne fais rien')")
-        result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "script")
-        self.assertIsNone(result["blend"])
-        self.assertIn("sans écrire", result["message"])
-
-    def test_a_failing_blender_falls_back_with_its_output(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        stub = self._stub("import sys\nprint('erreur de test')\nsys.exit(3)")
-        result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "script")
-        self.assertIn("code 3", result["message"])
-        self.assertIn("erreur de test", result["output"])
-
-    def test_stale_blend_is_not_mistaken_for_a_fresh_one(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        (folder / "Heros.blend").write_bytes(b"vieux fichier")
-        stub = self._stub("print('rien')")
-        result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "script")
-        self.assertIsNone(result["blend"])
-        self.assertEqual((folder / "Heros.blend").read_bytes(), b"vieux fichier")
-        self.assertIn("sans écrire", result["message"])
-        self.assertFalse(list(folder.glob(".hookymod-blend-*")))
-
-    def test_failed_blender_cannot_replace_the_old_blend_with_partial_output(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        (folder / "Heros.blend").write_bytes(b"ancien")
-        stub = self._stub("import sys\n"
-                          "open(sys.argv[-1], 'wb').write(b'partiel')\n"
-                          "sys.exit(3)")
-        result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "script")
-        self.assertIsNone(result["blend"])
-        self.assertIn("code 3", result["message"])
-        self.assertEqual((folder / "Heros.blend").read_bytes(), b"ancien")
-        self.assertFalse(list(folder.glob(".hookymod-blend-*")))
-
-    def test_a_vanished_or_empty_staged_result_cannot_replace_the_old_blend(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        (folder / "Heros.blend").write_bytes(b"ancien")
-        stub = self.tmp / "blender"
-        stub.touch()
-        # Simule une disparition/troncature entre la première vérification et
-        # l'installation : il ne faut pas remplacer l'ancien résultat par vide.
-        with patch.object(blendfile, "run_script", return_value={"ok": True, "output": ""}):
-            result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "script")
-        self.assertIn("fichier temporaire est devenu vide", result["message"])
-        self.assertEqual((folder / "Heros.blend").read_bytes(), b"ancien")
-        self.assertFalse(list(folder.glob(".hookymod-blend-*")))
-
-    def test_failed_replace_preserves_the_old_blend(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        (folder / "Heros.blend").write_bytes(b"ancien")
-        stub = self._stub("import sys\nopen(sys.argv[-1], 'wb').write(b'nouveau')")
-        with patch.object(Path, "replace", side_effect=PermissionError("verrouillé")):
-            result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "script")
-        self.assertIsNone(result["blend"])
-        self.assertIn("Impossible d'installer", result["message"])
-        self.assertEqual((folder / "Heros.blend").read_bytes(), b"ancien")
-        self.assertFalse(list(folder.glob(".hookymod-blend-*")))
-
-    def test_no_blender_does_not_delete_the_old_export(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        (folder / "Heros.blend").write_bytes(b"ancien")
-        with patch.object(blendfile, "find_blender", return_value=None):
-            result = blendfile.make_blend(folder, "Heros")
-        self.assertEqual(result["method"], "script")
-        self.assertIsNone(result["blend"])
-        self.assertEqual((folder / "Heros.blend").read_bytes(), b"ancien")
-
-    def test_non_utf8_blender_output_does_not_abort_the_export(self) -> None:
-        folder = self.tmp / "export"
-        folder.mkdir()
-        (folder / "Heros.gltf").write_text("{}", encoding="utf-8")
-        stub = self._stub("import sys\n"
-                          "sys.stdout.buffer.write(b'\\xff')\n"
-                          "open(sys.argv[-1], 'wb').write(b'BLENDER')")
-        result = blendfile.make_blend(folder, "Heros", blender=stub)
-        self.assertEqual(result["method"], "blender")
-        self.assertEqual((folder / "Heros.blend").read_bytes(), b"BLENDER")
-        self.assertIn("�", result["output"])
-
-    def test_find_blender_accepts_an_explicit_file(self) -> None:
-        stub = self._stub("pass")
-        self.assertEqual(blendfile.find_blender(str(stub)), stub)
-        self.assertIsNone(blendfile.find_blender(str(self.tmp / "absent")))
-
-
-class BlendExportProjectTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.tmp = Path(self._tmp.name)
-        self.project = _make_project(self.tmp, animations=False)
-
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
-
-    def test_export_contains_geometry_textures_and_the_script(self) -> None:
-        result = self.project.export_blend("Model/Heros.bfres")
-        folder = self.tmp / "work" / "export" / "Heros"
-        self.assertTrue((folder / "Heros.gltf").is_file())
-        self.assertTrue((folder / "Heros.bin").is_file())
-        self.assertTrue((folder / blendfile.SCRIPT_NAME).is_file())
-        self.assertTrue(any(path.suffix == ".png" for path in folder.iterdir()))
-        self.assertGreaterEqual(result["faces"], 1)
-        self.assertGreaterEqual(result["textures"], 1)
-        self.assertIn(result["method"], {"script", "blender"})
-        if result["method"] == "script":
-            self.assertEqual(result["blend"], "")
-            self.assertIn("blender", result["command"])
-
-    def test_configured_blender_is_used(self) -> None:
-        stub = _blender_stub(self, self.tmp,
-                             "import sys\nopen(sys.argv[-1], 'wb').write(b'BLENDER')")
-        self.project.update_settings({"blender_path": str(stub)})
-        result = self.project.export_blend("Model/Heros.bfres")
-        self.assertEqual(result["method"], "blender")
-        self.assertTrue(Path(result["blend"]).is_file())
-        self.assertEqual(Path(result["blend"]).read_bytes(), b"BLENDER")
-
-    def test_selection_zip_does_not_include_stale_blends_on_failure(self) -> None:
-        folder = self.tmp / "work" / "export" / "Heros"
-        folder.mkdir(parents=True)
-        (folder / "Heros.blend").write_bytes(b"ancien")
-        (folder / "Heros.blend1").write_bytes(b"sauvegarde ancienne")
-        with patch.object(blendfile, "find_blender", return_value=None):
-            zipped = self.project.export_selection_blend(
-                [{"kind": "model", "rel": "Model/Heros.bfres"}])
-        with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
-            names = archive.namelist()
-            notes = archive.read("LIRE-MOI.txt").decode("utf-8")
-        self.assertNotIn("Heros/Heros.blend", names)
-        self.assertNotIn("Heros/Heros.blend1", names)
-        self.assertIn("Heros/Heros.gltf", names)
-        self.assertIn("Heros/creer_blend.py", names)
-        self.assertIn("pas de nouveau .blend", notes)
-        self.assertNotIn("Heros.gltf Heros.blend", notes)  # le script connaît déjà ces noms
-        self.assertEqual((folder / "Heros.blend").read_bytes(), b"ancien")
-
-    def test_selection_zip_contains_only_the_new_blend_on_success(self) -> None:
-        folder = self.tmp / "work" / "export" / "Heros"
-        folder.mkdir(parents=True)
-        (folder / "Heros.blend").write_bytes(b"ancien")
-        (folder / "autre.blend").write_bytes(b"autre ancien")
-        (folder / "Heros.blend1").write_bytes(b"sauvegarde ancienne")
-        stub = _blender_stub(self, self.tmp,
-                             "import sys\nopen(sys.argv[-1], 'wb').write(b'BLENDER neuf')")
-        self.project.update_settings({"blender_path": str(stub)})
-        zipped = self.project.export_selection_blend(
-            [{"kind": "model", "rel": "Model/Heros.bfres"}])
-        with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
-            names = archive.namelist()
-            self.assertEqual(archive.read("Heros/Heros.blend"), b"BLENDER neuf")
-        self.assertNotIn("Heros/autre.blend", names)
-        self.assertNotIn("Heros/Heros.blend1", names)
-
-
 class EnsembleApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -483,13 +191,6 @@ class EnsembleApiTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(len(payload["ensembles"]), 1)
         self.assertEqual(payload["ensembles"][0]["textures"], 1)
-        self.assertIn("found", payload["blender"])
-
-    def test_blender_route_reports_the_state_and_the_note(self) -> None:
-        body, _ = self.server.api("GET", "/api/blender", {}, {})
-        state = json.loads(body)
-        self.assertIn("path", state)
-        self.assertTrue(state["note"])
 
     def test_preview_route_accepts_the_texture_switch(self) -> None:
         for tex in ("0", "1"):
@@ -500,37 +201,6 @@ class EnsembleApiTests(unittest.TestCase):
             self.assertEqual(kind, "image/png")
             self.assertTrue(body.startswith(b"\x89PNG"))
 
-    def test_blend_route_answers_with_a_recipe(self) -> None:
-        body, kind = self.server.api("POST", "/api/model/blend", {},
-                                     {"path": "Model/Heros.bfres"})
-        self.assertEqual(kind, "application/json")
-        payload = json.loads(body)
-        self.assertIn(payload["method"], {"script", "blender"})
-        self.assertTrue(payload["message"])
-        self.assertTrue(payload["script"])
-
-    def test_selection_route_can_ask_for_blend(self) -> None:
-        """Un seul ZIP pour toute la sélection, avec un dossier par modèle."""
-        body, kind = self.server.api(
-            "POST", "/api/export/selection", {},
-            {"items": [{"kind": "model", "rel": "Model/Heros.bfres"}], "blend": True})
-        self.assertEqual(kind, "application/zip")
-        with zipfile.ZipFile(io.BytesIO(body)) as archive:
-            names = archive.namelist()
-            notes = archive.read("LIRE-MOI.txt").decode("utf-8")
-        self.assertTrue(any(name.endswith("creer_blend.py") for name in names))
-        # le glTF et son .bin voyagent avec le script : le ZIP reste utilisable
-        self.assertTrue(any(name.endswith("Heros.gltf") for name in names))
-        self.assertTrue(any(name.endswith("Heros.bin") for name in names))
-        self.assertIn("Heros", notes)
-        self.assertIn("modèle(s)", notes)
-
-    def test_blend_route_refuses_an_empty_selection(self) -> None:
-        from hookycreator.project import ProjectError
-
-        with self.assertRaises(ProjectError):
-            self.server.api("POST", "/api/export/selection", {},
-                            {"items": [], "blend": True})
 
 
 if __name__ == "__main__":

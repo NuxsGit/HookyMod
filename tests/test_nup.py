@@ -197,11 +197,11 @@ class IdentifyTests(unittest.TestCase):
     def test_nup_magic(self):
         found = identify.sniff(synth_nup.make_sample_nup(), "game.nup")
         self.assertEqual(found[0].kind, "nup")
-        self.assertIn("Switch 2", found[0].label + found[0].family)
+        self.assertIn("NUP", found[0].label + found[0].family)
 
-    def test_engine_is_switch2(self):
+    def test_engine_is_nup(self):
         engine, _ = identify.guess_engine({"nup": 1}, {".nup"})
-        self.assertIn("Switch 2", engine)
+        self.assertEqual(engine, "NUP / NSO2")
 
 
 class CliTests(unittest.TestCase):

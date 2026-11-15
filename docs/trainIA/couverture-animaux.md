@@ -1,4 +1,9 @@
-# Couverture de la famille « animaux »
+# Couverture historique de la famille « animaux »
+
+> Archive de l'ancien lecteur heuristique : ces chiffres et jugements visuels
+> datent d'une version antérieure et ne valident pas le lecteur structuré actuel.
+> Les aperçus de référence ne sont pas conservés ici. Voir les
+> [limites actuelles](../HOOKYCREATOR.md) et les [mesures récentes](../PERFORMANCE.md).
 
 26 modèles `Animal_*` récupérés depuis `Model/`, plus les dictionnaires zstd
 du jeu. Rapport produit par :
@@ -30,7 +35,7 @@ hors dépôt (`previews/`), puisqu'ils sont rendus à partir d'assets du jeu.
 | `Animal_Horse_General` | 137 | 57874 |
 | `Animal_Horse_Ganondorf` | 81 | 35051 |
 | `Animal_Cow` | 87 | 32820 |
-| `Animal_Horse_Zelda` | 38 | 16064 |
+| Animal 6 (nom neutralisé) | 38 | 16064 |
 | `Animal_Shark` | 24 | 9943 |
 | `Animal_Frog` | 33 | 9746 |
 | `Animal_Fish_Loach` | 20 | 7300 |

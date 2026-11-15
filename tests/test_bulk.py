@@ -16,7 +16,37 @@ sys.path.insert(0, str(ROOT / "tests"))
 import synth  # noqa: E402
 from hookycreator import bulk  # noqa: E402
 from hookycreator.project import Project, ProjectError  # noqa: E402
+from hookymod import bntx  # noqa: E402
 from tests import test_bfres_v10 as v10_fixtures  # noqa: E402
+
+
+def _multi_texture_bntx(names: list[str]) -> bytes:
+    """BNTX synthétique avec plusieurs BRTI partageant les mêmes pixels."""
+    raw = bytearray(synth.make_bntx(4, 4, synth.rgba8_pixels(4, 4)))
+    template = bytes(raw[0x300:0x3A0])
+    struct.pack_into("<I", raw, 0x24, len(names))
+    struct.pack_into("<I", raw, 0x110, len(names) + 1)
+    cursor = 0x118
+    positions = []
+    for text in ["source.bntx", *names]:
+        encoded = text.encode("utf-8")
+        positions.append(cursor)
+        struct.pack_into("<H", raw, cursor, len(encoded))
+        raw[cursor + 2:cursor + 2 + len(encoded)] = encoded
+        raw[cursor + 2 + len(encoded)] = 0
+        cursor += 2 + len(encoded) + 1
+        cursor += cursor % 2
+    assert cursor < 0x200
+    struct.pack_into("<I", raw, 0x10, positions[0])
+    for index, name_pos in enumerate(positions[1:]):
+        brti = 0x300 if index == 0 else 0x900 + (index - 1) * 0x100
+        if len(raw) < brti + len(template):
+            raw.extend(bytes(brti + len(template) - len(raw)))
+        raw[brti:brti + len(template)] = template
+        struct.pack_into("<Q", raw, brti + 0x5C, name_pos)
+        struct.pack_into("<Q", raw, 0x200 + index * 8, brti)
+    struct.pack_into("<I", raw, 0x1C, len(raw))
+    return bytes(raw)
 
 
 def _project() -> Project:
@@ -86,6 +116,9 @@ class DiscoveryTests(unittest.TestCase):
             self.assertTrue(any((Path(temp) / "out" / "models").rglob("*.gltf")))
             self.assertTrue(any((Path(temp) / "out" / "models").rglob("*.obj")))
             self.assertTrue(any((Path(temp) / "out" / "textures").rglob("*.png")))
+            model_item = next(item for item in report["items"] if item["kind"] == "model")
+            self.assertTrue(any("textures non associées" in note for note in model_item["notes"]))
+            self.assertTrue((Path(temp) / "out" / model_item["folder"] / "RAPPORT_MODELE.txt").is_file())
 
             # Ancien séparateur « / » entre deux archives : le garder lisible.
             (root / "Legacy.pack").write_bytes(synth.make_sarc([("Inner.pack", inner)]))
@@ -155,6 +188,191 @@ class DiscoveryTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
+    def test_flat_model_uses_per_material_maps_and_keeps_warnings(self):
+        from tests.test_bfres_v10_struct import structured_model
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            (root / "Model").mkdir(parents=True)
+            (root / "Tex").mkdir()
+            (root / "Model/Objet.bfres").write_bytes(structured_model())
+            for name in ("Tex_A_Alb", "Tex_A_Nrm", "Tex_B_Alb", "Tex_B_Rgh"):
+                (root / "Tex" / f"{name}.bntx").write_bytes(
+                    synth.make_bntx(4, 4, synth.rgba8_pixels(4, 4)))
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            out = Path(temp) / "out"
+            report = bulk.export_all(project, out, kinds=("model",))
+            self.assertEqual(report["ok"], 1)
+            entry = report["items"][0]
+            folder = out / entry["folder"]
+            doc = json.loads(next(folder.glob("*.gltf")).read_text())
+            mats = {m["name"]: m for m in doc["materials"]}
+            def name(material):
+                tex = material["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+                return doc["images"][doc["textures"][tex]["source"]]["uri"]
+            self.assertEqual(name(mats["Mat_A"]), "Tex_A_Alb.png")
+            self.assertEqual(name(mats["Mat_B"]), "Tex_B_Alb.png")
+            self.assertIn("RAPPORT_MODELE.txt", entry["files"])
+            self.assertIn("LOD 0", (folder / "RAPPORT_MODELE.txt").read_text())
+            self.assertTrue(any("LOD 0" in note for note in entry["notes"]))
+
+    def test_slug_cannot_escape_output_directory(self):
+        for name in ("", ".", ".."):
+            self.assertEqual(bulk._slug(name), "asset")
+        self.assertNotIn("/", bulk._slug("../../image"))
+        self.assertNotIn("\\", bulk._slug("..\\image"))
+        self.assertTrue(bulk._slug("CON").startswith("_"))
+        self.assertTrue(bulk._slug("lpt1.dat").startswith("_"))
+        self.assertLessEqual(len(bulk._slug("界" * 100).encode("utf-8")), 180)
+
+    def test_sanitized_and_casefolded_asset_names_never_share_a_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            (root / "A").mkdir(parents=True)
+            # Les deux chemins deviennent A_X.bntx / A_X.bfres après nettoyage.
+            for relative in ("A/X.bntx", "A_X.bntx"):
+                (root / relative).write_bytes(synth.make_bntx(4, 4, synth.rgba8_pixels(4, 4)))
+            for relative in ("A/X.bfres", "A_X.bfres"):
+                (root / relative).write_bytes(synth.make_bfres())
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            out = Path(temp) / "out"
+            report = bulk.export_all(project, out)
+            self.assertEqual((report["ok"], report["error"]), (4, 0), report)
+            for kind in ("texture", "model"):
+                entries = [entry for entry in report["items"] if entry["kind"] == kind]
+                self.assertEqual(len(entries), 2)
+                self.assertEqual(len({entry["folder"].casefold() for entry in entries}), 2)
+                self.assertTrue(all((out / entry["folder"]).is_dir() for entry in entries))
+
+    def test_colliding_exports_remain_owned_after_inventory_changes_and_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            (root / "A").mkdir(parents=True)
+            for relative in ("A/X.bntx", "A_X.bntx"):
+                (root / relative).write_bytes(synth.make_bntx(4, 4, synth.rgba8_pixels(4, 4)))
+            for relative in ("A/X.bfres", "A_X.bfres"):
+                (root / relative).write_bytes(synth.make_bfres())
+            work, out = Path(temp) / "work", Path(temp) / "out"
+            project = Project(root, work)
+            project.scan()
+            first = bulk.export_all(project, out)
+            by_label = {item["label"]: item for item in first["items"]}
+            self.assertEqual(first["ok"], 4, first)
+            retained = []
+            for label in ("A/X.bntx", "A/X.bfres"):
+                folder = out / by_label[label]["folder"]
+                output = next(folder.glob("*.png" if label.endswith(".bntx") else "*.gltf"))
+                output.write_bytes(b"ancien export a conserver")
+                retained.append(output)
+                (root / label).unlink()
+            project.scan()
+            second = bulk.export_all(project, out)
+            for item in second["items"]:
+                self.assertEqual(item["folder"], by_label[item["label"]]["folder"])
+            for path in retained:
+                self.assertEqual(path.read_bytes(), b"ancien export a conserver")
+            reopened = Project(root, work)
+            reopened.scan()
+            third = bulk.export_all(reopened, out)
+            for item in third["items"]:
+                self.assertEqual(item["folder"], by_label[item["label"]]["folder"])
+            for path in retained:
+                self.assertEqual(path.read_bytes(), b"ancien export a conserver")
+
+    def test_unowned_bulk_folder_and_other_project_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            root.mkdir()
+            (root / "X.bfres").write_bytes(synth.make_bfres())
+            out = Path(temp) / "out"
+            legacy = out / "models" / "X.bfres"
+            legacy.mkdir(parents=True)
+            previous = legacy / "X.bfres.gltf"
+            previous.write_bytes(b"fichier personnel")
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            first = bulk.export_all(project, out)
+            self.assertEqual(first["ok"], 1, first)
+            folder = out / first["items"][0]["folder"]
+            self.assertNotEqual(folder, legacy)
+            self.assertEqual(previous.read_bytes(), b"fichier personnel")
+            prior = next(folder.glob("*.gltf"))
+            prior.write_bytes(b"export du premier projet")
+            other_root = Path(temp) / "other"
+            other_root.mkdir()
+            (other_root / "X.bfres").write_bytes(synth.make_bfres())
+            other = Project(other_root, Path(temp) / "other-work")
+            other.scan()
+            second = bulk.export_all(other, out)
+            self.assertEqual(second["ok"], 1, second)
+            self.assertNotEqual(second["items"][0]["folder"].casefold(),
+                                first["items"][0]["folder"].casefold())
+            self.assertEqual(prior.read_bytes(), b"export du premier projet")
+            self.assertEqual(previous.read_bytes(), b"fichier personnel")
+
+    def test_bulk_replaces_symlinks_without_writing_through_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            root.mkdir()
+            model = root / "X.bfres"
+            model.write_bytes(synth.make_bfres())
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            out = Path(temp) / "out"
+            first = bulk.export_all(project, out, kinds=("model",))
+            self.assertEqual(first["ok"], 1, first)
+            folder = out / first["items"][0]["folder"]
+            gltf = next(folder.glob("*.gltf"))
+            victim = Path(temp) / "important.txt"
+            victim.write_bytes(b"ne pas modifier")
+            gltf.unlink()
+            report_path = out / "rapport.json"
+            report_path.unlink()
+            try:
+                gltf.symlink_to(victim)
+                report_path.symlink_to(victim)
+            except (OSError, NotImplementedError):
+                self.skipTest("liens symboliques indisponibles")
+            second = bulk.export_all(project, out, kinds=("model",))
+            self.assertEqual(second["ok"], 1, second)
+            self.assertEqual(victim.read_bytes(), b"ne pas modifier")
+            self.assertFalse(gltf.is_symlink())
+            self.assertFalse(report_path.is_symlink())
+            self.assertEqual(json.loads(gltf.read_text())["asset"]["version"], "2.0")
+
+    def test_internal_texture_names_are_safe_and_unique(self):
+        names = ["../../outside", "..\\..\\outside", "meme/nom", "meme\\nom",
+                 ".", "..", "CON", "lpt1"]
+        raw = _multi_texture_bntx(names)
+        self.assertEqual([texture.name for texture in bntx.BntxFile.parse(raw).textures], names)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            root.mkdir()
+            original = root / "multi.bntx"
+            original.write_bytes(raw)
+            project = Project(root, Path(temp) / "work")
+            project.scan()
+            out = Path(temp) / "out"
+            report = bulk.export_all(project, out, kinds=("texture",))
+            self.assertEqual((report["ok"], report["error"], report["textures"]), (1, 0, len(names)), report)
+            entry = report["items"][0]
+            folder = out / entry["folder"]
+            self.assertEqual(len(entry["files"]), len(names))
+            self.assertEqual(len({name.casefold() for name in entry["files"]}), len(names))
+            for name in entry["files"]:
+                self.assertNotIn("/", name)
+                self.assertNotIn("\\", name)
+                self.assertTrue((folder / name).is_file())
+                self.assertEqual((folder / name).resolve().parent, folder.resolve())
+            self.assertIn("meme_nom.png", entry["files"])
+            self.assertIn("meme_nom--2.png", entry["files"])
+            self.assertIn("_CON.png", entry["files"])
+            self.assertIn("_lpt1.png", entry["files"])
+            self.assertFalse((Path(temp) / "outside.png").exists())
+            self.assertEqual(original.read_bytes(), raw)
+
     def test_report_counts_and_files(self):
         project = _project()
         out = project.root / "export"

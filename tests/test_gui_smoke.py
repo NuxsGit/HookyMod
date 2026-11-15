@@ -315,7 +315,11 @@ class AppLogicTests(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(folder, ignore_errors=True))
         romfs = folder / "romfs"
         (romfs / "Model").mkdir(parents=True)
-        (romfs / "Model" / "test.bfres").write_bytes(synth.make_bfres())
+        # Seul le layout v9 simple est réécrit ; 10.x reste en lecture seule.
+        import struct
+        data = bytearray(synth.make_bfres())
+        struct.pack_into("<I", data, 8, 0x00090002)
+        (romfs / "Model" / "test.bfres").write_bytes(data)
         project = folder / "projet"
         mods = folder / "mods"
         mods.mkdir()
@@ -355,7 +359,7 @@ class AppLogicTests(unittest.TestCase):
         self.app.scan_folder()
         report = received[-1]
         self.assertEqual(report["file_count"], 2)
-        self.assertIn("Nintendo", report["engine"])
+        self.assertEqual(report["engine"], "SARC / BFRES / BNTX")
         # la fenêtre de rapport se construit sans erreur
         app_module.App._show_scan_report(self.app, report)
 
@@ -745,6 +749,30 @@ class ModelViewerFlowTests(unittest.TestCase):
         self.assertTrue(meshes)
         self.assertTrue(all(m.faces for m in meshes))
         self.assertIn("modele.bfres", title)
+
+    def test_v10_prebuilt_meshes_view_and_unbudgeted_export(self):
+        import json
+        from tests.test_bfres_v10_struct import structured_model
+
+        self._open_top("modele.bfres", structured_model())
+        self.app.MESH_BUDGET = 1  # seul le premier maillage tient dans l'aperçu
+        with self.assertRaisesRegex(app_module.HookyError, "LOD 0"):
+            self.app._meshes_for_view(lod=1)
+        self.app.view_model()
+        self.assertEqual(len(self.opened[0][0]), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            old_dialog = app_module.filedialog.askdirectory
+            app_module.filedialog.askdirectory = lambda *args, **kwargs: tmp
+            try:
+                self.app.export_model_bundle()
+            finally:
+                app_module.filedialog.askdirectory = old_dialog
+            doc = json.loads((Path(tmp) / "modele.gltf").read_text())
+            self.assertEqual(len(doc["meshes"]), 2)
+            self.assertEqual({m["name"] for m in doc["materials"]}, {"Mat_A", "Mat_B"})
+            note = (Path(tmp) / "RAPPORT_MODELE.txt").read_text()
+            self.assertIn("Textures non associées", note)
+            self.assertIn("LOD 0", note)
 
     def test_view_model_on_non_model_reports_cleanly(self):
         self._open_top("notes.txt", b"bonjour")

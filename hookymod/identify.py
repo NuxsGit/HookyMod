@@ -32,37 +32,37 @@ class Magic:
 
 
 MAGICS: tuple[Magic, ...] = (
-    # ---------------- archives Nintendo / Grezzo
-    Magic("nup", "paquet NUP (dump Nintendo Switch 2)", "Nintendo Switch 2", b"NUP\x01"),
-    Magic("nso2", "exécutable NSO2 (Switch 2)", "Nintendo Switch 2", b"NSO0"),
-    Magic("sarc", "archive SARC (Nintendo)", "Nintendo", b"SARC"),
-    Magic("rarc", "archive RARC (GameCube / Wii)", "Nintendo", b"RARC"),
-    Magic("u8", "archive U8 (Wii)", "Nintendo", b"U\xaa8-"),
-    Magic("zar", "archive ZAR", "Nintendo", b"ZAR\x01",
-          note="archive Grezzo (Ocarina of Time 3D / Majora's Mask 3D)"),
-    Magic("yaz0", "compression Yaz0", "Nintendo", b"Yaz0"),
-    Magic("yaz1", "compression Yaz1", "Nintendo", b"Yaz1"),
-    Magic("narc", "archive NARC (Nintendo DS)", "Nintendo", b"NARC"),
-    # ---------------- formats Switch (NX)
+    # ---------------- archives et formats de ressources
+    Magic("nup", "paquet NUP", "Formats NUP / NSO2", b"NUP\x01"),
+    Magic("nso2", "exécutable NSO2", "Formats NUP / NSO2", b"NSO0"),
+    Magic("sarc", "archive SARC", "Formats de ressources", b"SARC"),
+    Magic("rarc", "archive RARC", "Formats de ressources", b"RARC"),
+    Magic("u8", "archive U8", "Formats de ressources", b"U\xaa8-"),
+    Magic("zar", "archive ZAR", "Formats de ressources", b"ZAR\x01",
+          note="archive ZAR pour ressources portables"),
+    Magic("yaz0", "compression Yaz0", "Formats de ressources", b"Yaz0"),
+    Magic("yaz1", "compression Yaz1", "Formats de ressources", b"Yaz1"),
+    Magic("narc", "archive NARC", "Formats de ressources", b"NARC"),
+    # ---------------- formats complémentaires
     Magic("zstd", "compression zstd (.zs / .zs.zst)", "zstd", b"\x28\xb5\x2f\xfd"),
-    Magic("bntx", "textures BNTX", "Nintendo", b"BNTX"),
-    Magic("bfres", "modèle BFRES", "Nintendo", b"FRES"),
-    Magic("bnsh", "shader BNSH", "Nintendo", b"BNSH"),
-    Magic("bnshd", "shader BNSH (précompilé)", "Nintendo", b"BNSHD"),
-    Magic("aamp", "paramètres AAMP", "Nintendo", b"AAMP"),
-    Magic("byml", "données BYML (binaire YAML)", "Nintendo", b"BYML"),
-    Magic("byml_text", "BYML au format texte", "Nintendo", b"YAML"),
-    Magic("beln", "table de messages BELN", "Nintendo", b"BELN"),
-    Magic("bwav", "audio BWAV (Nintendo)", "Nintendo", b"BWAV"),
-    Magic("bars", "banque audio BARS (Nintendo)", "Nintendo", b"BARS"),
-    Magic("bfstm", "flux audio BFSTM (Nintendo)", "Nintendo", b"FSTM"),
-    Magic("bfsar", "banque audio BFSAR (Nintendo)", "Nintendo", b"FSAR"),
-    # ---------------- 3DS (Grezzo)
-    Magic("cmb", "modèle CMB (3DS)", "Nintendo 3DS", b"CMB "),
-    Magic("ctex", "texture CTEX (3DS)", "Nintendo 3DS", b"CTEX"),
-    Magic("bch", "modèle BCH (3DS)", "Nintendo 3DS", b"BCH\x00"),
-    Magic("cseq", "séquence CSEQ (3DS)", "Nintendo 3DS", b"CSEQ"),
-    Magic("cbnk", "banque CWAV/CBNK (3DS)", "Nintendo 3DS", b"CBNK"),
+    Magic("bntx", "textures BNTX", "Formats de ressources", b"BNTX"),
+    Magic("bfres", "modèle BFRES", "Formats de ressources", b"FRES"),
+    Magic("bnsh", "shader BNSH", "Formats de ressources", b"BNSH"),
+    Magic("bnshd", "shader BNSH (précompilé)", "Formats de ressources", b"BNSHD"),
+    Magic("aamp", "paramètres AAMP", "Formats de ressources", b"AAMP"),
+    Magic("byml", "données BYML (binaire YAML)", "Formats de ressources", b"BYML"),
+    Magic("byml_text", "BYML au format texte", "Formats de ressources", b"YAML"),
+    Magic("beln", "table de messages BELN", "Formats de ressources", b"BELN"),
+    Magic("bwav", "audio BWAV", "Formats de ressources", b"BWAV"),
+    Magic("bars", "banque audio BARS", "Formats de ressources", b"BARS"),
+    Magic("bfstm", "flux audio BFSTM", "Formats de ressources", b"FSTM"),
+    Magic("bfsar", "banque audio BFSAR", "Formats de ressources", b"FSAR"),
+    # ---------------- formats portables
+    Magic("cmb", "modèle CMB", "Formats portables", b"CMB "),
+    Magic("ctex", "texture CTEX", "Formats portables", b"CTEX"),
+    Magic("bch", "modèle BCH", "Formats portables", b"BCH\x00"),
+    Magic("cseq", "séquence CSEQ", "Formats portables", b"CSEQ"),
+    Magic("cbnk", "banque CWAV/CBNK", "Formats portables", b"CBNK"),
     # ---------------- Unreal Engine
     Magic("uasset", "asset Unreal Engine (.uasset/.umap)", "Unreal",
           b"\x9e\x2a\x83\xc1", note="version du package dans l'en-tête"),
@@ -96,7 +96,7 @@ MAGICS: tuple[Magic, ...] = (
 
 # Hints donnés par l'extension quand aucun magic ne correspond.
 EXTENSIONS: dict[str, tuple[str, str]] = {
-    ".nup": ("nup", "paquet Switch 2 (romfs + exefs)"),
+    ".nup": ("nup", "paquet NUP (romfs + exefs)"),
     ".nso": ("nso2", "exécutable NSO"),
     ".zs": ("zstd", "compression zstd"),
     ".zst": ("zstd", "compression zstd"),
@@ -110,11 +110,11 @@ EXTENSIONS: dict[str, tuple[str, str]] = {
     ".byml": ("byml", "données BYML"),
     ".bgyml": ("byml", "données BYML"),
     ".aamp": ("aamp", "paramètres AAMP"),
-    ".zar": ("zar", "archive ZAR (Grezzo)"),
-    ".cmb": ("cmb", "modèle CMB (3DS)"),
-    ".ctex": ("ctex", "texture CTEX (3DS)"),
-    ".bch": ("bch", "modèle BCH (3DS)"),
-    ".bcres": ("bch", "modèle BCH (3DS)"),
+    ".zar": ("zar", "archive ZAR"),
+    ".cmb": ("cmb", "modèle CMB"),
+    ".ctex": ("ctex", "texture CTEX"),
+    ".bch": ("bch", "modèle BCH"),
+    ".bcres": ("bch", "modèle BCH"),
     ".uasset": ("uasset", "asset Unreal Engine"),
     ".umap": ("uasset", "niveau Unreal Engine"),
     ".pak": ("ue_pak", "archive Unreal"),
@@ -128,8 +128,8 @@ EXTENSIONS: dict[str, tuple[str, str]] = {
     ".png": ("png", "image PNG"),
     ".bfstm": ("bfstm", "audio BFSTM"),
     ".bfsar": ("bfsar", "banque audio BFSAR"),
-    ".bwav": ("bwav", "audio BWAV Nintendo"),
-    ".bwav.zs": ("bwav", "audio BWAV Nintendo compressé"),
+    ".bwav": ("bwav", "audio BWAV"),
+    ".bwav.zs": ("bwav", "audio BWAV compressé"),
     ".bars": ("bars", "banque audio BARS"),
     ".bars.zs": ("bars", "banque audio BARS compressée"),
     ".bar": ("bar", "archive BAR"),
@@ -263,29 +263,27 @@ def sniff_file(path: Path, head: int = 4096) -> list[Found]:
 
 # Poids des formats dans la détection du moteur (nombre de fichiers vu).
 ENGINE_WEIGHTS: dict[str, dict[str, int]] = {
-    "Nintendo (Switch 2)": {"nup": 5, "nso2": 2, "sarc": 2, "bfres": 2, "bntx": 2,
+    "NUP / NSO2": {"nup": 5, "nso2": 2, "sarc": 2, "bfres": 2, "bntx": 2,
                             "zstd": 1, "byml": 1, "aamp": 1, "bnsh": 1},
     "Unreal Engine": {"uasset": 4, "iostore": 4, "ue_pak": 2},
     "Unity": {"unityfs": 4, "unity_asset": 3, "unityweb": 3, "unityraw": 2},
     "Godot": {"godot": 5},
-    "Grezzo (3DS : Ocarina of Time 3D / Majora's Mask 3D)": {
+    "ZAR / CMB / CTEX": {
         "zar": 3, "cmb": 3, "ctex": 2, "bch": 2},
-    "Nintendo (Switch / NX)": {"sarc": 3, "bfres": 3, "bntx": 3, "bnsh": 2,
+    "SARC / BFRES / BNTX": {"sarc": 3, "bfres": 3, "bntx": 3, "bnsh": 2,
                                "byml": 2, "aamp": 1, "zstd": 1},
-    "Nintendo (GameCube / Wii)": {"rarc": 3, "u8": 3, "yaz0": 2},
+    "RARC / U8 / Yaz0": {"rarc": 3, "u8": 3, "yaz0": 2},
 }
 
 ENGINE_REASONS = {
-    "Nintendo (Switch 2)": "paquet .nup / NSO2 : dump Switch 2, romfs + exefs "
-                           "(Hookshot lit directement ce format)",
+    "NUP / NSO2": "paquet .nup / NSO2 : romfs + exefs",
     "Unreal Engine": "conteneurs Unreal (.uasset / .pak / IoStore) : les assets sont "
                      "dans des paquets binaires, pas dans un romfs",
     "Unity": "bundles UnityFS / SerializedFiles : les assets sont dans des .assets",
     "Godot": "pack .pck détecté",
-    "Grezzo (3DS : Ocarina of Time 3D / Majora's Mask 3D)": "archives .zar, modèles CMB, "
-                                                            "textures CTEX",
-    "Nintendo (Switch / NX)": "SARC + zstd + BFRES/BNTX : pipeline Nintendo classique",
-    "Nintendo (GameCube / Wii)": "RARC / U8 / Yaz0",
+    "ZAR / CMB / CTEX": "archives .zar, modèles CMB et textures CTEX",
+    "SARC / BFRES / BNTX": "SARC + zstd + BFRES/BNTX : famille de formats de ressources",
+    "RARC / U8 / Yaz0": "RARC / U8 / Yaz0",
 }
 
 

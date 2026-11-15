@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -110,17 +111,33 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(len(data), len(self.bntx_data) + 0)   # même taille (1 mip)
 
     @unittest.skipUnless(HAS_ZSTD, "module zstandard requis")
-    def test_edit_obj_produces_new_geometry(self):
+    def test_edited_v10_obj_is_refused_without_partial_output(self):
         self.unpack()
         obj = self.project / "pc" / "Model" / "test.bfres_m0_s0.obj"
         obj.write_text(obj.read_text().replace("v 0 0 0", "v 5 5 5", 1))
         result = translate.pack(self.project, self.root / "mods", mod_name="MonMod")
+        self.assertTrue(any("10.x" in error for error in result.errors), result.errors)
+        packed = self.root / "mods" / "MonMod" / "romfs" / "Model" / "test.bfres.zs"
+        self.assertFalse(packed.exists())
+
+    @unittest.skipUnless(HAS_ZSTD, "module zstandard requis")
+    def test_compatible_v9_obj_produces_new_geometry_in_output_only(self):
+        original = bytearray(self.bfres_data)
+        struct.pack_into("<I", original, 8, 0x00090002)
+        source = self.romfs / "Model" / "test.bfres.zs"
+        source.write_bytes(self.store.compress(bytes(original), self.dict_id))
+        source_bytes = source.read_bytes()
+        self.unpack()
+        obj = self.project / "pc" / "Model" / "test.bfres_m0_s0.obj"
+        obj.write_text("v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+        result = translate.pack(self.project, self.root / "mods", mod_name="MonMod")
         self.assertEqual(result.errors, [])
-        packed = (self.root / "mods" / "MonMod" / "romfs" / "Model" / "test.bfres.zs")
+        packed = self.root / "mods" / "MonMod" / "romfs" / "Model" / "test.bfres.zs"
         data = self.store.decompress(packed.read_bytes())
         mesh = bfres.BfresFile.parse(data).models[0].build_meshes(0)[0]
         self.assertEqual(mesh.positions[0], (5.0, 5.0, 5.0))
-        self.assertEqual(len(data), len(self.bfres_data))
+        self.assertEqual(len(data), len(original))
+        self.assertEqual(source.read_bytes(), source_bytes)
 
     @unittest.skipUnless(HAS_ZSTD, "module zstandard requis")
     def test_raw_edit_is_recompressed(self):

@@ -159,6 +159,10 @@ class DataDrivenTests(unittest.TestCase):
         self.assertAlmostEqual(hi[0], 1.0, places=5)
         self.assertTrue(report.uv)
         self.assertAlmostEqual(meshes[0].uvs[5][0], uvs[5][0], places=3)
+        # Le FVTX synthétique ne déclare que positions et UV ; le repli
+        # heuristique ne doit pas présenter des normales calculées comme lues.
+        self.assertIsNone(meshes[0].normals)
+        self.assertTrue(any("normales absentes" in note.lower() for note in report.warnings))
 
     def test_bfres_file_uses_v10_reader_with_a_model_dictionary(self):
         positions, uvs, triangles = self._grid()

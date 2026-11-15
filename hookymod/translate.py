@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import bfres as bfres_mod
-from . import bfres_import, bntx as bntx_mod, bntx_encode, restbl as restbl_mod
-from .mesh import export_obj, load_obj
+from . import bfres_import, bfres_safe, bntx as bntx_mod, bntx_encode, modelio, restbl as restbl_mod
+from .mesh import export_obj
 from .sarc import is_sarc
 from .util import FormatError, HookyError, human_size, safe_child, write_atomic
 from .zs import ZstdDicts, find_dict_files, guess_romfs_root, is_zstd
@@ -393,8 +393,13 @@ def pack(project: str | Path, output: str | Path, all_files: bool = False,
             result.skipped.append(entry.rel)
             continue
         try:
-            payload, already_encoded = _build_entry(proj, entry, dicts)
-        except (HookyError, FormatError, ValueError) as exc:
+            # Un asset inchangé est recopié tel quel : ne pas le réinjecter,
+            # notamment quand la géométrie d'origine est en lecture seule.
+            if not changed:
+                payload, already_encoded = proj.origin_path(entry).read_bytes(), True
+            else:
+                payload, already_encoded = _build_entry(proj, entry, dicts)
+        except (HookyError, FormatError, OSError, ValueError) as exc:
             result.errors.append(f"{entry.rel} : {exc}")
             continue
         if entry.compressed and not already_encoded:
@@ -446,8 +451,7 @@ def _build_entry(proj: Project, entry: Entry,
         return data, False
     if entry.kind == "bfres":
         template = dicts.decompress(original) if is_zstd(original) else original
-        meshes = [load_obj(pc.read_bytes())]
-        data, report = bfres_import.import_obj(template, meshes, entry.model, entry.shape)
+        data, report = obj_to_bfres(template, pc.read_bytes(), entry.model, entry.shape)
         entry.note = " · ".join(report.lines())
         return data, False
     raise HookyError(f"type inconnu : {entry.kind}")
@@ -483,50 +487,18 @@ def _update_table(romfs: Path, target_root: Path, sizes: dict[str, int],
             "dépassaient la réservation du jeu.")
 
 
-# --------------------------------------------------------------------------- Blender
-BLENDER_SCRIPT = """
-import bpy, sys
-out = sys.argv[-1]
-try:
-    bpy.ops.wm.obj_export(filepath=out, export_materials=False)
-except (AttributeError, RuntimeError, TypeError):
-    bpy.ops.export_scene.obj(filepath=out, use_materials=False)
-"""
-
-
-def blender_export_obj(blend: str | Path, obj: str | Path,
-                       blender: str | None = None) -> Path:
-    """Convertit un ``.blend`` en OBJ via Blender en ligne de commande.
-
-    C'est l'étape « blend → BFRES » : Blender exporte l'OBJ, puis ``pack``
-    réimporte la géométrie dans le BFRES du jeu (:mod:`hookymod.bfres_import`).
-    """
-    import shutil
-    import subprocess
-    blend, obj = Path(blend), Path(obj)
-    if not blend.exists():
-        raise HookyError(f"Fichier .blend introuvable : {blend}")
-    exe = blender or shutil.which("blender") or shutil.which("blender.exe") or ""
-    if not exe:
-        raise HookyError("Blender introuvable : indique son chemin (réglages ou "
-                         "--blender) ou ajoute-le au PATH.")
-    obj.parent.mkdir(parents=True, exist_ok=True)
-    command = [exe, "-b", str(blend), "--python-expr", BLENDER_SCRIPT, "--", str(obj)]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=600)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HookyError(f"Blender n'a pas pu être lancé : {exc}") from exc
-    if result.returncode != 0 or not obj.exists():
-        details = (result.stderr or result.stdout or "").strip().splitlines()[-4:]
-        raise HookyError("Blender n'a pas exporté l'OBJ.\n" + "\n".join(details))
-    return obj
-
-
+# --------------------------------------------------------------------------- retour OBJ borné
 def obj_to_bfres(bfres_bytes: bytes, obj_bytes: bytes, model: int = 0,
                  shape: int = 0) -> tuple[bytes, "bfres_import.ImportReport"]:
-    """Réimporte un OBJ édité dans un BFRES (géométrie seulement)."""
-    meshes = [load_obj(obj_bytes)]
-    return bfres_import.import_obj(bfres_bytes, meshes, model, shape)
+    """Réimporte un OBJ triangulé, avec les mêmes limites que l'atelier."""
+    if model != 0 or shape != 0:
+        raise HookyError("L'injection exige un seul modèle et une seule forme cible.")
+    source = modelio.read_model("modele.obj", obj_bytes)
+    if any(note.startswith("Polygones OBJ") for note in source.warnings):
+        raise HookyError("Triangule l'OBJ avant l'injection : les polygones ne sont pas acceptés.")
+    if source.material_slots > 1:
+        raise HookyError("Plusieurs matériaux source ne peuvent pas être conservés dans une seule forme cible.")
+    return bfres_safe.rewrite(bfres_bytes, source.meshes)
 
 
 # --------------------------------------------------------------------------- état

@@ -31,7 +31,6 @@ const context = vm.createContext({
   rescanProject: () => events.push(["scan"]),
   prepareThumbnails: () => events.push(["warm-start"]),
   stopPreparingThumbnails: () => events.push(["warm-stop"]),
-  refreshBlender: async () => events.push(["blender"]),
   api: (route, options) => new Promise((resolve, reject) => {
     calls.push({ route, patch: JSON.parse(options.body), resolve, reject });
   }),
@@ -48,7 +47,7 @@ async function waitForCall(count) {
 async function handlersAndBatching() {
   assert.equal(typeof node("#cache-clear").onclick, "function");
   assert.equal(typeof node("#scan-now").onclick, "function");
-  assert.equal(typeof node("#set-blender-path").onchange, "function");
+  assert.equal(typeof node("#set-density").onchange, "function");
   node("#cache-clear").onclick();
   node("#scan-now").onclick();
   assert.deepEqual(events.slice(0, 2), [["clear"], ["scan"]]);
@@ -74,14 +73,12 @@ async function handlersAndBatching() {
   calls[1].resolve({ settings: { vram_gb: 3, supersample: 1, preview_faces: 150000 } });
   assert.equal(await third, true);
 
-  // Le test de Blender ne doit se faire qu'après la sauvegarde du chemin.
-  const changed = node("#set-blender-path").onchange({ target: { value: "  C:/Blender/blender.exe  " } });
+  // Un changement depuis un vrai contrôle est également enregistré.
+  const changed = node("#set-density").onchange({ target: { value: "compact" } });
   await waitForCall(3);
-  assert.deepEqual(calls[2].patch, { blender_path: "C:/Blender/blender.exe" });
-  assert.equal(events.some((entry) => entry[0] === "blender"), false);
-  calls[2].resolve({ settings: { ...state.settings, blender_path: "C:/Blender/blender.exe" } });
-  await changed;
-  assert.equal(events.filter((entry) => entry[0] === "blender").length, 1);
+  assert.deepEqual(calls[2].patch, { density: "compact" });
+  calls[2].resolve({ settings: { ...state.settings, density: "compact" } });
+  assert.equal(await changed, true);
 
   // Une erreur est signalée et ne bloque pas les prochaines sauvegardes.
   const bad = vm.runInContext("saveSettings({vram_gb: 9})", context);

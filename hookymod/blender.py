@@ -41,7 +41,8 @@ OBJ (plus simple, mêmes PNG à côté) :
   Fichier ▸ Importer ▸ Wavefront (.obj) → choisir {obj}
   puis, si Blender demande : Forward = -Z, Up = Y (réglage par défaut).
 
-Toutes les cartes du modèle sont dans ce dossier, en PNG, une par rôle :
+Les cartes reconnues et disponibles peuvent être exportées en PNG. Leurs
+rôles sont déduits des noms et doivent être vérifiés :
   _Alb  → Base Color          (sRGB)
   _Nrm  → Normal Map          (Non-Color, nœud Normal Map)
   _Rgh  → Roughness           (Non-Color)
@@ -51,14 +52,14 @@ Toutes les cartes du modèle sont dans ce dossier, en PNG, une par rôle :
   _Spc, _Msk → pas d'équivalent glTF, à régler à la main
   *_MetalRough.png → emballage glTF : G = rugosité, B = métal
 
-Le .gltf porte baseColor, normal, metallicRoughness, occlusion et emissive :
-c'est le format à préférer. L'OBJ ne connaît que la couleur (map_Kd) et la
-normale (norm) ; pour le reste, lance assembler_shaders.py (onglet Scripting ▸
-Open ▸ Run Script) : il branche chaque carte sur le bon nœud du Principled BSDF.
-TEXTURES.md, dans ce dossier, donne le tableau complet fichier → entrée.
-
-Les noms de matériaux viennent du modèle, ce qui permet de retrouver à quoi
-correspond chaque partie.
+Le glTF peut relier baseColor, normal, metallicRoughness, occlusion et
+emissive si l'association est connue. Le MTL référence la couleur (map_Kd) et
+la normale via map_Bump : Blender l'importe comme carte de normales, mais
+certains logiciels peuvent l'interpréter comme relief. Vérifier le branchement ;
+les autres cartes sont à raccorder manuellement. Les cartes manquantes ou
+ambiguës ne sont pas reliées arbitrairement. Consulter TEXTURES.md
+et RAPPORT_MODELE.txt s'ils sont présents, ainsi que le rapport de l'application.
+Les noms et matériaux non reconnus peuvent être approximatifs.
 
 Orientation des UV (V) : chaque format suit sa spécification, donc les deux
 fichiers ne portent pas le même V — c'est normal, ne « corrige » pas l'un avec
@@ -70,8 +71,8 @@ Si une texture semble à l'envers dans Blender : ouvre « Vérifier les UV » da
 HookyCreator (le maillage tracé sur l'atlas montre tout de suite l'orientation),
 plutôt que de retourner l'image dans un éditeur.
 
-Rien n'est trié ni fusionné : un objet Blender par maillage, comme dans le
-fichier d'origine.
+L'import produit un objet par maillage exporté. Des parties ou attributs du
+fichier d'origine peuvent manquer selon la version et la méthode de décodage.
 """
 
 
@@ -157,7 +158,8 @@ class _Buffer:
 def _write_gltf(meshes: list[MeshData], path: Path,
                 textures: dict[str, str] | None = None,
                 scale: float = 1.0,
-                maps: dict[str, str] | None = None) -> Path:
+                maps: dict[str, str] | None = None,
+                material_maps: dict[str, dict[str, str]] | None = None) -> Path:
     """``textures`` : albédo par matériau ; ``maps`` : {rôle: fichier} du modèle.
 
     Les rôles reconnus par glTF : ``albedo`` (baseColor), ``normal``,
@@ -216,8 +218,27 @@ def _write_gltf(meshes: list[MeshData], path: Path,
             gl_textures.append({"source": len(images) - 1, "sampler": 0})
         map_index[role] = [image["uri"] for image in images].index(name)
 
+    # La voie par matériau ne retombe jamais sur la première carte d'un autre
+    # matériau. Les images sont enregistrées une seule fois, même partagées.
+    per_material: dict[str, dict[str, int]] = {}
+    if material_maps is not None:
+        for material, roles in material_maps.items():
+            chosen: dict[str, int] = {}
+            for role, source in roles.items():
+                if role not in ("albedo", "normal", "metalrough", "occlusion", "emissive"):
+                    continue
+                name = Path(source).name
+                if not (path.parent / name).is_file():
+                    continue
+                if name not in copied:
+                    copied[name] = name
+                    images.append({"uri": name})
+                    gl_textures.append({"source": len(images) - 1, "sampler": 0})
+                chosen[role] = next(i for i, image in enumerate(images) if image["uri"] == name)
+            per_material[material] = chosen
+
     single_albedo = None
-    if len({str(path) for path in textures.values()}) == 1:
+    if material_maps is None and len({str(path) for path in textures.values()}) == 1:
         single_albedo = next(iter(textures.values()))
 
     def material_for(name: str, albedo: str | None) -> int:
@@ -233,28 +254,31 @@ def _write_gltf(meshes: list[MeshData], path: Path,
                 "roughnessFactor": 0.8,
             },
         }
-        if albedo is None:
-            albedo = (textures.get(key) or textures.get(_base_name(key))
-                      or single_albedo)
-        if albedo and Path(albedo).name in copied:
-            texture_name = Path(albedo).name
-            for index, image in enumerate(images):
-                if image["uri"] == texture_name:
-                    entry["pbrMetallicRoughness"]["baseColorTexture"] = {"index": index}
-                    break
-        if "metalrough" in map_index:
+        chosen = per_material.get(key, {}) if material_maps is not None else map_index
+        if material_maps is not None and "albedo" in chosen:
+            entry["pbrMetallicRoughness"]["baseColorTexture"] = {"index": chosen["albedo"]}
+        elif material_maps is None:
+            if albedo is None:
+                albedo = textures.get(key) or textures.get(_base_name(key)) or single_albedo
+            if albedo and Path(albedo).name in copied:
+                texture_name = Path(albedo).name
+                for index, image in enumerate(images):
+                    if image["uri"] == texture_name:
+                        entry["pbrMetallicRoughness"]["baseColorTexture"] = {"index": index}
+                        break
+        if "metalrough" in chosen:
             # les facteurs multiplient la texture : 1.0 = « c'est la carte qui
             # décide », sinon Blender assombrit ou rend mat malgré l'image
             entry["pbrMetallicRoughness"]["metallicRoughnessTexture"] = {
-                "index": map_index["metalrough"]}
+                "index": chosen["metalrough"]}
             entry["pbrMetallicRoughness"]["metallicFactor"] = 1.0
             entry["pbrMetallicRoughness"]["roughnessFactor"] = 1.0
-        if "normal" in map_index:
-            entry["normalTexture"] = {"index": map_index["normal"], "scale": 1.0}
-        if "occlusion" in map_index:
-            entry["occlusionTexture"] = {"index": map_index["occlusion"], "strength": 1.0}
-        if "emissive" in map_index:
-            entry["emissiveTexture"] = {"index": map_index["emissive"]}
+        if "normal" in chosen:
+            entry["normalTexture"] = {"index": chosen["normal"], "scale": 1.0}
+        if "occlusion" in chosen:
+            entry["occlusionTexture"] = {"index": chosen["occlusion"], "strength": 1.0}
+        if "emissive" in chosen:
+            entry["emissiveTexture"] = {"index": chosen["emissive"]}
             entry["emissiveFactor"] = [1.0, 1.0, 1.0]
         materials.append(entry)
         material_index[key] = len(materials) - 1
@@ -364,7 +388,9 @@ def gltf_bin_path(path) -> Path:
 def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
                   textures: dict[str, str] | None = None,
                   scale: float = 1.0, formats: tuple[str, ...] = ("gltf", "obj"),
-                  maps: dict[str, str] | None = None) -> dict[str, Path]:
+                  maps: dict[str, str] | None = None,
+                  material_maps: dict[str, dict[str, str]] | None = None,
+                  warnings: list[str] | None = None) -> dict[str, Path]:
     """Écrit un dossier prêt pour Blender et renvoie les fichiers créés.
 
     :param meshes: maillages à exporter (positions, faces, UV, normales).
@@ -380,18 +406,21 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
 
     if "gltf" in formats:
         gltf = _write_gltf(meshes, folder / f"{name}.gltf", textures, scale,
-                           maps=maps)
+                           maps=maps, material_maps=material_maps)
         written["gltf"] = gltf
         binary = gltf_bin_path(gltf)
         if binary.is_file():
             written["bin"] = binary
 
     if "obj" in formats:
-        written["obj"] = export_obj(
-            meshes, folder / f"{name}.obj", scale=scale,
-            albedo_map={material: Path(source).name
-                        for material, source in (textures or {}).items() if source},
-            normal_map=(maps or {}).get("normal", ""))
+        albedos = ({name: roles["albedo"] for name, roles in material_maps.items() if roles.get("albedo")}
+                   if material_maps is not None else
+                   {material: Path(source).name for material, source in (textures or {}).items() if source})
+        normals = ({name: roles["normal"] for name, roles in material_maps.items() if roles.get("normal")}
+                   if material_maps is not None else (maps or {}).get("normal", ""))
+        written["obj"] = export_obj(meshes, folder / f"{name}.obj", scale=scale,
+                                    albedo_map=albedos, normal_map=normals,
+                                    strict_materials=material_maps is not None)
 
     for material_name, source in (textures or {}).items():
         if source and Path(source).is_file():
@@ -405,6 +434,17 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
         gltf=f"{name}.gltf" if "gltf" in formats else "(non exporté)",
         obj=f"{name}.obj" if "obj" in formats else "(non exporté)",
     ).encode("utf-8"))
+    if warnings is not None:
+        # Le ZIP doit conserver les limites de décodage après téléchargement.
+        notes = list(warnings[:100])
+        if len(warnings) > 100:
+            notes.append(f"{len(warnings) - 100} remarque(s) supplémentaires omises.")
+        lines = ["Rapport de l'export du modèle", "",
+                 "Vérifier les matériaux, la géométrie et le résultat dans l'application cible.",
+                 "La réussite de l'export ne garantit pas la fidélité ni le fonctionnement en jeu.", ""]
+        lines += [f"- {note}" for note in notes] if notes else ["Aucune remarque particulière disponible."]
+        written["report"] = folder / "RAPPORT_MODELE.txt"
+        write_atomic(written["report"], ("\n".join(lines) + "\n").encode("utf-8"))
     return written
 
 
