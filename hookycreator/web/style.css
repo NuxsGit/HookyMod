@@ -1066,6 +1066,9 @@ input[type="range"]::-moz-range-thumb {
   gap: 8px;
   z-index: 90;
   max-width: 380px;
+  /* Les notifications ne contiennent pas de commandes : elles ne doivent
+     pas intercepter les boutons placés dessous. */
+  pointer-events: none;
 }
 .toast {
   background: var(--panel-3);
@@ -1127,7 +1130,11 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: var(--shadow);
   z-index: 70;
   font-size: 12px;
-  animation: toast-in 0.16s ease;
+  animation: selection-in 0.16s ease;
+}
+@keyframes selection-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translateX(-50%); }
 }
 .selection-bar[hidden] { display: none; }
 .selection-bar #selection-count { color: var(--accent); font-weight: 600; }

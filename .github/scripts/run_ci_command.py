@@ -28,8 +28,13 @@ def main() -> int:
             lines.append(line)
         result = process.wait()
     if result:
-        tail = "".join(lines)[-40000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        print(f"::error title=Échec de la commande::{tail}", flush=True)
+        # GitHub tronque les messages d'annotation à environ 4 096 caractères.
+        # Découper la fin préserve à la fois le contexte et le traceback final.
+        tail = "".join(lines)[-12000:]
+        chunks = [tail[i:i + 2500] for i in range(0, len(tail), 2500)] or [""]
+        for index, chunk in enumerate(chunks, 1):
+            escaped = chunk.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Échec de la commande {index}/{len(chunks)}::{escaped}", flush=True)
     return result
 
 

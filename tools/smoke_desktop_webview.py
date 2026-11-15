@@ -182,8 +182,20 @@ def run(application: Path) -> None:
                 # Le résultat persistant ne doit pas masquer la fermeture de la fiche.
                 driver.click('#inspector-close')
                 close_panels(driver)
-                # Le bouton de sélection est transparent jusqu'au survol.
+                # Le bouton de sélection est transparent jusqu'au survol. La
+                # barre animée doit être centrée et réellement cliquable même
+                # si les notifications des téléchargements sont encore visibles.
                 driver.script("document.querySelector('#model-grid .tile:not([hidden]) .pick').click()")
+                driver.wait("barre de sélection cliquable", """
+                    const bar = document.querySelector('#selection-bar');
+                    const button = document.querySelector('#selection-export');
+                    if (!bar || bar.hidden || !button) return false;
+                    const box = button.getBoundingClientRect();
+                    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+                    const animations = bar.getAnimations ? bar.getAnimations() : [];
+                    return box.width > 0 && box.height > 0 && (hit === button || button.contains(hit))
+                      && animations.every(a => a.playState !== 'running');
+                """)
                 driver.click('#selection-export')
                 selected = completed_download(driver, str(retry))
                 downloads.append(selected)
@@ -224,14 +236,23 @@ def run(application: Path) -> None:
                 driver = None
                 wait_for("arrêt du backend après fermeture", lambda: not listening(backend_port), timeout=20)
                 print("Arrêt du backend avec la fenêtre : OK")
-            except Exception:
+            except Exception as error:
+                # Afficher d'abord l'erreur précise : les annotations de CI
+                # peuvent tronquer les longs journaux de la webview.
+                print(f"Échec du parcours : {error!r}", file=sys.stderr, flush=True)
                 if driver is not None:
                     with contextlib.suppress(Exception):
                         snapshot = driver.script("""
                             const node = id => document.getElementById(id);
                             const text = id => node(id)?.textContent || '';
+                            const button = node('selection-export');
+                            const box = button?.getBoundingClientRect();
+                            const hit = box && document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
                             return {
                               url: location.pathname,
+                              selectionVisible: !!node('selection-bar') && !node('selection-bar').hidden,
+                              selectionCount: text('selection-count'),
+                              selectionHit: hit ? `${hit.tagName}#${hit.id}.${hit.className}` : '',
                               exportVisible: !!node('export-result') && !node('export-result').hidden,
                               exportTitle: text('export-result-title'), exportNote: text('export-result-note'),
                               exportFolder: text('export-result-folder'),
