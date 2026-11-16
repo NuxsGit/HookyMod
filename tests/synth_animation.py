@@ -46,3 +46,23 @@ def fska_fixture() -> bytes:
     data[0x540:0x542] = b"\0\x0a"
     struct.pack_into("<2f4H", data, 0x550, .1, -.1, 50, 1, 150, 3)
     return bytes(data)
+
+
+def fska_with_jump() -> bytes:
+    """An FSKA scalar curve with distinct keys at frame 5 (a jump)."""
+    data = bytearray(fska_fixture())
+    struct.pack_into("<H", data, 0x412, 4)
+    struct.pack_into("<4f", data, 0x500, 0., 5., 5., 10.)
+    struct.pack_into("<8f", data, 0x520, 0., .2, 1., .2, 3., .2, 4., .2)
+    return bytes(data)
+
+
+def fska_two_clips_with_jump() -> bytes:
+    """Two named clips sharing the same synthetic track; neither is repeated."""
+    data = bytearray(fska_with_jump())
+    data[0x150:0x1a0] = data[0x100:0x150]
+    struct.pack_into("<I", data, 0x94, 2)
+    struct.pack_into("<Q", data, 0x158, 0x2a0)
+    struct.pack_into("<H", data, 0x2a0, 3)
+    data[0x2a2:0x2a5] = b"Run"
+    return bytes(data)

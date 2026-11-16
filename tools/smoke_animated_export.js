@@ -15,11 +15,11 @@ const ROOT = path.resolve(__dirname, "..");
 const PYTHON_SERVER = String.raw`
 import json, os, subprocess, sys
 from pathlib import Path
-from tests.synth_animation import named_rigid_model, fska_fixture
+from tests.synth_animation import named_rigid_model, fska_with_jump
 from hookycreator.server import HookyCreatorServer
 root = Path(sys.argv[1]) / 'source'; root.mkdir()
 (root / 'Rigid.bfres').write_bytes(named_rigid_model())
-(root / 'Walk.anim.bfres').write_bytes(fska_fixture())
+(root / 'Walk.anim.bfres').write_bytes(fska_with_jump())
 backend = os.environ.get('HOOKY_DESKTOP_BACKEND')
 if backend:
     env = dict(os.environ); env.pop('PYTHONPATH', None); env.pop('LD_LIBRARY_PATH', None)
@@ -120,7 +120,9 @@ async function main() {
     assert.equal(animated.animation.name, 'Walk');
     assert.ok(animated.files.includes('Rigid.glb'));
     assert.ok(animated.files.includes('Rigid.mtl'));
-    assert.match(await page.locator('#export-result-warnings').innerText(), /OBJ\/MTL restent statiques/);
+    const warnings = await page.locator('#export-result-warnings').innerText();
+    assert.match(warnings, /OBJ\/MTL restent statiques/);
+    assert.match(warnings, /saut.*approché/);
 
     await page.locator('#model-animation-file').selectOption('');
     const staticDownload = page.waitForEvent('download');
@@ -131,7 +133,7 @@ async function main() {
     assert.equal(bodies[1].animation, undefined);
     assert.equal(plain.animation, null);
     assert.deepEqual(errors, []);
-    console.log(`Animated export UI (${info.token ? 'desktop sidecar' : 'source backend'}): OK — delayed selection, clip, GLB/MTL and static fallback`);
+    console.log(`Animated export UI (${info.token ? 'desktop sidecar' : 'source backend'}): OK — delayed selection, jump keys, one clip, GLB/MTL and static fallback`);
   } catch (error) { failed = true; throw error; }
   finally {
     if (browser) await browser.close();

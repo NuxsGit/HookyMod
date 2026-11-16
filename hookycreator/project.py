@@ -2284,6 +2284,11 @@ class Project:
                 f"Clip « {clip['name']} » : {binding['matched']} os associés par nom ; "
                 "30 images/s par convention, courbes et rotations échantillonnées, résultat expérimental.",
                 "OBJ/MTL restent statiques ; l'animation est dans GLB et glTF."]
+            if binding["repeated_keys"]:
+                animation_notes.append(
+                    f"{binding['repeated_keys']} image(s)-clé(s) au même instant : les courbes sont évaluées "
+                    "de chaque côté ; un éventuel saut est approché par une très courte transition dans GLB/glTF. "
+                    "Certains logiciels peuvent fusionner des clés trop proches.")
             if binding["missing"]:
                 animation_notes.append(f"{len(binding['missing'])} piste(s) absente(s) du squelette : non exportées.")
         source = self.asset(rel).relative_to(self.root).as_posix()

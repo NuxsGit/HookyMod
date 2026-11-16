@@ -554,6 +554,10 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
         "La boucle se règle dans le logiciel de lecture."
         if animation is not None else
         "Aucun clip n'a été demandé : GLB et glTF sont statiques pour cet export.")
+    if animation is not None and animation.get("repeated_keys"):
+        animation_note += (" Des images-clés partagent un même instant ; un saut éventuel "
+                           "est approché par une très courte transition en glTF. Certains logiciels "
+                           "peuvent fusionner des clés trop proches.")
     write_atomic(written["note"], IMPORT_NOTE.format(
         glb=f"{name}.glb" if "glb" in formats else "(non exporté)",
         gltf=f"{name}.gltf" if "gltf" in formats else "(non exporté)",

@@ -14,6 +14,12 @@ const clip = { frames: 10, fps: 30, bones: [{ name: "Root", base: {}, curves: [x
 assert.equal(evaluate(x, 5), 1);
 assert.equal(evaluate(x, -1), 0);
 assert.equal(evaluate(x, 50), 2);
+// Repeated times encode a jump, not a duplicate animation.
+const jump = { ...x, frames: [0, 5, 5, 10], values: [0, 1, 3, 4], slopes: [.2, .2, .2, .2] };
+assert.ok(Math.abs(evaluate(jump, 4.9) - .98) < 1e-10);
+assert.equal(evaluate(jump, 5), 3);
+assert.ok(Math.abs(evaluate(jump, 5.1) - 3.02) < 1e-10);
+assert.equal(bind(skin, { ...clip, bones: [{ name: "Root", base: {}, curves: [jump] }] }).matched, 1);
 const binding = bind(skin, clip);
 assert.equal(binding.matched, 1);
 let matrices = palette(binding, 5);

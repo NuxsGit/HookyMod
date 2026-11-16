@@ -4,8 +4,10 @@ Les positions reçues sont déjà en espace modèle dans la pose de repos. Les
 joints, matrices inverses et poids décrivent donc la même déformation que
 l'aperçu WebGL. Les courbes cubiques sont échantillonnées en LINEAR pour éviter
 la perte de tangentes à l'import de certains logiciels ; les rotations Euler
-sont converties en quaternions. Les variantes non représentables ne sont jamais
-remplacées par une animation statique silencieuse. Ce module n'écrit aucun fichier du jeu.
+sont converties en quaternions. Les clés au même instant restent dans la courbe
+source ; un saut est approché par une brève transition puisque glTF impose des
+temps distincts. Les variantes non représentables ne sont jamais remplacées
+par une animation statique silencieuse. Ce module n'écrit aucun fichier du jeu.
 """
 from __future__ import annotations
 
@@ -25,6 +27,10 @@ MAX_SUBDIVISION = 20
 ROTATION_ERROR = 0.0001  # radians, contrôlé à 1/4, 1/2 et 3/4 de chaque intervalle
 VECTOR_ERROR = 0.00001  # erreur relative (au moins 1 unité), mêmes points de contrôle
 MAX_ROTATION_STEP = math.pi / 2
+# glTF exige des temps strictement croissants et ne peut pas exprimer un saut
+# instantané au milieu d'un sampler LINEAR. Deux millisecondes séparent aussi
+# assez les clés pour que Blender 4.2 ne les fusionne pas à 24 images/s.
+JUMP_WINDOW_SECONDS = 0.002
 
 
 class ExportAnimationError(HookyError):
@@ -66,7 +72,7 @@ def bind(skin: dict, clip: dict) -> dict:
         raise ExportAnimationError("Durée du clip invalide.")
     tracks = [None] * len(bones)
     missing = []
-    matched = animated = 0
+    matched = animated = repeated_keys = 0
     for track in clip_bones:
         name = track.get("name")
         if name not in names:
@@ -89,10 +95,15 @@ def bind(skin: dict, clip: dict) -> dict:
             targets.add(target)
             keys, values, slopes = curve.get("frames"), curve.get("values"), curve.get("slopes")
             if (not isinstance(keys, list) or not keys or not isinstance(values, list)
-                    or not isinstance(slopes, list) or len(keys) != len(values) or len(keys) != len(slopes)
-                    or not all(math.isfinite(v) for v in (*keys, *values, *slopes))
-                    or any(a >= b for a, b in zip(keys, keys[1:]))):
-                raise ExportAnimationError("Images-clés dupliquées, non finies ou non triées : export animé refusé.")
+                    or not isinstance(slopes, list) or len(keys) != len(values) or len(keys) != len(slopes)):
+                raise ExportAnimationError(f"Données d'images-clés incomplètes pour l'os « {name} ».")
+            if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (*keys, *values, *slopes)):
+                raise ExportAnimationError(f"Image-clé ou valeur non finie pour l'os « {name} ».")
+            if any(a > b for a, b in zip(keys, keys[1:])):
+                raise ExportAnimationError(f"Images-clés non triées pour l'os « {name} ».")
+            # Deux valeurs à la même image peuvent décrire un saut. On les
+            # conserve dans la courbe source pour évaluer les deux côtés.
+            repeated_keys += sum(a == b for a, b in zip(keys, keys[1:]))
         tracks[index] = track
         matched += 1
         animated += bool(track["curves"])
@@ -119,7 +130,7 @@ def bind(skin: dict, clip: dict) -> dict:
                 f"Compensation d'échelle de l'os « {bone['name']} » avec parent animé : "
                 "cette variante n'est pas représentable fidèlement en glTF.")
     return {"skin": skin, "clip": clip, "tracks": tracks, "matched": matched,
-            "missing": missing}
+            "missing": missing, "repeated_keys": repeated_keys}
 
 
 def _quat(rotation):
@@ -201,12 +212,84 @@ def _times(doc, binary, frames, fps):
                          minimum=[values[0]], maximum=[values[-1]])
 
 
+def _float32_ulp(value):
+    """Distance au prochain float32 positif, pour les temps et les images."""
+    try:
+        if not math.isfinite(value) or value < 0:
+            raise ValueError
+        # Les deux zéros IEEE représentent le même instant ; -0.0 est légal.
+        value = 0.0 if value == 0 else value
+        bits, = struct.unpack("<I", struct.pack("<f", value))
+        if bits >= 0x7f7fffff:
+            raise ValueError
+        current, = struct.unpack("<f", struct.pack("<I", bits))
+        following, = struct.unpack("<f", struct.pack("<I", bits + 1))
+        return following - current
+    except (OverflowError, ValueError) as exc:
+        raise ExportAnimationError("Temps d'animation hors limites glTF.") from exc
+
+
+def _sampling_anchors(curves, duration, fps, remaining):
+    """Encadre les sauts avant échantillonnage, sans trier ni modifier la source.
+
+    Une série de clés au même temps peut décrire des valeurs distinctes avant
+    et après ce temps. glTF interdit les temps égaux dans un sampler : un saut
+    est approché par une courte transition LINEAR, signalée dans le rapport.
+    Les clés de même valeur mais de pentes différentes restent continues.
+    """
+    anchors = sorted({0.0, float(duration), *(t for c in curves.values()
+                                               for t in c["frames"] if 0 < t < duration)})
+    if len(anchors) > remaining:
+        raise ExportAnimationError("Trop d'images-clés pour l'animation glTF.")
+    before, after = set(), set()
+    for curve in curves.values():
+        keys, values = curve["frames"], curve["values"]
+        i = 0
+        while i < len(keys):
+            j = i + 1
+            while j < len(keys) and keys[j] == keys[i]:
+                j += 1
+            if j - i > 1 and values[i] != values[j - 1]:
+                t = keys[i]
+                # À la première clé, evaluate(t) renvoie la première valeur ;
+                # pour les suivantes il renvoie la dernière (saut à droite).
+                if i == 0 and 0 <= t < duration:
+                    after.add(t)
+                elif i > 0 and 0 < t <= duration:
+                    before.add(t)
+            i = j
+
+    extra, transitions = set(), set()
+    for t in before | after:
+        index = bisect.bisect_left(anchors, t)
+        # Garder des temps distincts aussi après la conversion en secondes
+        # float32 et après l'import en images float32 dans Blender.
+        window = max(JUMP_WINDOW_SECONDS * fps, 4 * _float32_ulp(t),
+                     4 * fps * _float32_ulp(t / fps))
+        if t in before:
+            previous = anchors[index - 1]
+            point = t - min(window, (t - previous) / 4)
+            if not previous < point < t:
+                raise ExportAnimationError("Saut d'animation trop proche d'une autre image-clé.")
+            extra.add(point)
+            transitions.add((point, t))
+        if t in after:
+            following = anchors[index + 1]
+            point = t + min(window, (following - t) / 4)
+            if not t < point < following:
+                raise ExportAnimationError("Saut d'animation trop proche d'une autre image-clé.")
+            extra.add(point)
+            transitions.add((t, point))
+    result = sorted(set(anchors) | extra)
+    if len(result) > remaining:
+        raise ExportAnimationError("Trop d'images-clés pour l'animation glTF.")
+    return result, transitions
+
+
 def _vector_channel(doc, binary, curves, base, frames, fps, factor, remaining):
     # Blender 4.2 ignore certaines tangentes CUBICSPLINE sur les os. Échantillonner
     # de façon adaptative préserve le mouvement dans les consommateurs LINEAR.
-    anchors = sorted({0.0, float(frames), *(t for c in curves.values() for t in c["frames"] if 0 < t < frames)})
-    if len(anchors) > remaining:
-        raise ExportAnimationError("Trop d'images-clés pour l'animation glTF.")
+    anchors, transitions = _sampling_anchors(curves, frames, fps, remaining)
 
     def vector(frame):
         result = tuple((animation_mod.evaluate(curves[i], frame) if i in curves else base[i]) * factor
@@ -240,7 +323,15 @@ def _vector_channel(doc, binary, curves, base, frames, fps, factor, remaining):
             samples.append(vb)
 
     for a, b in zip(anchors, anchors[1:]):
-        split(a, vector(a), b, vector(b), 0)
+        if (a, b) in transitions:
+            # LINEAR ne représente pas un saut instantané : limiter le mélange
+            # aux deux échantillons qui l'encadrent au lieu de subdiviser sans fin.
+            if len(times) >= remaining:
+                raise ExportAnimationError("Trop d'échantillons pour l'animation glTF.")
+            times.append(b)
+            samples.append(vector(b))
+        else:
+            split(a, vector(a), b, vector(b), 0)
     inp = _times(doc, binary, times, fps)
     try:
         values = array("f", (v for sample in samples for v in sample))
@@ -251,7 +342,7 @@ def _vector_channel(doc, binary, curves, base, frames, fps, factor, remaining):
 
 
 def _rotation_channel(doc, binary, curves, base, frames, fps, remaining):
-    anchors = sorted({0.0, float(frames), *(t for c in curves.values() for t in c["frames"] if 0 < t < frames)})
+    anchors, transitions = _sampling_anchors(curves, frames, fps, remaining)
     if curves and sum(math.ceil(b-a) for a, b in zip(anchors, anchors[1:])) + 1 > remaining:
         raise ExportAnimationError("Animation trop longue pour l'échantillonnage des rotations.")
 
@@ -295,7 +386,16 @@ def _rotation_channel(doc, binary, curves, base, frames, fps, remaining):
 
     if curves:
         for a, b in zip(anchors, anchors[1:]):
-            split(a, quaternion(a), b, quaternion(b), 0)
+            if (a, b) in transitions:
+                if len(times) >= remaining:
+                    raise ExportAnimationError("Trop d'échantillons pour l'animation glTF.")
+                qb = quaternion(b)
+                if sum(x*y for x, y in zip(quats[-1], qb)) < 0:
+                    qb = tuple(-v for v in qb)
+                times.append(b)
+                quats.append(qb)
+            else:
+                split(a, quaternion(a), b, quaternion(b), 0)
     inp = _times(doc, binary, times, fps)
     try:
         values = array("f", (v for q in quats for v in q))

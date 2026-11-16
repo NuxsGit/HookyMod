@@ -244,6 +244,51 @@ print("HOOKY_ANIMATION=" + json.dumps({"bones": sorted(b.name for b in armature.
                 for value, want in zip(actual, expected):
                     self.assertAlmostEqual(value, want, delta=.001)
 
+    def test_blender_imports_one_clip_with_duplicate_time_jumps(self) -> None:
+        from hookymod import animation, gltf_animation
+        from tests.test_animated_export import simple_binding
+        with tempfile.TemporaryDirectory(prefix="hooky-jump-consumer-") as tmp:
+            mesh, skin, clip = simple_binding()
+            curve = {"target": "translation.x", "interpolation": "cubic",
+                     "frames": [0., 0., 3., 5., 5., 8., 10., 10.],
+                     "values": [0., .4, .7, .9, 1.5, 1.8, 2., 2.3],
+                     "slopes": [.1] * 8}
+            clip["bones"][0]["curves"] = [curve]
+            result = blender.export_bundle([mesh], tmp, "jump", formats=("glb",),
+                                           animation=gltf_animation.bind(skin, clip))
+            script = Path(tmp) / "inspect_jump.py"
+            script.write_text('''
+import bpy, json, math, sys
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.gltf(filepath=sys.argv[sys.argv.index("--") + 1])
+obj = next(o for o in bpy.data.objects if o.type == "MESH" and o.name == "Shape")
+armature = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+samples = []
+for source_frame in (0, .1, 1, 4.9, 5, 5.1, 9.9, 10):
+    frame = source_frame * fps / 30
+    bpy.context.scene.frame_set(math.floor(frame), subframe=frame-math.floor(frame))
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    mesh = evaluated.to_mesh()
+    samples.append(float((evaluated.matrix_world @ mesh.vertices[0].co).x))
+    evaluated.to_mesh_clear()
+print("HOOKY_JUMP=" + json.dumps({"actions": [a.name for a in bpy.data.actions],
+    "action": armature.animation_data.action.name, "samples": samples}))
+''', encoding="utf-8")
+            completed = subprocess.run(
+                [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
+                 "--python", str(script), "--", str(result["glb"])],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_JUMP=")), "")
+            self.assertTrue(line, completed.stdout + completed.stderr)
+            verified = json.loads(line.partition("=")[2])
+            self.assertEqual(len(verified["actions"]), 1)
+            self.assertTrue(verified["action"].startswith("Test"))
+            for frame, actual in zip((0, .1, 1, 4.9, 5, 5.1, 9.9, 10), verified["samples"]):
+                self.assertAlmostEqual(actual, animation.evaluate(curve, frame), delta=.002)
+
     def test_blender_keeps_eight_influences_in_glb(self) -> None:
         from hookymod import gltf_animation
         from tests.test_animated_export import simple_binding

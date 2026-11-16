@@ -22,7 +22,7 @@ from hookycreator.project import Project, ProjectError
 from hookycreator.server import HookyCreatorServer
 from hookymod import animation, blender, gltf_animation, util
 from hookymod.mesh import MeshData
-from tests.synth_animation import fska_fixture, named_rigid_model
+from tests.synth_animation import fska_fixture, fska_two_clips_with_jump, fska_with_jump, named_rigid_model
 
 
 def glb_parts(data):
@@ -238,6 +238,132 @@ def test_eight_influences_are_retained_normalized_and_duplicate_joints_merged(tm
     assert sum(weights) == pytest.approx(1.)
 
 
+def test_fska_duplicate_frame_is_exported_once_and_jump_is_reported(tmp_path):
+    project = project_with_animation(tmp_path)
+    (project.root / "Walk.anim.bfres").write_bytes(fska_with_jump())
+    source = (project.root / "Walk.anim.bfres").read_bytes()
+    clip = animation.read_clip(source, 0)
+    assert clip["bones"][0]["curves"][0]["frames"] == [0., 5., 5., 10.]
+    result = project.export_model("Rigid.bfres", textures=False, archive=True,
+                                  animation_rel="Walk.anim.bfres", animation_index=0)
+    assert (project.root / "Walk.anim.bfres").read_bytes() == source
+    assert any("saut" in note.lower() for note in result["warnings"])
+    with read_archive(project, result) as archive:
+        doc, blob = glb_parts(archive.read("Rigid/Rigid.glb"))
+        assert len(doc["animations"]) == 1 and doc["animations"][0]["name"] == "Walk"
+        assert "saut" in archive.read("Rigid/RAPPORT_MODELE.txt").decode().lower()
+        for sampler in doc["animations"][0]["samplers"]:
+            times = [item[0] for item in accessor(doc, blob, sampler["input"])]
+            assert all(a < b for a, b in zip(times, times[1:]))
+        translation = next(c for c in doc["animations"][0]["channels"]
+                           if c["target"]["path"] == "translation")
+        curve = clip["bones"][0]["curves"][0]
+        for frame in (0., 1., 4., 4.9, 5., 5.1, 7., 10.):
+            actual = sample_channel(doc, blob, translation, frame / clip["fps"])[0]
+            assert actual == pytest.approx(animation.evaluate(curve, frame), abs=.002)
+
+
+def test_each_selected_clip_is_exported_once_and_downloads_remain_distinct(tmp_path):
+    project = project_with_animation(tmp_path)
+    (project.root / "Walk.anim.bfres").write_bytes(fska_two_clips_with_jump())
+    assert [item["name"] for item in project.animation_list("Walk.anim.bfres")["clips"]] == ["Walk", "Run"]
+    results = [project.export_model("Rigid.bfres", textures=False, archive=True,
+                                    animation_rel="Walk.anim.bfres", animation_index=index)
+               for index in (0, 1)]
+    assert results[0]["download_url"] != results[1]["download_url"]
+    for result, name in zip(results, ("Walk", "Run")):
+        with read_archive(project, result) as archive:
+            doc, blob = glb_parts(archive.read("Rigid/Rigid.glb"))
+            assert [item["name"] for item in doc["animations"]] == [name]
+            assert doc["animations"][0]["extras"]["sourceLoop"] is True
+            # Le cycle source n'est pas recopié plusieurs fois, même s'il boucle.
+            for sampler in doc["animations"][0]["samplers"]:
+                times = accessor(doc, blob, sampler["input"])
+                assert times[-1][0] == pytest.approx(10 / 30)
+
+
+def test_repeated_negative_zero_is_a_valid_starting_instant(tmp_path):
+    mesh, skin, clip = simple_binding()
+    curve = clip["bones"][0]["curves"][0]
+    curve.update(frames=[-0.0, -0.0, 10.], values=[0., 1., 2.], slopes=[.1, .1, .1])
+    written = blender.export_bundle([mesh], tmp_path, "negative-zero", formats=("glb",),
+                                    animation=gltf_animation.bind(skin, clip))
+    doc, blob = glb_parts(written["glb"].read_bytes())
+    channel = next(c for c in doc["animations"][0]["channels"] if c["target"]["path"] == "translation")
+    assert sample_channel(doc, blob, channel, 0.)[0] == pytest.approx(0.)
+    assert sample_channel(doc, blob, channel, .1 / 30)[0] == pytest.approx(
+        animation.evaluate(curve, .1), abs=.002)
+
+
+@pytest.mark.parametrize("path", ["translation.x", "rotation.z"])
+def test_duplicate_keys_at_start_middle_and_end_keep_each_side(tmp_path, path):
+    mesh, skin, clip = simple_binding()
+    curve = {"target": path, "interpolation": "cubic",
+             "frames": [0., 0., 3., 5., 5., 8., 10., 10.],
+             "values": [0., .4, .7, .9, 1.5, 1.8, 2., 2.3],
+             "slopes": [.1] * 8}
+    clip["bones"][0]["curves"] = [curve]
+    written = blender.export_bundle([mesh], tmp_path, "jump", formats=("glb",),
+                                    animation=gltf_animation.bind(skin, clip))
+    doc, blob = glb_parts(written["glb"].read_bytes())
+    assert len(doc["animations"]) == 1
+    kind = path.split(".")[0]
+    channel = next(c for c in doc["animations"][0]["channels"] if c["target"]["path"] == kind)
+    for frame in (0., .1, 1., 2.5, 4.9, 5., 5.1, 7., 9.9, 10.):
+        actual = sample_channel(doc, blob, channel, frame / 30)
+        value = animation.evaluate(curve, frame)
+        if kind == "translation":
+            assert actual[0] == pytest.approx(value, abs=.002)
+        else:
+            assert gltf_animation._angle(actual, gltf_animation._quat((0., 0., value))) < .002
+
+
+def test_distinct_curves_can_jump_on_opposite_sides_of_the_same_frame(tmp_path):
+    mesh, skin, clip = simple_binding()
+    curves = [
+        {"target": "translation.x", "interpolation": "cubic", "frames": [0., 5., 5., 10.],
+         "values": [0., 1., 3., 4.], "slopes": [.2, .2, .2, .2]},
+        {"target": "translation.y", "interpolation": "cubic", "frames": [5., 5., 10.],
+         "values": [2., 4., 5.], "slopes": [.2, .2, .2]},
+    ]
+    clip["bones"][0]["curves"] = curves
+    written = blender.export_bundle([mesh], tmp_path, "mixed", formats=("glb",),
+                                    animation=gltf_animation.bind(skin, clip))
+    doc, blob = glb_parts(written["glb"].read_bytes())
+    channel = next(c for c in doc["animations"][0]["channels"] if c["target"]["path"] == "translation")
+    for frame in (0., 4.9, 5., 5.1, 10.):
+        actual = sample_channel(doc, blob, channel, frame / 30)
+        assert actual[:2] == pytest.approx([animation.evaluate(c, frame) for c in curves], abs=.002)
+
+
+def test_jump_keys_too_close_for_gltf_fail_without_overwriting_output(tmp_path):
+    mesh, skin, clip = simple_binding()
+    curve = clip["bones"][0]["curves"][0]
+    curve.update(frames=[0., 1., 1., 1. + 1e-8, 10.],
+                 values=[0., 1., 2., 3., 4.], slopes=[0.] * 5)
+    target = tmp_path / "too-close.glb"
+    target.write_bytes(b"previous export")
+    with pytest.raises(gltf_animation.ExportAnimationError, match="trop proches"):
+        blender.export_bundle([mesh], tmp_path, "too-close", formats=("glb",),
+                              animation=gltf_animation.bind(skin, clip))
+    assert target.read_bytes() == b"previous export"
+
+
+def test_equal_duplicate_keys_preserve_their_two_slopes(tmp_path):
+    mesh, skin, clip = simple_binding()
+    curve = {"target": "translation.x", "interpolation": "cubic",
+             "frames": [0., 5., 5., 10.], "values": [0., 1., 1., 4.],
+             "slopes": [.2, .2, .6, .6]}
+    clip["bones"][0]["curves"] = [curve]
+    written = blender.export_bundle([mesh], tmp_path, "slope", formats=("glb",),
+                                    animation=gltf_animation.bind(skin, clip))
+    doc, blob = glb_parts(written["glb"].read_bytes())
+    channel = next(c for c in doc["animations"][0]["channels"] if c["target"]["path"] == "translation")
+    for frame in (0., 1., 4.9, 5., 5.1, 7., 10.):
+        assert sample_channel(doc, blob, channel, frame / 30)[0] == pytest.approx(
+            animation.evaluate(curve, frame), abs=2e-5)
+
+
 def test_curve_sampling_approximates_hermite_and_multiturn_euler_rotations(tmp_path):
     mesh, skin, clip = simple_binding()
     curves = [
@@ -280,8 +406,16 @@ def test_animated_export_refuses_incompatible_variants_and_keeps_previous_output
         project.export_model("Rigid.bfres", animation_rel="Walk.anim.bfres", animation_index=True)
     mesh, skin, clip = simple_binding(bones=2)
     bad = copy.deepcopy(clip)
-    bad["bones"][0]["curves"][0]["frames"] = [0., 0.]
-    with pytest.raises(gltf_animation.ExportAnimationError, match="dupliquées"):
+    bad["bones"][0]["curves"][0]["frames"] = [10., 0.]
+    with pytest.raises(gltf_animation.ExportAnimationError, match="non triées"):
+        gltf_animation.bind(skin, bad)
+    bad = copy.deepcopy(clip)
+    bad["bones"][0]["curves"][0]["frames"] = [0., float("nan")]
+    with pytest.raises(gltf_animation.ExportAnimationError, match="non finie"):
+        gltf_animation.bind(skin, bad)
+    bad = copy.deepcopy(clip)
+    bad["bones"][0]["curves"][0]["slopes"] = [0.]
+    with pytest.raises(gltf_animation.ExportAnimationError, match="incomplètes"):
         gltf_animation.bind(skin, bad)
     bad = copy.deepcopy(clip)
     bad["bones"][0]["curves"][0]["target"] = "rotation.w"
@@ -390,7 +524,13 @@ def test_khronos_validator_accepts_static_animated_and_eight_weight_exports(tmp_
     image.write_bytes(util.png_bytes(1, 1, bytes((20, 30, 40, 255))))
     textured = blender.export_bundle([mesh], tmp_path, "modèle", formats=("gltf", "glb"),
                                      textures={"Surface": str(image)})
-    files = [folder / "Rigid.glb", folder / "Rigid.gltf", rig["glb"], textured["glb"], textured["gltf"]]
+    jump_clip = copy.deepcopy(clip)
+    jump_clip["bones"][0]["curves"][0].update(
+        frames=[0., 5., 5., 10.], values=[0., 1., 3., 4.], slopes=[.2] * 4)
+    jump = blender.export_bundle([mesh], tmp_path, "jump", formats=("glb", "gltf"),
+                                 animation=gltf_animation.bind(skin, jump_clip))
+    files = [folder / "Rigid.glb", folder / "Rigid.gltf", rig["glb"], textured["glb"], textured["gltf"],
+             jump["glb"], jump["gltf"]]
     script = Path(__file__).resolve().parents[1] / "tools" / "validate_gltf.js"
     run = subprocess.run(["node", str(script), *(str(f) for f in files)],
                          capture_output=True, text=True, check=False, timeout=60)
