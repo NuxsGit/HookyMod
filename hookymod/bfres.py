@@ -1,4 +1,4 @@
-"""BFRES (modèles Switch) : lecture des maillages, export OBJ.
+"""BFRES (modèles) : lecture des maillages, export OBJ.
 
 Le parseur est volontairement tolérant : un BFRES contient beaucoup de données
 optionnelles, et un fichier légèrement exotique ne doit pas empêcher d'afficher
@@ -503,7 +503,7 @@ class Cursor:
         self.pos += count
         return out
 
-    # -- chaînes (BFRES Switch : uint16 longueur + chaîne zéro-terminée)
+    # -- chaînes (BFRES : uint16 longueur + chaîne zéro-terminée)
     def string_at(self, offset: int) -> str:
         if not offset or offset + 2 > len(self.data):
             return ""
@@ -525,7 +525,7 @@ class Cursor:
         saved = self.pos
         try:
             self.seek(dict_offset)
-            self.u32()  # 0 (Switch) / taille (Wii U)
+            self.u32()  # champ réservé ou taille selon la variante
             count = self.u32()
             if count > 100000:
                 self.warnings.append(f"dictionnaire invraisemblable ({count} entrées)")
@@ -596,7 +596,7 @@ def meshes_from_file(file: "BfresFile", lod: int = 0,
 
 
 class BfresFile:
-    """Fichier BFRES (Switch)."""
+    """Fichier BFRES little-endian."""
 
     def __init__(self) -> None:
         self.version = 0
@@ -622,7 +622,7 @@ class BfresFile:
         cur = Cursor(data)
         if data[0x0C:0x0E] != b"\xff\xfe":
             raise FormatError(
-                "BFRES Wii U (big endian) non géré : ce fichier n'est pas un BFRES Switch."
+                "BFRES big-endian non géré : seule la variante little-endian est prise en charge."
             )
         cur.seek(0x08)
         self.version = cur.u32()
@@ -659,7 +659,7 @@ class BfresFile:
             except FormatError:
                 self.buffer_offset = 0
         if self.version_major >= 10 and len(data) > 0xEF and data[0xEE] & 0x08:
-            # Données GPU stockées à la fin du fichier (TotK) : base décalée.
+            # Données GPU stockées à la fin du fichier : base décalée.
             if file_size + 288 < len(data):
                 self.buffer_offset = file_size + 288
 

@@ -47,7 +47,7 @@ class SniffTests(unittest.TestCase):
         self.assertEqual(found[0].confidence, "extension")
 
     def test_text_detection(self):
-        found = identify.sniff(b"name: Link\nhp: 20\ndescription: heros\n" * 4)
+        found = identify.sniff(b"name: Example\nhp: 20\ndescription: heros\n" * 4)
         self.assertEqual(found[0].confidence, "texte")
 
     def test_unknown(self):

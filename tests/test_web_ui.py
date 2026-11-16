@@ -113,6 +113,11 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('html[data-accent="azur"]', self.css)
         self.assertIn('html[data-density="compact"]', self.css)
 
+    def test_aurora_theme_is_available_and_styled(self) -> None:
+        self.assertIn('<option value="aurora">Aurora</option>', self.html)
+        self.assertIn('html[data-theme="aurora"]', self.css)
+        self.assertIn('dataset.theme', self.js)
+
     def test_uv_checker_is_wired_to_the_api(self) -> None:
         self.assertIn("/api/model/uv", self.js)
         self.assertIn("/api/model/uv/info", self.js)

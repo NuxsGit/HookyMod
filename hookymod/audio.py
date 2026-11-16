@@ -1,7 +1,7 @@
 """Première conversion audio, en lecture seule : BWAV Opus mono → Ogg Opus.
 
 Le BWAV observé dans le dump contient des paquets Opus standard précédés de
-longueurs big-endian, dans un conteneur Nintendo distinct d'Ogg. On les
+longueurs big-endian, dans un conteneur distinct d'Ogg. On les
 remultiplexe sans les réencoder ; aucune bibliothèque de codec n'est requise.
 Cette version refuse les banques BARS, le préchargement, PCM/DSP-ADPCM, le
 multicanal et les variantes non vérifiées. Elle ne réécrit pas le jeu.
@@ -139,7 +139,7 @@ def read_bwav_opus(data: bytes) -> BwavOpus:
     pre_skip, = struct.unpack_from("<H", data, offset + 0x1C)
     if (magic != 0x80000001 or header_size < 0x18 or data[offset + 8] != 0
             or data[offset + 9] != 1 or nx_rate != 48000 or block_offset < 0x20):
-        raise AudioError("En-tête Opus Nintendo non pris en charge.")
+        raise AudioError("En-tête Opus du conteneur non pris en charge.")
     block = offset + block_offset
     if block + 8 > len(data):
         raise AudioError("Bloc Opus absent.")

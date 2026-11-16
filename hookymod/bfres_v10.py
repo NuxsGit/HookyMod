@@ -1,4 +1,4 @@
-"""BFRES version 10 (Switch 2) : lecture de la géométrie, pilotée par les données.
+"""BFRES version 10 : lecture de la géométrie, pilotée par les données.
 
 Il n'existe **aucune documentation publique** du BFRES 10.x.  Ce module ne suit
 donc pas un cahier des charges : il lit les tables que le fichier contient

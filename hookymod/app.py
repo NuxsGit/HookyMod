@@ -58,9 +58,9 @@ CONFIG_PATH = Path(os.environ.get("HOOKYMOD_CONFIG",
                                   Path.home() / ".config" / "hookymod" / "config.json"))
 OLD_CONFIG_PATH = Path.home() / ".asset_explorer.json"
 
-#: Dispositions de pixels proposées dans l'onglet Textures (Switch 1 / Switch 2).
-SWIZZLE_CHOICES = ("Auto", "Switch 1 (X1)", "Switch 2 (Orin)")
-_SWIZZLE_TO_CONFIG = {"Auto": "auto", "Switch 1 (X1)": "x1", "Switch 2 (Orin)": "orin"}
+#: Dispositions de pixels proposées dans l'onglet Textures (X1 / Orin).
+SWIZZLE_CHOICES = ("Auto", "X1", "Orin (T239)")
+_SWIZZLE_TO_CONFIG = {"Auto": "auto", "X1": "x1", "Orin (T239)": "orin"}
 _CONFIG_TO_SWIZZLE = {value: label for label, value in _SWIZZLE_TO_CONFIG.items()}
 
 TEXT_EXT = {".txt", ".xml", ".json", ".yml", ".yaml", ".csv", ".md", ".ini",
@@ -75,7 +75,7 @@ TOOLBAR_ACTIONS = (
      "Choisir le dossier romfs du jeu (Ctrl+R)"),
     ("Ouvrir…", "open_file", "TButton", "Ouvrir un asset (Ctrl+O)"),
     (".nup…", "open_nup", "TButton",
-     "Ouvrir un paquet Switch 2 .nup et extraire son romfs"),
+     "Ouvrir un paquet .nup lisible et extraire son romfs"),
     ("← Retour", "back", "TButton", "Remonter d'un niveau (Alt+←)"),
     ("Enregistrer", "save", "TButton", "Enregistrer le fichier courant (Ctrl+S)"),
     ("Exporter en mod", "export_mod", "Accent.TButton",
@@ -86,7 +86,7 @@ TOOLBAR_ACTIONS = (
 MENU_ACTIONS = (
     ("Choisir un dossier romfs…", "set_romfs"),
     ("Ouvrir un fichier…", "open_file"),
-    ("Ouvrir un paquet .nup (Switch 2)…", "open_nup"),
+    ("Ouvrir un paquet .nup…", "open_nup"),
     ("Enregistrer sous…", "save"),
     ("Voir les modifications…", "show_modifications"),
     ("Extraire la sélection…", "extract_selection"),
@@ -332,7 +332,7 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
                             accelerator="Ctrl+R")
         fichier.add_command(label="Ouvrir un fichier…", command=self.open_file,
                             accelerator="Ctrl+O")
-        fichier.add_command(label="Ouvrir un paquet .nup (Switch 2)…", command=self.open_nup)
+        fichier.add_command(label="Ouvrir un paquet .nup…", command=self.open_nup)
         fichier.add_separator()
         fichier.add_command(label="Enregistrer sous…", command=self.save, accelerator="Ctrl+S")
         fichier.add_command(label="Voir les modifications…", command=self.show_modifications)
@@ -616,9 +616,10 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
         return data, f"{self.current_key}"
 
     def _swizzle_choice(self) -> str:
-        """Libellé courant du sélecteur de disposition des pixels."""
-        value = str(self.config_data.get("texture_orin", "auto")).lower()
-        return _CONFIG_TO_SWIZZLE.get(value, "Auto")
+        """Libellé courant du sélecteur, y compris pour les anciennes valeurs."""
+        value = self._orin_setting()
+        mode = "auto" if value is None else ("orin" if value else "x1")
+        return _CONFIG_TO_SWIZZLE[mode]
 
     def _set_swizzle_choice(self, label: str) -> None:
         """Force la disposition des pixels puis recharge les textures affichées."""
@@ -634,6 +635,7 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
     def _orin_setting(self) -> bool | None:
         """Disposition des pixels demandée par l'utilisateur (None = automatique)."""
         value = str(self.config_data.get("texture_orin", "auto")).lower()
+        # Keep historical config aliases readable; new choices save x1/orin.
         if value in ("x1", "switch1", "switch 1", "non", "false"):
             return False
         if value in ("orin", "switch2", "switch 2", "oui", "true"):
@@ -822,7 +824,7 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             "à partir de tes propres fichiers.\n\n"
             "1. « romfs… » : choisis le dossier romfs de ton dump (les dictionnaires zstd\n"
             "   de Pack/ZsDic.pack.zs sont chargés automatiquement).\n"
-            "   « .nup… » : ouvre directement un paquet Switch 2 et extrais son romfs.\n"
+            "   « .nup… » : ouvre directement un paquet lisible et extrais son romfs.\n"
             "2. Sélectionne un fichier à gauche : il s'ouvre dans la colonne du milieu.\n"
             "3. Double-clique sur un fichier .zs ou une archive SARC pour entrer dedans.\n"
             "4. Les onglets s'ouvrent tout seuls selon le contenu : « Textures » pour un\n"
@@ -832,9 +834,9 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
             "• Affichage → « Diagnostic du fichier courant… » (magic, version, disposition\n"
             "  des pixels, sections) : c'est le premier réflexe à avoir.\n"
             "• Aide → « Diagnostic de l'installation… » : vérifie texture2ddecoder\n"
-            "  (ASTC/BC7 des jeux Switch 2), zstandard et l'aperçu PNG de Tk.\n"
-            "• Onglet Textures : le sélecteur « Pixels » force Switch 1 (X1) ou Switch 2\n"
-            "  (Orin) si la version du BNTX est atypique.\n\n"
+            "  (ASTC/BC7), zstandard et l'aperçu PNG de Tk.\n"
+            "• Onglet Textures : le sélecteur « Pixels » force X1 ou Orin\n"
+            "  si la version du BNTX est atypique.\n\n"
             "Fichiers reconnus en détail : archives SARC, .zs (zstd), .bfres (modèles 3D),\n"
             ".bntx (textures), .obj (maillages).\n"
         )
@@ -1722,13 +1724,13 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
 
         self._run_bg("Reconstruction du mod…", work, done)
 
-    # ------------------------------------------------------------------ switch 2
+    # ------------------------------------------------------------------ paquet NUP
     @_action
     def open_nup(self) -> None:
-        """Ouvre un paquet .nup (dump Switch 2) et extrait son romfs."""
+        """Ouvre un paquet .nup lisible et extrait son romfs."""
         choice = filedialog.askopenfilename(
             title="Ouvrir un paquet .nup",
-            filetypes=[("Paquet Switch 2", "*.nup"), ("Tous les fichiers", "*.*")])
+            filetypes=[("Paquet NUP", "*.nup"), ("Tous les fichiers", "*.*")])
         if not choice:
             return
         package_path = Path(choice)
@@ -2585,7 +2587,7 @@ class App(_TkAppBase):  # type: ignore[misc,valid-type]
                 f"texture2ddecoder (ASTC/BC7) : "
                 f"{'oui' if bntx_mod._t2d is not None else 'NON (pip install texture2ddecoder)'}\n"
                 "« Auto » convient à la plupart des fichiers : la version du BNTX\n"
-                "décide de la disposition (Switch 1 = X1, Switch 2 = Orin).")
+                "décide de la disposition (X1 ou Orin).")
         ttk.Label(frame, text=info, style="Muted.TLabel", justify="left").grid(
             row=5, column=0, columnspan=3, sticky="w", pady=(10, 4))
         if self.dicts.sources:

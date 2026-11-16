@@ -43,15 +43,15 @@ def _grey_png(value: int, size: int = 8) -> bytes:
 class ClassifyTests(unittest.TestCase):
     def test_known_suffixes(self) -> None:
         cases = {
-            "Mt_Weapon_Sword_Biggoron_Alb.bntx.zs": "albedo",
-            "Mt_Hair_Npc_Goron_Nrm.0.bntx.zs": "normal",
+            "Mt_Weapon_Sword_Example_Alb.bntx.zs": "albedo",
+            "Mt_Hair_Npc_Example_Nrm.0.bntx.zs": "normal",
             "CeTexte_Mt_Hair_Npc_Rgh.bntx.zs": "roughness",
-            "Mt_Weapon_Sword_Biggoron_Mtl.bntx.zs": "metallic",
-            "Mt_Weapon_Sword_Biggoron_AO.bntx.zs": "occlusion",
-            "Mt_Weapon_Sword_Biggoron_Emi.bntx.zs": "emissive",
+            "Mt_Weapon_Sword_Example_Mtl.bntx.zs": "metallic",
+            "Mt_Weapon_Sword_Example_AO.bntx.zs": "occlusion",
+            "Mt_Weapon_Sword_Example_Emi.bntx.zs": "emissive",
             "Mt_Blade_Spc.bntx.zs": "specular",
             "Mt_Blade_Dif.bntx.zs": "albedo",
-            "Animal_Cat_Alb.png": "albedo",
+            "Creature_Alpha_Alb.png": "albedo",
         }
         for name, role in cases.items():
             self.assertEqual(texturemaps.classify(name), role, name)

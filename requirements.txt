@@ -2,9 +2,9 @@
 # Les versions antérieures à 0.23 peuvent accepter des bits réservés invalides.
 zstandard>=0.23
 
-# Recommandé : le remake Switch 2 utilise de l'ASTC (et du BC7) que le décodeur
-# intégré ne couvre pas. Sans ce paquet, ces textures s'affichent en erreur
-# explicite ; tout le reste de l'application continue de fonctionner.
+# Recommandé : certaines textures ASTC et BC7 ne sont pas prises en charge par
+# le décodeur intégré. Sans ce paquet, elles produisent une erreur explicite ;
+# tout le reste de l'application continue de fonctionner.
 texture2ddecoder>=1.0.5
 
 # Conversion BWAV vers WAV, FLAC, MP3 et Ogg, et import audio standard.

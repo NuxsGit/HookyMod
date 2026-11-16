@@ -2,6 +2,7 @@ name: Rust core and compatibility
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 

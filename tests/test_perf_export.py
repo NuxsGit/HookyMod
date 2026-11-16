@@ -211,7 +211,7 @@ class ExportTests(unittest.TestCase):
                          written["bin"].stat().st_size)
 
     def test_texture_is_linked_even_with_another_name(self) -> None:
-        png = self.out / "Weapon_Sword_Kokiri_Alb.png"
+        png = self.out / "Weapon_Sword_Example_Alb.png"
         self.out.mkdir(parents=True, exist_ok=True)
         png.write_bytes(b"\x89PNG\r\n\x1a\n")
         written = blender.export_bundle(

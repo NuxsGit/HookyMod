@@ -100,7 +100,7 @@ class InternalDecoderTests(unittest.TestCase):
         decoded = bntx.BntxFile.parse(data).textures[0].decode(0)[2]
         self.assertNotEqual(decoded[0::4], decoded[1::4])
 
-    def test_switch2_and_switch1_layouts_both_decode(self):
+    def test_orin_and_x1_layouts_both_decode(self):
         for orin in (True, False):
             rgba, decoded = self._roundtrip("BC1", size=16, orin=orin)
             self.assertLess(_mean_error(decoded, rgba), 10.0)

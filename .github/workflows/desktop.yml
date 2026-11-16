@@ -2,6 +2,7 @@ name: HookyCreator desktop
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -25,6 +26,14 @@ jobs:
             target: x86_64-pc-windows-msvc
             extension: .exe
             bundle: nsis
+          - os: macos-15
+            target: aarch64-apple-darwin
+            extension: ''
+            bundle: dmg
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            extension: ''
+            bundle: dmg
     env:
       PYTHONUTF8: '1'
     steps:
@@ -79,8 +88,10 @@ jobs:
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
           python .github/scripts/run_ci_command.py -- cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build real app for WebDriver
+        if: runner.os != 'macOS'
         run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --debug --no-bundle -- --locked
       - name: Install tauri-driver
+        if: runner.os != 'macOS'
         run: python .github/scripts/run_ci_command.py -- cargo install tauri-driver --locked
       - name: Exercise WebKitGTK window and downloads
         if: runner.os == 'Linux'
@@ -147,3 +158,31 @@ jobs:
         run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_modelio.py tests/test_model_import.py tests/test_bfres_v10_struct.py tests/test_bfres_v10_rigid.py tests/test_model_view.py tests/test_vram_budget.py tests/test_material_bindings.py tests/test_translate.py tests/test_benchmark_workflow.py
       - name: Open the standard exports in Blender
         run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_real_blender.py
+
+  beta-draft:
+    name: Prepare beta draft after all package checks
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[prepare-beta]') }}
+    needs: [desktop, webgl, model-formats]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: HookyCreator-*
+          path: beta-artifacts
+      - name: Require all four tested installers and create checksums
+        run: python tools/assemble_beta_release.py --artifacts beta-artifacts --output beta-dist
+      - name: Create an unpublished beta draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          gh release create "v${version}-beta" beta-dist/* --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "HookyMod ${version} beta" \
+            --draft --prerelease --notes-file docs/BETA_RELEASE_NOTES.md

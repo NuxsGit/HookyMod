@@ -28,7 +28,11 @@ contre une réclamation. Avant de rendre les sources ou des binaires publics :
 `python tools/create_source_snapshot.py` produit
 `release-preparation/HookyMod-source.zip` à partir des fichiers suivis et du
 contenu actuel de l'arbre de travail, sans historique Git ni fichiers ignorés.
-Les nouveaux fichiers non suivis doivent être ajoutés explicitement avec
+Les fichiers suivis supprimés de l'arbre de travail sont exclus et signalés ;
+la suppression de certains fichiers requis, notamment les logos et notices
+identifiés, fait échouer l'export. Cette liste n'est pas exhaustive : d'autres
+fichiers nécessaires peuvent manquer sans être détectés. Les nouveaux fichiers
+non suivis doivent être ajoutés explicitement avec
 `--include-untracked chemin/du/fichier` (une option par fichier) ou être suivis
 par Git avant l'export. Les autres fichiers non suivis sont exclus. L'outil
 refuse notamment les liens symboliques, certaines extensions de ressources de

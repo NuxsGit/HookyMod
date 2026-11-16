@@ -213,10 +213,11 @@ class StandaloneZstdTests(unittest.TestCase):
                 self.assertFalse(self.output.exists())
                 with self.assertRaises(zstd.ZstdError):
                     self.py_decompress(item)
-        # Checksum valide, mais deux bits réservés de mode de séquence non nuls.
+        # Trame synthétique de bytes(range(41)) répétés, avec checksum ;
+        # l'octet 53 a été modifié pour activer un bit réservé de séquence.
         bad = bytes.fromhex(
-            "28b52ffd043095010094026ff138a0d2d22d5112d23cd1d29e3df99b826c882f"
-            "b692a19bfd7af3f55aca3bed96317362769da19b0102d9388c5765c9063152")
+            "28b52ffd04209501009402000102030405060708090a0b0c0d0e0f1011121314"
+            "15161718191a1b1c1d1e1f2021222324252627280102d9388c5765b5e41ad3")
         self.input.write_bytes(bad)
         self.run_cli("zs", "decompress", self.input, self.output, ok=False)
         self.assertFalse(self.output.exists())

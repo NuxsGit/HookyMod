@@ -22,11 +22,10 @@ Rien n'est deviné : un fichier dont le suffixe n'est pas reconnu est classé
 « autre », **exporté quand même**, et listé comme tel. C'est la seule façon de ne
 pas perdre une texture sous prétexte qu'on ne connaît pas son nom.
 
-Les canaux suivent la convention des jeux Nintendo : les cartes de données
-(rugosité, métallique, occlusion) sont en niveaux de gris, la valeur utile est
-dans le canal R. glTF, lui, attend **une seule** image « metallicRoughness » avec
-la rugosité en G et le métallique en B : ``compose_metal_roughness`` la fabrique
-à partir des deux fichiers du jeu.
+Pour les cartes de données reconnues (rugosité, métallique, occlusion), ce
+module utilise la valeur du canal R. glTF attend **une seule** image
+« metallicRoughness » avec la rugosité en G et le métallique en B :
+``compose_metal_roughness`` la fabrique à partir des deux fichiers fournis.
 """
 
 from __future__ import annotations
@@ -111,7 +110,7 @@ def classify(name: str) -> str:
         for role, suffixes in ROLE_SUFFIXES.items():
             if token in suffixes:
                 return role
-    # forme collée : « biggoronalb »
+    # forme collée : « examplealb »
     for role, suffixes in ROLE_SUFFIXES.items():
         for suffix in suffixes:
             if text.endswith(suffix):

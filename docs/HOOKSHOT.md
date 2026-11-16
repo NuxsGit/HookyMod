@@ -8,7 +8,7 @@ Cette page décrit les opérations locales de HookyMod sur des fichiers fournis 
 python -m hookymod.cli nup /chemin/paquet.nup --verify --deep --extract /chemin/dump --only romfs
 ```
 
-Choisis un **dossier de destination vide**. Une extraction peut remplacer des fichiers existants et laisser une sortie partielle après une erreur ; elle refuse les chemins hors cible et le remplacement du paquet source. `--verify --deep` vérifie les empreintes présentes, mais une empreinte absente ne prouve pas l'intégrité. La lecture NUP a été testée sur des paquets synthétiques, pas sur un paquet réel. Aucun déchiffrement ni aucune clé ne sont fournis.
+Choisis un **dossier de destination vide**. Une extraction peut remplacer des fichiers existants et laisser une sortie partielle après une erreur ; elle refuse les chemins hors cible et le remplacement du paquet source. `--verify --deep` vérifie les empreintes présentes, mais une empreinte absente ne prouve pas l'intégrité. La lecture NUP a été testée sur des paquets synthétiques, pas sur un paquet réel. Aucun déchiffrement ni aucune clé ne sont fournis. Le lecteur traite uniquement les paquets déjà lisibles fournis par l’utilisateur ; une extraction complète peut également contenir un exécutable. Ne partage ces données que si tu en as le droit.
 
 ## Traducteur PNG / OBJ
 
@@ -19,7 +19,7 @@ python -m hookymod.cli translate status -p mon_projet
 python -m hookymod.cli translate pack -p mon_projet -o mods --mod-name MonMod
 ```
 
-`pc/` contient les fichiers éditables, `origin/` les originaux servant de gabarits et `manifest.json` leurs correspondances. `pack` ne reconstruit par défaut que les fichiers modifiés ; `--all` recopie aussi les originaux inchangés. Lis les erreurs du rapport : les géométries incompatibles ne sont pas injectées. Les copies d'origine ne sont pas modifiées.
+`pc/` contient les fichiers éditables, `origin/` les originaux servant de gabarits et `manifest.json` leurs correspondances. `pack` ne reconstruit par défaut que les fichiers modifiés ; `--all` recopie aussi les originaux inchangés. Les fichiers reconstruits et les mods assemblés peuvent conserver des données ou contenus dérivés des fichiers d'entrée : vérifie leur contenu et tes droits avant tout partage. Lis les erreurs du rapport : les géométries incompatibles ne sont pas injectées. Les copies d'origine ne sont pas modifiées.
 
 L'injection de géométrie est volontairement limitée à certaines structures BFRES 9.x, à une forme et un LOD, avec des tampons de capacité fixe et des attributs réécrivables. Les BFRES 10.x, squelettes, morphs, bornes à réécrire et autres structures non vérifiées sont refusés. Les matériaux et textures du fichier cible restent en place. Voir [HOOKYCREATOR.md](HOOKYCREATOR.md) pour les limites et l'import glTF/GLB de l'atelier.
 
@@ -38,4 +38,4 @@ Le traducteur tente de mettre à jour la table lors de `pack`, sauf avec `--no-t
 
 ## Attribution
 
-Hookshot de NotRexed est un projet distinct distribué sous GPL-3.0 ; ses notes publiques sur les paquets et tables ont été consultées comme références d'interopérabilité. Son [adresse GitHub historique](https://github.com/NotRexed/Hookshot) peut ne plus être accessible. HookyMod n'embarque ni son code ni celui de Longshot. Les autres sources et licences tierces sont indiquées dans [PROVENANCE.md](PROVENANCE.md).
+Hookshot de NotRexed est un projet distinct distribué sous GPL-3.0 ; ses notes publiques sur les paquets et tables ont été consultées comme références d'interopérabilité. Son [adresse GitHub historique](https://github.com/NotRexed/Hookshot) peut ne plus être accessible. Aucun code de Hookshot ni de Longshot n'a été intentionnellement repris durant ce travail ; la provenance de l'ensemble du code reste à vérifier. Les autres sources et licences tierces sont indiquées dans [PROVENANCE.md](PROVENANCE.md).

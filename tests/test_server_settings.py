@@ -77,6 +77,23 @@ class SettingsApiTests(unittest.TestCase):
             body, _ = server.api("POST", "/api/settings", {}, {"vram_gb": 120})
             self.assertEqual(json.loads(body)["settings"]["vram_gb"], 25.0)
 
+    def test_legacy_theme_is_migrated_and_persisted_by_api(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "work"
+            work.mkdir()
+            path = work / "settings.json"
+            path.write_text(json.dumps({"theme": "newgenoldtendo", "vram_gb": 13,
+                                        "accent": "menthe"}))
+            server = make_server(Path(tmp))
+            body, _ = server.api("GET", "/api/settings", {}, {})
+            settings = json.loads(body)["settings"]
+            self.assertEqual((settings["theme"], settings["vram_gb"], settings["accent"]),
+                             ("aurora", 13, "menthe"))
+            server.api("POST", "/api/settings", {}, {"language": "en"})
+            stored = json.loads(path.read_text())
+            self.assertEqual((stored["theme"], stored["vram_gb"], stored["accent"]),
+                             ("aurora", 13, "menthe"))
+
     def test_post_bad_setting_is_a_readable_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = make_server(Path(tmp))

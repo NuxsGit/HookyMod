@@ -3,9 +3,9 @@
 Le jeu réserve, pour chaque fichier du romfs, une taille maximale (la
 « ResourceSizeTable »). Un fichier plus gros que sa réservation n'est pas
 chargé : c'est la raison principale pour laquelle un mod (textures HD, modèle
-plus lourd, police plus grande) « ne fait rien » sur Switch / Switch 2, et
-Hookshot le documente explicitement — le mod doit fournir une table avec des
-entrées agrandies.
+plus lourd, police plus grande) peut ne pas fonctionner. Hookshot documente
+ce mécanisme : l'environnement cible peut exiger une table avec des entrées
+agrandies.
 
 Disposition du contenu (petit-boutiste) ::
 

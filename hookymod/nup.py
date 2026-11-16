@@ -1,9 +1,9 @@
-"""Lecture des paquets ``.nup`` : dumps déchiffrés de jeux Nintendo Switch 2.
+"""Lecture de paquets ``.nup`` déjà lisibles, fournis par l'utilisateur.
 
-Un ``.nup`` est le format produit par les outils de dump Switch 2 : un seul
-fichier contenant les titres du jeu, chacun avec son arborescence ``exefs/``
-(main, rtld, subsdk, …) et ``romfs/`` (les assets). C'est exactement ce que le
-portage PC **Hookshot** accepte à la place d'un couple ``romfs`` + ``exefs``.
+Un paquet peut contenir plusieurs titres avec des arborescences ``exefs/``
+(exécutables) et ``romfs/`` (ressources). Aucun déchiffrement ni aucune clé
+ne sont fournis. L'extraction peut copier ces fichiers : ne les partagez que
+si vous en avez le droit.
 
 Disposition (petit-boutiste), reconstituée à partir du fichier ::
 

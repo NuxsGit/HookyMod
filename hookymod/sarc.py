@@ -1,4 +1,4 @@
-"""Lecture et reconstruction d'archives SARC (Nintendo Switch, Little Endian).
+"""Lecture et reconstruction d'archives SARC (little-endian).
 
 Format (rappel) ::
 

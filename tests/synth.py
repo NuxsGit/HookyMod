@@ -184,7 +184,7 @@ def rgba8_pixels(width: int, height: int, seed: int = 0) -> bytes:
 
 # --------------------------------------------------------------------------- BFRES
 def make_bfres() -> bytes:
-    """BFRES Switch v10 minimal : 1 modèle, 1 forme, 1 mesh, 1 triangle."""
+    """BFRES v10 minimal : 1 modèle, 1 forme, 1 mesh, 1 triangle."""
     buffer_base = 0x800
     blob = Blob(buffer_base + 0x40)
 
