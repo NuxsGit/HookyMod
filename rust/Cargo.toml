@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.87"
 description = "Noyaux et outils autonomes Rust de HookyMod"
-license = "MIT"
+license-file = "../LICENSE"
 
 [dependencies]
 # Sources et licences incluses dans vendor/ : compilation possible sans réseau.

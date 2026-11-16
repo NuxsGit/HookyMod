@@ -16,6 +16,27 @@ from smoke_desktop_backend import run as smoke_backend
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# These source notices must accompany both supported installer formats. They
+# are not a complete inventory of the platform-specific dependency licenses.
+NOTICE_PATHS = (
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/PROVENANCE.md",
+    "docs/licenses/NUP_EXPLORER_MIT.txt",
+    "hookycreator/web/shaders/LICENSE-FSR1.txt",
+    "rust/vendor/README.md",
+    "rust/vendor/ruzstd/LICENSE",
+    "rust/vendor/twox-hash/LICENSE",
+    "rust/vendor/hmac-sha256/LICENSE",
+)
+
+
+def check_notices(license_dir: Path) -> None:
+    for relative in NOTICE_PATHS:
+        bundled = license_dir / relative
+        if not bundled.is_file() or bundled.read_bytes() != (ROOT / relative).read_bytes():
+            raise RuntimeError(f"Licence ou notice absente ou altérée dans le paquet : {bundled}")
+
 
 def run() -> None:
     windows = sys.platform == "win32"
@@ -37,17 +58,20 @@ def run() -> None:
             subprocess.run(command, check=True, timeout=180)
             app = installed / "hookycreator-desktop.exe"
             backend = installed / "hookycreator-backend.exe"
+            license_dir = installed / "licenses"
         else:
             subprocess.run(["dpkg-deb", "--extract", str(package), str(directory)],
                            check=True, timeout=180)
             app = directory / "usr" / "bin" / "hookycreator-desktop"
             backend = app.with_name("hookycreator-backend")
+            license_dir = directory / "usr" / "lib" / "HookyCreator" / "licenses"
         if not app.is_file() or not backend.is_file():
             raise RuntimeError(f"Exécutables absents du paquet : {app}, {backend}")
         if not windows and (not os.access(app, os.X_OK) or not os.access(backend, os.X_OK)):
             raise RuntimeError("Les exécutables du paquet ne sont pas exécutables.")
+        check_notices(license_dir)
         smoke_backend(backend)
-        print("Paquet : application et sidecar présents côte à côte ; sidecar livré vérifié.")
+        print("Paquet : exécutables, licences connues et sidecar livré vérifiés.")
 
 
 if __name__ == "__main__":

@@ -80,6 +80,21 @@ du jeu. Les bibliothèques et crates de Tauri nécessitent leur propre télécha
 le fichier `src-tauri/Cargo.lock` fige leurs versions, mais seul le noyau `rust/`
 dispose de crates vendorizées.
 
+Les paquets incluent la licence du projet et les notices identifiées sous
+`licenses/` ; le test du paquet vérifie leur présence et leur contenu. Cette
+liste **n'est pas un audit complet des dépendances embarquées** : avant toute
+diffusion publique d'un installateur, identifier les versions réellement
+incluses et satisfaire toutes leurs obligations de licences et de redistribution
+(voir [`PROVENANCE.md`](PROVENANCE.md) et [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)).
+
+Pour régénérer toutes les icônes à partir du logo maître fourni :
+
+```bash
+python -m pip install Pillow
+python tools/update_brand_assets.py
+python -m pytest -q tests/test_brand_assets.py
+```
+
 Pour un exécutable non empaqueté de développement :
 
 ```bash
@@ -98,7 +113,9 @@ Le sidecar n'écoute que sur `127.0.0.1`, sur un port aléatoire. Un jeton propr
 `HttpOnly`/`SameSite=Strict` ; les routes sensibles vérifient également l'origine
 et la méthode HTTP. Ce n'est pas une isolation contre un autre programme ayant
 les mêmes droits sur la machine. Le sidecar s'arrête à la fermeture de la
-fenêtre ou si son tube parent est fermé. La page chargée ne reçoit pas de
+fenêtre ou si son tube parent est fermé. Sous Windows, le tube est surveillé
+sans lecture bloquante : celle-ci peut empêcher le chargement des bibliothèques
+natives NumPy utilisées par la conversion audio. La page chargée ne reçoit pas de
 permission Tauri pour ouvrir arbitrairement des dossiers ou exécuter des commandes.
 
 Le workflow `.github/workflows/desktop.yml` construit le sidecar et la fenêtre

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -24,6 +25,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 from desktop_fixture import make_desktop_fixture  # noqa: E402
+
+# These routes share one server-side import slot. A 429 is returned before the
+# body is read or processed, so retrying that response cannot repeat an import.
+IMPORT_ROUTES = frozenset({"/api/model/import", "/api/model/inspect",
+                           "/api/video/import", "/api/sound/import"})
+
+
+def post_json(opener, origin: str, route: str, data: dict) -> dict:
+    request = urllib.request.Request(
+        origin + route, method="POST", data=json.dumps(data).encode(),
+        headers={"Origin": origin, "Content-Type": "application/json"})
+    for attempt in range(3):
+        try:
+            with opener.open(request, timeout=60) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            if route not in IMPORT_ROUTES or error.code != 429 or attempt == 2:
+                raise
+            error.close()
+            # The server advertises Retry-After: 2 for this busy slot.
+            print(f"Import temporairement occupé ; nouvelle tentative : {route}", flush=True)
+            time.sleep(2)
+    raise AssertionError("Nombre de tentatives inattendu")
 
 
 def run(binary: Path) -> None:
@@ -37,7 +61,7 @@ def run(binary: Path) -> None:
         original = bytes(original)
         model.write_bytes(original)
         with tempfile.TemporaryFile() as log:
-            child_env = {**os.environ, "PYTHONUTF8": "1"}
+            child_env = {**os.environ, "PYTHONUTF8": "1", "HOOKY_SMOKE_TRACEBACKS": "1"}
             # A standalone sidecar must not silently load dependencies from the
             # test runner's PYTHONPATH instead of its own bundled modules.
             child_env.pop("PYTHONPATH", None)
@@ -121,6 +145,7 @@ def run(binary: Path) -> None:
                 formats = {"wav": b"RIFF", "flac": b"fLaC", "ogg": b"OggS"}
                 wav = None
                 for fmt, magic in formats.items():
+                    print(f"Vérification de la conversion audio : {fmt}", flush=True)
                     with opener.open(origin + f"/api/sound/convert?path=Model%2FSilence.bwav&format={fmt}", timeout=30) as response:
                         converted = response.read()
                         assert converted.startswith(magic), (fmt, converted[:12])
@@ -146,11 +171,7 @@ def run(binary: Path) -> None:
                     gltf, geometry = archive.read("Heros/Heros.gltf"), archive.read("Heros/Heros.bin")
 
                 def post(route: str, data: dict) -> dict:
-                    request = urllib.request.Request(
-                        origin + route, method="POST", data=json.dumps(data).encode(),
-                        headers={"Origin": origin, "Content-Type": "application/json"})
-                    with opener.open(request, timeout=60) as response:
-                        return json.load(response)
+                    return post_json(opener, origin, route, data)
 
                 # Replacement copies the supplied bytes under the work directory;
                 # neither the original nor codecs/game compatibility are rewritten.

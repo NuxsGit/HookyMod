@@ -19,7 +19,9 @@ def main() -> int:
     if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
         command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", subprocess.list2cmdline(command)]
     print("Exécution :", " ".join(args), flush=True)
-    lines = collections.deque(maxlen=60)
+    # A faulthandler dump can span more than 60 lines; retain enough of it to
+    # identify the stuck worker instead of only reporting the caller timeout.
+    lines = collections.deque(maxlen=300)
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, encoding="utf-8", errors="replace", bufsize=1) as process:
         assert process.stdout is not None

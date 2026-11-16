@@ -1,0 +1,64 @@
+HookyMod Noncommercial License 1.0
+
+This is a project-specific, source-available license, not an open-source license.
+
+1. Scope
+
+This license applies to the original HookyMod source code, documentation,
+configuration, and project assets that their respective copyright holders
+make available under these terms (the "Software"). Each such copyright holder
+is a "Licensor" only for rights that holder can license. This license does not
+cover separately licensed third-party components; their own licenses and
+notices continue to apply. See THIRD_PARTY_NOTICES.md and docs/PROVENANCE.md.
+
+2. Permission for noncommercial purposes
+
+Subject to these terms, each Licensor grants you a worldwide, non-exclusive,
+royalty-free license to use, reproduce, build, modify, and distribute the
+Software, including modified versions, in source or binary form, solely for
+noncommercial purposes. You must comply with applicable law and have any
+rights necessary to use third-party material with the Software.
+
+3. No commercial use or sale
+
+This license does not permit commercial use or commercial distribution of the
+Software or of any modified version containing the Software. You may not sell,
+rent, charge for access to or downloads of, or otherwise provide the Software
+or such a modified version for monetary compensation or commercial advantage.
+You may not include it in a paid product, a paid service or an advertising-funded
+service, provide its functionality commercially, or use it for business or
+paid client work. These restrictions apply regardless of whether a profit is
+made and regardless of whether the user is an individual, company, nonprofit,
+educational institution, government body, or other organization.
+
+Voluntary donations are permitted if they are genuine gifts, are not required
+to obtain or use the Software, and provide no goods, services, enhanced access,
+early builds, priority support, or other benefits in return. Calling a payment
+a donation does not make a commercial transaction noncommercial.
+
+4. Sharing and modifications
+
+When distributing any covered part of the Software, with or without changes,
+you must include this license and retain the applicable copyright, attribution,
+and third-party license notices. Clearly identify your modifications. You may
+distribute a modified version containing the Software only under these terms;
+you may not grant permission to sell it or use or distribute it commercially.
+A recipient receives rights to the original covered parts from their respective
+Licensors under this license; you cannot sublicense those parts or grant rights
+their Licensors have not granted. These conditions do not alter the separate
+licenses of third-party components or independently owned material.
+
+5. Other rights
+
+No rights to third-party games, game assets, trademarks, encryption keys, or
+other third-party material are granted. Nothing here takes away rights already
+validly granted under another license or rights that cannot be limited under
+applicable law. All rights not expressly granted by the relevant Licensor are
+reserved. Separate written permission from the relevant rights holders is
+necessary for rights not granted here.
+
+6. No warranty
+
+To the maximum extent permitted by applicable law, the Software is provided
+"AS IS", without warranty of any kind, and the Licensors are not liable for
+claims or damages arising from the Software or this license.

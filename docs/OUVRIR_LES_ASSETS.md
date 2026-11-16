@@ -43,7 +43,7 @@ Ces projets externes sont cités comme sources ou outils distincts, pas comme d�
 - [OctoSquiddy/Switch-2-Toolbox](https://github.com/OctoSquiddy/Switch-2-Toolbox), structures BFRES/BNTX et textures externes ; projet sous GPL-3.0. Voir aussi [la discussion sur les dictionnaires](https://github.com/KillzXGaming/Switch-Toolbox/issues/757).
 - [Kabosune/oot-remake-modding](https://github.com/Kabosune/oot-remake-modding), notes sur les fichiers, dictionnaires et table des tailles.
 - [CosmicDreamsOfCode/BfresToCast](https://github.com/CosmicDreamsOfCode/BfresToCast), autre convertisseur de modèles.
-- [NotRexed/Hookshot](https://github.com/NotRexed/Hookshot), notamment ses notes sur NUP et les tables de tailles.
+- Hookshot de NotRexed, notamment ses notes sur NUP et les tables de tailles ([adresse GitHub historique](https://github.com/NotRexed/Hookshot)). [Longshot](https://git.magicbean.dev/MagicBeanDev/Longshot) est un fork distinct maintenu par Team MagicBean ; la compatibilité avec HookyMod n'a pas été vérifiée.
 - [zortos293/Lichii](https://github.com/zortos293/Lichii), projet indépendant d'émulation.
 - `KillzXGaming/tegra_swizzle`, formules publiques de disposition des pixels X1/Orin ; la famille d'outils TotkToolkit propose également des références sur des formats apparentés.
 

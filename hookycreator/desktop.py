@@ -20,6 +20,41 @@ import time
 from .server import HookyCreatorServer
 
 
+def _wait_for_parent_close() -> None:
+    """Wait for the parent's lifetime pipe without blocking its Windows handle.
+
+    A pending synchronous read on a Windows stdin pipe can block native DLLs
+    which inspect that same standard handle while being loaded (notably the
+    OpenBLAS DLL bundled with NumPy). Poll an anonymous/named pipe instead;
+    also stop if the parent sends data, as the original one-byte read did.
+    Non-pipe stdin and other platforms retain their ordinary blocking read.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_file_type = kernel32.GetFileType
+        get_file_type.argtypes = [wintypes.HANDLE]
+        get_file_type.restype = wintypes.DWORD
+        if get_file_type(handle) == 3:  # FILE_TYPE_PIPE
+            peek = kernel32.PeekNamedPipe
+            peek.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                             ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+                             ctypes.POINTER(wintypes.DWORD)]
+            peek.restype = wintypes.BOOL
+            available = wintypes.DWORD()
+            while peek(handle, None, 0, None, ctypes.byref(available), None):
+                if available.value:
+                    return
+                time.sleep(0.1)
+            # The write end was closed (or the handle became invalid).
+            return
+    sys.stdin.buffer.read(1)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hookycreator-desktop-backend")
     parser.add_argument("root", help="dossier du projet choisi dans la fenêtre native")
@@ -33,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             # Le parent conserve l'extrémité d'écriture ouverte pendant toute
             # sa vie ; EOF signifie qu'il a quitté, même sans arrêt propre.
-            sys.stdin.buffer.read(1)
+            _wait_for_parent_close()
         except (AttributeError, OSError, ValueError):
             pass
         with lifecycle_lock:

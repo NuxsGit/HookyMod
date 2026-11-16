@@ -1,6 +1,6 @@
 # Paquets, traduction et dossiers de mod
 
-Cette page décrit les opérations locales de HookyMod sur des fichiers fournis par l'utilisateur. Les règles d'un chargeur externe peuvent évoluer : consulte sa documentation et vérifie la structure attendue avant d'installer un mod. L'assemblage de fichiers ne garantit pas leur fonctionnement.
+Cette page décrit les opérations locales de HookyMod sur des fichiers fournis par l'utilisateur. [Longshot](https://git.magicbean.dev/MagicBeanDev/Longshot) est un fork distinct de Hookshot, maintenu par Team MagicBean ; HookyMod n'est affilié à aucun des deux et son intégration à Longshot n'a pas été testée. Les règles d'un chargeur externe peuvent évoluer : consulte sa documentation et vérifie la structure attendue avant d'installer un mod. L'assemblage de fichiers ne garantit pas leur fonctionnement.
 
 ## Extraire un paquet NUP
 
@@ -38,4 +38,4 @@ Le traducteur tente de mettre à jour la table lors de `pack`, sauf avec `--no-t
 
 ## Attribution
 
-[NotRexed/Hookshot](https://github.com/NotRexed/Hookshot) est un projet distinct distribué sous GPL-3.0 ; ses notes publiques sur les paquets et tables ont été consultées comme références d'interopérabilité. HookyMod n'embarque pas son code. Les autres sources et licences tierces sont indiquées dans [PROVENANCE.md](PROVENANCE.md).
+Hookshot de NotRexed est un projet distinct distribué sous GPL-3.0 ; ses notes publiques sur les paquets et tables ont été consultées comme références d'interopérabilité. Son [adresse GitHub historique](https://github.com/NotRexed/Hookshot) peut ne plus être accessible. HookyMod n'embarque ni son code ni celui de Longshot. Les autres sources et licences tierces sont indiquées dans [PROVENANCE.md](PROVENANCE.md).

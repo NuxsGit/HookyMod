@@ -15,6 +15,19 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "license": "LicenseRef-HookyMod-NonCommercial-1.0",
+    "licenseFile": "../LICENSE",
+    "resources": {
+      "../LICENSE": "licenses/LICENSE",
+      "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "../docs/PROVENANCE.md": "licenses/docs/PROVENANCE.md",
+      "../docs/licenses/NUP_EXPLORER_MIT.txt": "licenses/docs/licenses/NUP_EXPLORER_MIT.txt",
+      "../hookycreator/web/shaders/LICENSE-FSR1.txt": "licenses/hookycreator/web/shaders/LICENSE-FSR1.txt",
+      "../rust/vendor/README.md": "licenses/rust/vendor/README.md",
+      "../rust/vendor/ruzstd/LICENSE": "licenses/rust/vendor/ruzstd/LICENSE",
+      "../rust/vendor/twox-hash/LICENSE": "licenses/rust/vendor/twox-hash/LICENSE",
+      "../rust/vendor/hmac-sha256/LICENSE": "licenses/rust/vendor/hmac-sha256/LICENSE"
+    },
     "externalBin": ["binaries/hookycreator-backend"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }
