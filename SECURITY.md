@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-We actively maintain and provide security updates for the latest major release of the **OoT Remake Asset Explorer**.
+Security reports for the latest major release of **HookyMod** are reviewed on a best-effort basis.
 
 | Version | Supported          |
 | ------- | ------------------ |

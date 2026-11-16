@@ -128,16 +128,16 @@ class MobAndModTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         (self.root / "Tex").mkdir()
         (self.root / "Model").mkdir()
-        (self.root / "Tex" / "Butterfly_Alb.bntx").write_bytes(
+        (self.root / "Tex" / "Creature_Alb.bntx").write_bytes(
             synth.make_bntx(32, 32, synth.rgba8_pixels(32, 32)))
-        (self.root / "Model" / "Butterfly.bfres").write_bytes(synth.make_bfres())
+        (self.root / "Model" / "Creature.bfres").write_bytes(synth.make_bfres())
         self.project = Project(self.root)
         self.project.scan()
 
     def test_create_mob_copies_assets_and_records_todo(self):
-        mob = self.project.create_mob("Papillon Doré", "Model/Butterfly.bfres",
-                                      ["Tex/Butterfly_Alb.bntx"])
-        self.assertEqual(mob["slug"], "Papillon_Doré")
+        mob = self.project.create_mob("Créature Dorée", "Model/Creature.bfres",
+                                      ["Tex/Creature_Alb.bntx"])
+        self.assertEqual(mob["slug"], "Créature_Dorée")
         self.assertEqual(len(mob["files"]), 2)
         for entry in mob["files"]:
             self.assertTrue((self.project.work / "mobs" / mob["slug"] / entry["to"]).is_file())
@@ -149,11 +149,11 @@ class MobAndModTests(unittest.TestCase):
             self.project.create_mob("   ", "", [])
 
     def test_build_mod_writes_romfs_tree(self):
-        mob = self.project.create_mob("Test", "Model/Butterfly.bfres", [])
-        self.project.import_texture("Tex/Butterfly_Alb.bntx", 0, _gradient_png(32, 32))
+        mob = self.project.create_mob("Test", "Model/Creature.bfres", [])
+        self.project.import_texture("Tex/Creature_Alb.bntx", 0, _gradient_png(32, 32))
         result = self.project.build_mod("MonMod")
         target = self.root / "mods" / "MonMod"
-        self.assertTrue((target / "romfs" / "Tex" / "Butterfly_Alb.bntx").is_file())
+        self.assertTrue((target / "romfs" / "Tex" / "Creature_Alb.bntx").is_file())
         model_entry = next(f for f in mob["files"] if f["kind"] == "model")
         self.assertTrue((target / "romfs" / "Model" / model_entry["to"]).is_file())
         manifest = json.loads((target / "hookycreator.json").read_text())
@@ -251,13 +251,13 @@ class BulkClassificationTests(unittest.TestCase):
         self.assertEqual(self._classify(b"BNTX" + bytes(8), "peu_importe.bin"), "texture")
 
     def test_auxiliary_names_are_never_models(self) -> None:
-        for name in ("Enemy_Spike.anim.bfres.zs", "Enemy_Stalfos_Animation.anim.bfres.zs"):
+        for name in ("Enemy_Example2.anim.bfres.zs", "Enemy_Example_Animation.anim.bfres.zs"):
             self.assertEqual(self._classify(b"FRES" + bytes(64), name), "animation", name)
-        for name in ("Enemy_Stalfos_Animation.Skeleton.bfres.zs", "Dm_Zora_0000.camera.bfres.zs"):
+        for name in ("Enemy_Example_Animation.Skeleton.bfres.zs", "Camera_Example_0000.camera.bfres.zs"):
             self.assertEqual(self._classify(b"FRES" + bytes(64), name), "auxiliary", name)
 
     def test_bfres_without_animation_name_is_a_model(self) -> None:
-        self.assertEqual(self._classify(b"FRES" + bytes(64), "Enemy_Wolfos.bfres.zs"), "model")
+        self.assertEqual(self._classify(b"FRES" + bytes(64), "Enemy_Example.bfres.zs"), "model")
 
     def test_unknown_content_falls_back_on_extension(self) -> None:
         self.assertEqual(self._classify(b"????", "Modele.bfres"), "model")

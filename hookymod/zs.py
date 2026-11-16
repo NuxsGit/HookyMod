@@ -1,8 +1,8 @@
 """Gestion des fichiers ``.zs`` (zstd) et des dictionnaires du jeu.
 
-Sur Switch, la plupart des assets sont compressés en zstd **avec un dictionnaire
-partagé** livré dans ``Pack/ZsDic.pack.zs``.  Sans ce dictionnaire, impossible de
-lire les assets : ce module le détecte, le charge et l'utilise automatiquement.
+Certains assets sont compressés en zstd **avec un dictionnaire partagé** situé
+dans ``Pack/ZsDic.pack.zs``. Si ce dictionnaire fourni par l'utilisateur est
+nécessaire, ce module le détecte, le charge et l'utilise automatiquement.
 
 Il sait aussi se rabattre sur les autres dictionnaires du pack si l'identifiant
 du dictionnaire d'un fichier ne correspond pas exactement (utile sur les dumps

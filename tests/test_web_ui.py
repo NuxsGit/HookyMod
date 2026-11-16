@@ -51,7 +51,7 @@ class WebContractTests(unittest.TestCase):
         sections = set(re.findall(r'id="view-([a-z]+)"', self.html))
         rail = set(re.findall(r'data-view="([a-z]+)"', self.html))
         labels = set(re.findall(
-            r'^\s+(home|edit|create|models|ensembles|textures|sounds|animations|videos|mobs|import|settings):',
+            r'^\s+(home|edit|create|studio|models|ensembles|textures|sounds|animations|videos|mobs|import|settings):',
             self.js, re.M))
         self.assertEqual(sections, rail)
         self.assertTrue(sections <= labels | {"home"})
@@ -69,6 +69,32 @@ class WebContractTests(unittest.TestCase):
         self.assertIn("pas la création automatique d'un acteur jouable", creation)
         self.assertIn('showView("create"); $("#mod-name")?.focus()', self.js)
         self.assertNotIn('$("#mod-form")?.requestSubmit()', self.js)
+
+    def test_hookymods_is_a_separate_wired_design_workspace(self) -> None:
+        studio_js = _read("studio.js")
+        section = self.html.split('id="view-studio"', 1)[1].split('id="view-create"', 1)[0]
+        self.assertIn('data-view="studio"', self.html)
+        self.assertIn('data-goto="studio"', self.html)
+        self.assertIn('<script src="/static/studio.js"></script>', self.html)
+        self.assertIn("maquette ordonnée", section)
+        self.assertIn("ne créent pas encore de contenu jouable", section)
+        self.assertIn('data-studio-block="when_interact"', section)
+        self.assertIn('data-studio-kind="dungeon"', section)
+        self.assertIn("Longshot + Link's Tool Box : compatibilité", section)
+        self.assertIn("projets .hooky de conception, non jouables", section)
+        self.assertIn("fichiers de mod déjà préparés", section)
+        self.assertIn("Aucun import direct .hooky par un lanceur n'a été validé", section)
+        self.assertIn('id="studio-simulate"', section)
+        self.assertIn('Simulation en mémoire uniquement', section)
+        self.assertIn('/api/studio/simulate', studio_js)
+        self.assertIn('window.HookyStudio?.show()', self.js)
+        self.assertIn('window.HookyStudio?.flush()', self.js)
+        used = set(re.findall(r'\$\("#([A-Za-z0-9_-]+)"', studio_js))
+        present = set(re.findall(r'id="([A-Za-z0-9_-]+)"', self.html))
+        self.assertEqual(sorted(used - present), [])
+        self.assertIn('data-no-i18n title="${escape(project.name)}"', studio_js)
+        self.assertIn('data-no-i18n title="${escape(element.name)}"', studio_js)
+        self.assertIn('data-block-value="${index}" data-no-i18n', studio_js)
 
     def test_unsupported_operations_are_described_without_promising_a_mod(self) -> None:
         self.assertIn("BFRES auxiliaires (rapport)", self.html)
@@ -112,6 +138,11 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('dataset.density', self.js)
         self.assertIn('html[data-accent="azur"]', self.css)
         self.assertIn('html[data-density="compact"]', self.css)
+
+    def test_aurora_theme_is_available_and_styled(self) -> None:
+        self.assertIn('<option value="aurora">Aurora</option>', self.html)
+        self.assertIn('html[data-theme="aurora"]', self.css)
+        self.assertIn('dataset.theme', self.js)
 
     def test_uv_checker_is_wired_to_the_api(self) -> None:
         self.assertIn("/api/model/uv", self.js)

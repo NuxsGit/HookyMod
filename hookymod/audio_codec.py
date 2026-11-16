@@ -2,7 +2,7 @@
 
 The Opus container is handled by :mod:`hookymod.audio`.  Standard codecs use
 soundfile/libsndfile; no external ffmpeg executable is invoked.  Replacement
-files are PCM16 BWAVs, not re-encoded Nintendo Opus.  They must be treated as
+files are PCM16 BWAVs, not re-encoded Opus. They must be treated as
 experimental working copies: a game may impose additional bank, codec, loop,
 or resource-table requirements.
 

@@ -91,6 +91,22 @@ class SettingsTests(unittest.TestCase):
             path.write_text(json.dumps({"vram_gb": "n'importe quoi"}))
             self.assertEqual(Settings.load(path).vram_gb, VRAM_DEFAULT_GB)
 
+    def test_legacy_theme_migrates_without_losing_other_preferences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(json.dumps({"theme": " NewGenOldTendo ", "vram_gb": 12.5,
+                                        "accent": "menthe", "language": "en"}))
+            loaded = Settings.load(path)
+            self.assertEqual(loaded.theme, "aurora")
+            self.assertEqual((loaded.vram_gb, loaded.accent, loaded.language),
+                             (12.5, "menthe", "en"))
+            loaded.save(path)
+            self.assertEqual(json.loads(path.read_text())["theme"], "aurora")
+            self.assertEqual(Settings.load(path).theme, "aurora")
+        self.assertEqual(Settings.from_json({"theme": "aurora"}).theme, "aurora")
+        with self.assertRaises(SettingsError):
+            Settings.from_json({"theme": "unrecognised"})
+
 
 class PlanTests(unittest.TestCase):
     def test_small_model_fits_without_degradation(self) -> None:

@@ -11,7 +11,7 @@ Exemples ::
     python -m hookymod.cli textures model.bntx -o textures_png
     python -m hookymod.cli obj model.bfres -o model.obj
     python -m hookymod.cli export-model model.bfres -o model_export
-    python -m hookymod.cli patch asset.zs --find Link --replace Hero -o asset.patched.zs
+    python -m hookymod.cli patch asset.zs --find Original --replace Example -o asset.patched.zs
 """
 
 from __future__ import annotations
@@ -927,9 +927,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mip", type=int, default=0)
     swizzle = p.add_mutually_exclusive_group()
     swizzle.add_argument("--orin", dest="orin", action="store_true", default=None,
-                         help="force la disposition Switch 2 (Tegra T239)")
+                         help="force la disposition Orin (Tegra T239)")
     swizzle.add_argument("--x1", dest="orin", action="store_false",
-                         help="force la disposition Switch 1 (Tegra X1)")
+                         help="force la disposition Tegra X1")
     p.set_defaults(func=cmd_textures)
 
     p = sub.add_parser("view", parents=[common],
@@ -975,7 +975,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_blender)
 
     p = sub.add_parser("nup", parents=[common],
-                       help="lit un paquet .nup (dump Nintendo Switch 2) : liste / extraction")
+                       help="lit un paquet .nup déjà lisible : liste / extraction")
     p.add_argument("path")
     p.add_argument("--list", "-l", action="store_true", help="liste le contenu (défaut)")
     p.add_argument("--extract", "-x", help="dossier de destination")

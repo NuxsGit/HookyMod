@@ -133,9 +133,9 @@ EXTENSIONS: dict[str, tuple[str, str]] = {
     ".bars": ("bars", "banque audio BARS"),
     ".bars.zs": ("bars", "banque audio BARS compressée"),
     ".bar": ("bar", "archive BAR"),
-    ".nca": ("nca", "contenu NCA (Switch)"),
-    ".nsp": ("nsp", "paquet NSP (Switch)"),
-    ".xci": ("xci", "cartouche XCI (Switch)"),
+    ".nca": ("nca", "contenu NCA"),
+    ".nsp": ("nsp", "paquet NSP"),
+    ".xci": ("xci", "conteneur XCI"),
 }
 
 

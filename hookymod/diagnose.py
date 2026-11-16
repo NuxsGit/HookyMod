@@ -3,7 +3,7 @@
 Ces fonctions ne dépendent pas de Tk : elles servent à la fois à l'interface
 (menu **Affichage → Diagnostic du fichier courant…**, **Aide → Diagnostic de
 l'installation…**) et à la ligne de commande (`python -m hookymod.cli doctor`).
-C'est le moyen le plus rapide de comprendre pourquoi un asset Switch 2 ne
+C'est le moyen le plus rapide de comprendre pourquoi un asset compatible ne
 s'affiche pas : version du conteneur, disposition des pixels, modules présents.
 """
 
@@ -82,7 +82,7 @@ def environment_report(romfs: Path | str | None = None, dicts: int = 0,
     lines.append("")
     lines.append("  Formats de textures décodables")
     astc = "oui" if texture2ddecoder is not None else "non (module absent)"
-    lines.append(f"  {'ASTC (Switch 2)':<22} {astc}")
+    lines.append(f"  {'ASTC':<22} {astc}")
     bc7 = "oui" if texture2ddecoder is not None else "non (module absent)"
     lines.append(f"  {'BC7 / BC6H':<22} {bc7}")
     lines.append(f"  {'BC1-BC5, RGBA8…':<22} oui (décodeur intégré)")
@@ -126,7 +126,7 @@ def file_report(data: bytes, name: str = "", orin: bool | None = None) -> str:
         except Exception as exc:  # noqa: BLE001
             lines += [f"⚠ BNTX illisible : {exc}",
                       "Le fichier est bien un BNTX mais sa structure n'est pas reconnue.",
-                      "Essaie la disposition « Switch 2 » dans l'onglet Textures."]
+                      "Essaie la disposition « Orin » dans l'onglet Textures."]
             return "\n".join(lines)
         lines.append(file.info())
         return "\n".join(lines)
@@ -141,7 +141,7 @@ def file_report(data: bytes, name: str = "", orin: bool | None = None) -> str:
         lines.append(file.info())
         if not any(shape.vtx_buffer for model in file.models for shape in model.shapes):
             lines += ["", "⚠ Aucun tampon de sommets lisible : le modèle ne peut pas "
-                          "être affiché (structure BFRES Switch 2 non gérée ?)."]
+                          "être affiché (structure BFRES non gérée ?)."]
         return "\n".join(lines)
 
     if data[:4] == b"SARC":

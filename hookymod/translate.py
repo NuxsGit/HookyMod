@@ -1,4 +1,4 @@
-"""Traducteur romfs (Switch 2) ↔ dossier PC éditable, et retour.
+"""Traducteur de ressources romfs ↔ dossier PC éditable, et retour.
 
 Le principe : un **projet** est un dossier qui garde à la fois
 

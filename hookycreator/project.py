@@ -121,7 +121,7 @@ ANIMATION_SUFFIXES = ("_player_animation", "_animation", "_anim")
 
 
 def _animation_key(name: str) -> str:
-    """``Animal_Cat_Animation.anim.bfres.zs`` → ``animal_cat``."""
+    """``Creature_Alpha_Animation.anim.bfres.zs`` → ``creature_alpha``."""
     base = name.split(".")[0].lower()
     for suffix in ANIMATION_SUFFIXES:
         if base.endswith(suffix):
@@ -143,7 +143,7 @@ def _tokens(text: str) -> list[str]:
 def _texture_base(name: str, role: str | None = None) -> str:
     """Nom d'une texture **sans** son espace de noms ni son suffixe de rôle.
 
-    ``Mt_Weapon_Sword_Biggoron_Alb`` → ``weapon_sword_biggoron`` : c'est la clé
+    ``Mt_Weapon_Sword_Example_Alb`` → ``weapon_sword_example`` : c'est la clé
     qui doit rencontrer le nom du modèle, et elle se calcule une seule fois par
     fichier au lieu d'être recalculée pour chaque modèle.
     """
@@ -230,7 +230,7 @@ def _png_stem(stem: str) -> str:
 
 
 def _display_name(stem: str) -> str:
-    """``Animal_Cat.Animal_Cat`` → ``Animal_Cat`` (le jeu double souvent le nom)."""
+    """``Creature_Alpha.Creature_Alpha`` → ``Creature_Alpha`` (certains fichiers doublent le nom)."""
     head, _, tail = stem.partition(".")
     return head if head and head == tail else stem
 
@@ -1707,7 +1707,7 @@ class Project:
     def _ranked_names(self, index: "_PrefixIndex", rel: str):
         """Assets qui portent le nom du modèle, du plus sûr au plus large.
 
-        Trois rangs, comme avant : le nom complet (``Weapon_Sword_Biggoron``),
+        Trois rangs, comme avant : le nom complet (``Weapon_Sword_Example``),
         la famille (``Weapon_Sword``), puis le préfixe (``Weapon``). Le premier
         rang non vide gagne — jamais de mélange entre deux rangs.
 
@@ -1768,11 +1768,11 @@ class Project:
     def animations_for(self, rel: str) -> list:
         """Animations (``*.anim.bfres``) qui vont avec ce modèle.
 
-        Le jeu ne nomme pas ses animations comme ses modèles : à côté de
-        ``Animal_Cat.Animal_Cat.bfres`` vit ``Animal_Cat_Animation.anim.bfres``.
+        Certaines animations ont un nom différent de celui du modèle : à côté de
+        ``Creature_Alpha.Creature_Alpha.bfres`` vit ``Creature_Alpha_Animation.anim.bfres``.
         On enlève donc le suffixe ``_Animation`` / ``_Player_Animation`` avant de
-        comparer, puis on accepte les variantes préfixées (``Animal_Dog_Wild``
-        pour ``Animal_Dog``) : c'est le seul appariement possible sans ouvrir
+        comparer, puis on accepte les variantes préfixées (``Creature_Beta_Variant``
+        pour ``Creature_Beta``) : c'est le seul appariement possible sans ouvrir
         chaque fichier, et il reste instantané.
         """
         with self._cache_lock:

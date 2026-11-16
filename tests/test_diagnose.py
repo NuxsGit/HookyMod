@@ -16,7 +16,7 @@ import synth  # noqa: E402
 from hookymod import bntx_encode, diagnose, theme, util  # noqa: E402
 
 
-def _switch2_bntx(size: int = 16) -> bytes:
+def _orin_bntx(size: int = 16) -> bytes:
     rgba = synth.rgba8_pixels(size, size, seed=size)
     return bntx_encode.png_to_bntx(util.png_bytes(size, size, rgba),
                                    format_name="RGBA8", orin=True)[0]
@@ -41,17 +41,17 @@ class EnvironmentReportTests(unittest.TestCase):
 
 class FileReportTests(unittest.TestCase):
     def test_bntx_report_shows_version_and_swizzle(self):
-        report = diagnose.file_report(_switch2_bntx(), "test.bntx")
+        report = diagnose.file_report(_orin_bntx(), "test.bntx")
         self.assertIn("BNTX", report)
         self.assertIn("0.4.1.0", report)
         self.assertIn("Orin", report)
 
     def test_bntx_report_forced_x1(self):
-        report = diagnose.file_report(_switch2_bntx(), "test.bntx", orin=False)
+        report = diagnose.file_report(_orin_bntx(), "test.bntx", orin=False)
         self.assertIn("X1", report)
 
     def test_bntx_report_when_structure_unknown(self):
-        blob = bytearray(_switch2_bntx())
+        blob = bytearray(_orin_bntx())
         blob[0x24:0x28] = (4096 + 5).to_bytes(4, "little")
         blob[0x28:0x30] = (0).to_bytes(8, "little")
         report = diagnose.file_report(bytes(blob), "casse.bntx")
@@ -132,8 +132,8 @@ class DoctorCliTests(unittest.TestCase):
         import contextlib
         import io
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "switch2.bntx"
-            path.write_bytes(_switch2_bntx())
+            path = Path(tmp) / "orin.bntx"
+            path.write_bytes(_orin_bntx())
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
                 code = cli.main(["doctor", str(path)])

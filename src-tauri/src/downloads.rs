@@ -73,6 +73,8 @@ pub(crate) fn download_target(
         }
         "/api/video/stream" => Some((safe_stem(source), "webm")),
         "/api/animation/clip" => Some((safe_stem(source), "json")),
+        // Design archive only; do not derive the extension from the URL.
+        "/api/studio/export" => Some(("hookymods".into(), "hooky")),
         _ => None,
     }
 }
@@ -145,6 +147,10 @@ mod tests {
             );
         }
         assert!(download_target("/api/sound/convert", "x.bwav", "../../exe", false).is_none());
+        assert_eq!(
+            download_target("/api/studio/export", "../../evil.exe", "exe", false),
+            Some(("hookymods".into(), "hooky"))
+        );
         assert!(download_target("/api/unknown", "x", "wav", false).is_none());
     }
 

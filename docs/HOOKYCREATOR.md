@@ -19,9 +19,10 @@ Le scan repère jusqu'à 200 000 fichiers reconnus par défaut. S'il est tronqu�
 
 ## Les espaces
 
-- **Modification** : modèles, ensembles, animations, textures, sons, vidéos WebM et import de modèle.
-- **Création de mod** : copies modifiées, fiches préparatoires et assemblage.
-- **Réglages** : budget des aperçus, vignettes, thèmes clair/sombre/NewGenOldTendo, langue FR/EN/RU/ZH, cache et moteur. Certains diagnostics du backend et messages de la fenêtre native restent en français.
+- **Modification / HookyCreator** : modèles, ensembles, animations, textures, sons, vidéos WebM et import de modèle.
+- **HookyMod's** : atelier distinct pour imaginer de nouveaux éléments et des blocs visuels, puis exporter ou importer un projet `.hooky`. Ce prototype de conception ne produit pas de mod jouable et ne lance pas de jeu ; voir [HOOKYMODS.md](HOOKYMODS.md).
+- **Création de mod** : parcours historique des copies modifiées, fiches préparatoires et assemblage, indépendant des projets HookyMod's.
+- **Réglages** : budget des aperçus, vignettes, thèmes clair/sombre/Aurora, langue FR/EN/RU/ZH, cache et moteur. Les préférences de l'ancien thème sont automatiquement migrées vers Aurora sans modifier les autres réglages. Certains diagnostics du backend et messages de la fenêtre native restent en français.
 
 Les grilles et boutons peuvent être utilisés à la souris ou au clavier. Les flèches déplacent le focus entre tuiles, Entrée ouvre l'élément et Échap ferme les panneaux. `Ctrl+K` ouvre la palette de commandes, `Ctrl+J` le journal et `Ctrl+F` la recherche.
 

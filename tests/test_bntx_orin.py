@@ -1,4 +1,4 @@
-"""Switch 2 (Tegra T239 / « Orin ») : BNTX 0.4.x, disposition des pixels, robustesse.
+"""Tegra T239 / « Orin » : BNTX 0.4.x, disposition des pixels, robustesse.
 
 Les fichiers de test sont synthétiques : aucune donnée de jeu n'est utilisée.
 Les deux dispositions sont vérifiées contre les formules des TRM Tegra :
@@ -67,15 +67,15 @@ class SwizzleLayoutTests(unittest.TestCase):
         self.assertEqual(len(seen), width * height)
 
 
-class Switch2BntxTests(unittest.TestCase):
-    def _switch2(self, size: int = 32, format_name: str = "RGBA8") -> tuple:
+class OrinBntxTests(unittest.TestCase):
+    def _orin_texture(self, size: int = 32, format_name: str = "RGBA8") -> tuple:
         rgba = synth.rgba8_pixels(size, size, seed=size)
         data, _ = bntx_encode.png_to_bntx(util.png_bytes(size, size, rgba),
                                           format_name=format_name, orin=True)
         return data, rgba
 
     def test_version_selects_orin_layout(self):
-        data, rgba = self._switch2()
+        data, rgba = self._orin_texture()
         file = bntx.BntxFile.parse(data)
         self.assertEqual(file.version, 0x00040100)
         self.assertGreaterEqual(file.version, bntx.BntxFile.ORIN_VERSION)
@@ -83,7 +83,7 @@ class Switch2BntxTests(unittest.TestCase):
         self.assertTrue(all(t.orin for t in file.textures))
         self.assertEqual(file.textures[0].decode(0)[2], rgba)
 
-    def test_switch1_default_stays_x1(self):
+    def test_default_stays_x1(self):
         rgba = synth.rgba8_pixels(16, 16, seed=1)
         data, _ = bntx_encode.png_to_bntx(util.png_bytes(16, 16, rgba),
                                           format_name="RGBA8")
@@ -92,8 +92,37 @@ class Switch2BntxTests(unittest.TestCase):
         self.assertFalse(file.orin)
         self.assertEqual(file.textures[0].swizzle_label, "linéaire")
 
+    def test_32_bit_name_and_mip_pointers_in_synthetic_0_4_1_1(self):
+        rgba = synth.rgba8_pixels(16, 16, seed=14)
+        data = bytearray(bntx_encode.build_bntx(
+            "Example.bntx", 16, 16, rgba, format_name="BC4", mips=5,
+            version=0x00040101, texture_name="Example_Alb", orin=True))
+        data[0x20:0x24] = b"Ounc"
+        brti = struct.unpack_from("<Q", data, 0x58)[0]
+        info = brti + 0x10
+        name_ptr = struct.unpack_from("<Q", data, info + 76)[0]
+        mip_ptr = struct.unpack_from("<Q", data, info + 92)[0]
+        # The 32-bit variants occupy the upper half of the old pointer slots.
+        struct.pack_into("<Q", data, info + 76, name_ptr << 32)
+        struct.pack_into("<Q", data, info + 92, mip_ptr << 32)
+
+        file = bntx.BntxFile.parse(bytes(data))
+        self.assertEqual(file.version_label, "0.4.1.1")
+        self.assertTrue(file.orin)
+        self.assertEqual(file.name, "Example.bntx")
+        texture = file.textures[0]
+        self.assertEqual(texture.name, "Example_Alb")
+        self.assertEqual(texture.format_name, "BC4_UNORM")
+        self.assertEqual(texture.mip_count, 5)
+        self.assertEqual(texture.mip_offsets[0], 0)
+        self.assertEqual(texture.mip_offsets, sorted(texture.mip_offsets))
+        for level in range(5):
+            width, height, pixels = texture.decode(level)
+            self.assertEqual((width, height), (max(1, 16 >> level),) * 2)
+            self.assertEqual(len(pixels), width * height * 4)
+
     def test_forced_layout_overrides_version(self):
-        data, rgba = self._switch2(32, "BC1")
+        data, rgba = self._orin_texture(32, "BC1")
         forced_x1 = bntx.BntxFile.parse(data, orin=False)
         self.assertFalse(forced_x1.textures[0].orin)
         # forcer la mauvaise disposition ne doit pas planter, juste donner autre chose
@@ -101,14 +130,13 @@ class Switch2BntxTests(unittest.TestCase):
         self.assertTrue(bntx.BntxFile.parse(data, orin=True).textures[0].orin)
 
     def test_info_reports_version_and_swizzle(self):
-        data, _ = self._switch2(16, "BC3")
+        data, _ = self._orin_texture(16, "BC3")
         text = bntx.BntxFile.parse(data).info()
         self.assertIn("Version : 0.4.1.0", text)
         self.assertIn("Orin", text)
-        self.assertIn("Switch 2", text)
 
-    def test_replace_texture_keeps_switch2_layout(self):
-        template, _ = self._switch2(32, "BC3")
+    def test_replace_texture_keeps_orin_layout(self):
+        template, _ = self._orin_texture(32, "BC3")
         new = synth.rgba8_pixels(32, 32, seed=77)
         data, report = bntx_encode.png_to_bntx(util.png_bytes(32, 32, new),
                                                template=template)
@@ -120,7 +148,7 @@ class Switch2BntxTests(unittest.TestCase):
         self.assertLess(error, 10.0)
 
     def test_pointer_table_recovery_when_header_moves(self):
-        data, rgba = self._switch2(16)
+        data, rgba = self._orin_texture(16)
         broken = bytearray(data)
         struct.pack_into("<Q", broken, 0x28, 0x00FFFF00)   # table de pointeurs absurde
         file = bntx.BntxFile.parse(bytes(broken))
@@ -147,10 +175,10 @@ class NameTableTests(unittest.TestCase):
     def test_built_file_exposes_its_name_and_texture_name(self):
         data, _ = bntx_encode.png_to_bntx(
             util.png_bytes(16, 16, synth.rgba8_pixels(16, 16, seed=2)),
-            format_name="BC1", name="Link.bftex", orin=True)
+            format_name="BC1", name="Example.bftex", orin=True)
         file = bntx_mod.BntxFile.parse(data)
-        self.assertEqual(file.name, "Link.bftex")
-        self.assertEqual(file.textures[0].name, "Link")
+        self.assertEqual(file.name, "Example.bftex")
+        self.assertEqual(file.textures[0].name, "Example")
 
     def test_default_name_is_derived_from_the_texture(self):
         data, _ = bntx_encode.png_to_bntx(

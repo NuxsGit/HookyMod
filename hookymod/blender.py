@@ -109,7 +109,7 @@ ALBEDO_SUFFIXES = ("_Alb", "_Albedo", "_Alb_0", "_BC", "_BaseColor", "_Dif")
 
 
 def _base_name(name: str) -> str:
-    """``Weapon_Sword_Kokiri_Alb`` → ``Weapon_Sword_Kokiri`` (et variantes)."""
+    """``Weapon_Sword_Example_Alb`` → ``Weapon_Sword_Example`` (et variantes)."""
     for suffix in ALBEDO_SUFFIXES:
         if name.endswith(suffix):
             return name[: -len(suffix)]
@@ -120,7 +120,7 @@ def _normalised_textures(textures: dict[str, str] | None) -> dict[str, str]:
     """Indexe les PNG par nom de fichier **et** par nom sans suffixe.
 
     Le nom d'un matériau (``Mt_Blade``) ne contient presque jamais celui de la
-    texture (``Weapon_Sword_Kokiri_Alb``) : sans cette normalisation, le glTF
+    texture (``Weapon_Sword_Example_Alb``) : sans cette normalisation, le glTF
     sortait sans aucune texture alors que les PNG étaient bien exportés.
     """
     if not textures:

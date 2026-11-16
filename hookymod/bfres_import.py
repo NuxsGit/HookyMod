@@ -2,9 +2,9 @@
 
 Un BFRES contient bien plus qu'un maillage : matériaux, os, animations, tables
 de tailles, offsets absolus partout. Réécrire un BFRES complet depuis zéro
-demanderait de reconstruire tout l'arbre (c'est le travail de BfresLibrary /
-Switch-Toolbox). La méthode robuste pour un mod — celle qu'utilisent les
-moddeurs — est donc :
+demanderait de reconstruire tout l'arbre (comme le font certains outils de
+format ; voir les références de provenance). La méthode robuste pour un mod
+est donc :
 
 1. exporter le modèle du jeu (OBJ), l'éditer dans Blender ;
 2. réimporter **la géométrie** dans le BFRES d'origine, en gardant sa

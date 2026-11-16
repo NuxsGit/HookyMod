@@ -1,4 +1,4 @@
-"""BNTX (textures Switch) : lecture, désentrelacement et décodage RGBA.
+"""BNTX (textures) : lecture, désentrelacement et décodage RGBA.
 
 Le format BNTX stocke les textures « swizzlées » (Tegra block linear) et
 compressées en BCn / ASTC.  Ce module les décode en RGBA afin de les afficher
@@ -119,11 +119,11 @@ def gob_offset(x: int, y: int, orin: bool = False) -> int:
 
     Deux dispositions existent :
 
-    * **Tegra X1** (Switch 1, TRM v1.3 p. 1218) : les secteurs de 16 octets sont
+    * **Tegra X1** (TRM v1.3 p. 1218) : les secteurs de 16 octets sont
       groupés deux rangées à la fois ;
-    * **Orin** (Tegra T239, Switch 2, TRM Orin) : ils sont groupés **quatre**
+    * **Orin** (Tegra T239, TRM Orin) : ils sont groupés **quatre**
       rangées à la fois (128 octets par groupe au lieu de 64). C'est le
-      « sector swap » que Switch-Toolbox appelle ``is_orin``/``orin_sector_swap``.
+      « sector swap », aussi appelé ``is_orin``/``orin_sector_swap``.
     """
     if orin:
         return (((x % 64) // 32) * 256 + ((y % 8) // 4) * 128
@@ -221,7 +221,7 @@ def deswizzle(width: int, height: int, blk_w: int, blk_h: int, bpp: int,
               round_pitch: bool = True, orin: bool = False) -> bytes:
     """Transforme une surface swizzlée en données linéaires (bloc/pixel).
 
-    ``orin=True`` lit la disposition Switch 2 (Tegra T239) au lieu de la X1.
+    ``orin=True`` lit la disposition Orin (Tegra T239) au lieu de la X1.
     """
     wb = div_round_up(width, blk_w)
     hb = div_round_up(height, blk_h)
@@ -702,7 +702,7 @@ class BntxTexture:
     comp_sel: tuple = (0, 0, 0, 0)
     warnings: list[str] = field(default_factory=list)
     data_offset: int = 0        # position absolue des données dans le fichier
-    orin: bool = False          # disposition Switch 2 (Tegra T239) au lieu de la X1
+    orin: bool = False          # disposition Orin (Tegra T239) au lieu de la X1
     file_version: int = 0      # version du BNTX qui contient la texture
 
     # ------------------------------------------------------------------ décodage
@@ -763,10 +763,10 @@ class BntxTexture:
 
     @property
     def swizzle_label(self) -> str:
-        """« Orin (Switch 2) » ou « X1 (Switch 1) » tel qu'utilisé au décodage."""
+        """« Orin » ou « X1 » tel qu'utilisé au décodage."""
         if self.tile_mode == 1:
             return "linéaire"
-        return "Orin (Switch 2)" if self.orin else "X1 (Switch 1)"
+        return "Orin" if self.orin else "X1"
 
     def to_png(self, level: int = 0) -> bytes:
         width, height, rgba = self.decode(level)
@@ -796,12 +796,12 @@ class BntxTexture:
 class BntxFile:
     """Fichier BNTX contenant une ou plusieurs textures.
 
-    Les jeux Switch 2 écrivent des BNTX **0.4.x** (« Ounc ») dont les pixels
+    Certains BNTX **0.4.x** (« Ounc ») ont des pixels qui
     utilisent la disposition *Orin* : la version décide donc du désentrelacement,
     et ``orin`` peut être forcé par l'appelant si un fichier est atypique.
     """
 
-    #: Version à partir de laquelle Nintendo utilise la disposition Orin.
+    #: Version à partir de laquelle la disposition Orin est choisie par défaut.
     ORIN_VERSION = 0x00040000
 
     def __init__(self, data: bytes, textures: list[BntxTexture], name: str = "",
@@ -835,7 +835,7 @@ class BntxFile:
         """Analyse un BNTX.
 
         ``orin=None`` (défaut) choisit la disposition des pixels d'après la
-        version du fichier (0.4.x et au-delà = Switch 2) ; ``True``/``False``
+        version du fichier (0.4.x et au-delà = Orin) ; ``True``/``False``
         force la disposition, ce qui permet de rattraper un fichier atypique
         depuis l'interface ou la ligne de commande.
         """
@@ -851,7 +851,7 @@ class BntxFile:
         else:
             raise FormatError(
                 "Fichier BNTX : BOM inconnu (0x0C : "
-                f"{bom.hex()}). Ce fichier n'est peut-être pas un BNTX Nintendo.")
+                f"{bom.hex()}). L'ordre des octets n'est pas reconnu.")
         try:
             version = u32(data, 0x08, e)
             first_block = u16(data, 0x16, e)
@@ -908,7 +908,7 @@ class BntxFile:
         if use_orin:
             warnings.append(
                 f"BNTX {version >> 24}.{(version >> 16) & 0xFF}.{(version >> 8) & 0xFF}"
-                " (Switch 2) : disposition Orin utilisée pour les pixels")
+                " : disposition Orin utilisée pour les pixels")
         return cls(data=data, textures=textures, name=name or file_name,
                    version=version, orin=use_orin, warnings=warnings)
 
@@ -917,7 +917,7 @@ class BntxFile:
                           info_ptrs: int) -> tuple[list[int], str]:
         """Table des pointeurs de textures, avec repli pour les BNTX atypiques.
 
-        Les jeux Switch 2 utilisent des BNTX 0.4.x : si l'en-tête lu ne donne
+        Pour les BNTX 0.4.x, si l'en-tête lu ne donne
         rien d'exploitable (compteur absurde, pointeurs hors fichier, table
         déplacée), on retrouve les blocs ``BRTI`` en balayant le fichier — mieux
         vaut ouvrir une texture que refuser tout le fichier.
@@ -972,7 +972,7 @@ class BntxFile:
             texture_layout = u32(data, off + 36, e)
             image_size = u32(data, off + 64, e)
             comp_sel = (data[off + 72], data[off + 73], data[off + 74], data[off + 75])
-            # 0.3.x (Switch 1) : adresses 64 bits.  0.4.x « Ounc » (Switch 2) :
+            # 0.3.x : adresses 64 bits.  0.4.x « Ounc » :
             # adresses 32 bits, décalées de 4 octets (nom @+80, mips @+96).
             # Les deux sont lues puis validées : on garde celle qui pointe
             # réellement sur quelque chose, quel que soit le build.
@@ -1057,11 +1057,11 @@ class BntxFile:
         tiles = {t.tile_mode for t in self.textures}
         if tiles == {1}:
             return "pixels linéaires"
-        return "swizzle Orin (Switch 2)" if self.orin else "swizzle X1 (Switch 1)"
+        return "swizzle Orin" if self.orin else "swizzle X1"
 
     @property
     def version_label(self) -> str:
-        """Version lisible : Nintendo numérote « 0.4.1.x » les BNTX Switch 2."""
+        """Numéro de version lisible à quatre composantes."""
         v = self.version
         return f"{v >> 24}.{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}.{v & 0xFF}"
 
@@ -1069,7 +1069,7 @@ class BntxFile:
         lines = [f"Fichier BNTX : {self.name or '(sans nom)'}",
                  f"Version : {self.version_label} (0x{self.version:08X})"
                  f"   ·   swizzle par défaut : "
-                 f"{'Orin (Switch 2)' if self.orin else 'X1 (Switch 1)'}",
+                 f"{'Orin' if self.orin else 'X1'}",
                  f"Textures : {len(self.textures)}", ""]
         for tex in self.textures:
             lines.append(f"  • {tex.name or f'#{tex.index}'} — {tex.width}×{tex.height} "

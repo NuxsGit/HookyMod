@@ -1,8 +1,9 @@
 """Build a reviewable source ZIP without Git history or local ignored data.
 
-This exports the current working-tree content of tracked files, plus only the
-untracked files explicitly named with --include-untracked. It is a safety aid,
-not a legal, provenance or secret-scanning audit. Review the ZIP before sharing.
+This exports the current working-tree content of tracked files (excluding files
+deleted from the working tree), plus only the untracked files explicitly named
+with --include-untracked. It is a safety aid, not a legal, provenance or
+secret-scanning audit. Review the ZIP before sharing.
 """
 from __future__ import annotations
 
@@ -20,19 +21,33 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "release-preparation" / "HookyMod-source.zip"
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
-FORBIDDEN_DIRS = {".git", "node_modules", "target", "__pycache__", ".venv", "google_drive", "hookycreator_work", "release-preparation"}
+FORBIDDEN_DIRS = {".git", "node_modules", "target", "__pycache__", ".venv", "google_drive",
+                  "hookycreator_work", "release-preparation", "romfs", "exefs", "mods"}
 FORBIDDEN_SUFFIXES = {
-    ".zs", ".bfres", ".bntx", ".zsdic", ".nup", ".bwav", ".bars", ".bfstm", ".bfsar",
-    ".opus", ".ogg", ".wav", ".mp3", ".flac", ".webm", ".nsp", ".xci", ".nca",
-    ".pem", ".p12", ".pfx", ".key", ".keys",
+    ".zs", ".zst", ".szs", ".sarc", ".pack", ".bfres", ".bntx", ".bftex", ".bnsh",
+    ".byml", ".bgyml", ".aamp", ".zsdic", ".nup", ".nso", ".npdm",
+    ".bwav", ".bars", ".bfstm", ".bfsar", ".opus", ".ogg", ".wav", ".mp3", ".flac",
+    ".webm", ".nsp", ".xci", ".nca", ".bin", ".exe", ".dll", ".so", ".dylib",
+    ".zip", ".7z", ".rar", ".pem", ".p12", ".pfx", ".key", ".keys",
 }
 FORBIDDEN_NAMES = {"id_rsa", "id_ed25519", "id_ecdsa", ".env", ".netrc"}
-# Common game container signatures and zstd frames at the beginning of a file.
-FORBIDDEN_MAGIC = (b"\x28\xb5\x2f\xfd", b"BNTX", b"FRES", b"SARC", b"BWAV", b"BARS", b"NUP0", b"NUPX")
+# Some resource, executable and archive signatures at the beginning of a file.
+# This cannot detect all protected material, renamed files or embedded data.
+FORBIDDEN_MAGIC = (
+    b"\x28\xb5\x2f\xfd", b"BNTX", b"FRES", b"SARC", b"BWAV", b"BARS", b"FSTM", b"FSAR",
+    b"NUP\x01", b"NUP0", b"NUPX", b"NSO0", b"BNSH", b"AAMP", b"BYML", b"Yaz0", b"Yaz1",
+    b"\x7fELF", b"MZ", b"PK\x03\x04", b"\x1a\x45\xdf\xa3", b"OggS", b"fLaC",
+)
+# A small set of critical files, not an exhaustive application/dependency audit.
 REQUIRED_FILES = {
-    "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "assets/HookyMod-logo.png",
+    "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/PROVENANCE.md",
+    "docs/PUBLICATION.md", "docs/licenses/NUP_EXPLORER_MIT.txt",
+    "hookycreator/web/shaders/LICENSE-FSR1.txt", "rust/vendor/README.md",
+    "rust/vendor/ruzstd/LICENSE", "rust/vendor/twox-hash/LICENSE",
+    "rust/vendor/hmac-sha256/LICENSE", "assets/HookyMod-logo.png",
     "hookycreator/web/HookyMod.png", "src-tauri/desktop/HookyMod.png",
-    "src-tauri/icons/icon.ico", "src-tauri/icons/icon.icns",
+    "src-tauri/icons/32x32.png", "src-tauri/icons/128x128.png",
+    "src-tauri/icons/128x128@2x.png", "src-tauri/icons/icon.ico", "src-tauri/icons/icon.icns",
 }
 
 
@@ -81,10 +96,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="explicitly include a non-ignored untracked source file")
     args = parser.parse_args(argv)
     tracked = git_paths("--cached")
+    deleted = tracked & git_paths("--deleted")
     untracked = git_paths("--others", "--exclude-standard")
-    selected = set(tracked)
+    selected = tracked - deleted
     for raw in args.include_untracked:
         name = validate_relative_path(raw).as_posix()
+        if name in deleted:
+            raise ValueError(f"Tracked file is deleted from the working tree: {name}")
         if name not in tracked and name not in untracked:
             raise ValueError(f"Not a tracked or non-ignored untracked file: {name}")
         selected.add(name)
@@ -115,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     ignored_untracked = sorted(untracked - selected)
     print(f"Exported {len(sources)} files to {OUTPUT}")
     print(f"SHA-256: {hashlib.sha256(OUTPUT.read_bytes()).hexdigest()}")
+    if deleted:
+        print(f"Not exported: {len(deleted)} tracked file(s) deleted from the working tree.", file=sys.stderr)
     if ignored_untracked:
         print(f"Not exported: {len(ignored_untracked)} other untracked file(s).", file=sys.stderr)
     print("No Git history is included. Review contents, rights, notices and secrets before publishing.")

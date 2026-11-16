@@ -32,6 +32,7 @@ from hookymod.util import HookyError
 
 from . import model_import as model_import_mod
 from . import session as session_mod
+from . import studio as studio_mod
 from .project import MAX_SCAN_FILES, Project, ProjectError
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -50,6 +51,7 @@ DESKTOP_READ_ROUTES = frozenset({
     "/api/model/preview", "/api/model/geometry", "/api/model/skin", "/api/model/uv", "/api/model/uv/info", "/api/mobs",
     "/api/bulk/status",
     "/api/system", "/api/thumbs/status", "/api/export/download", "/api/ui-state",
+    "/api/studio/workspaces", "/api/studio/workspace", "/api/studio/export",
 })
 DESKTOP_WRITE_ROUTES = frozenset({
     "/api/settings", "/api/texture/import", "/api/texture/export", "/api/sound/import", "/api/video/import",
@@ -57,6 +59,8 @@ DESKTOP_WRITE_ROUTES = frozenset({
     "/api/mod/build", "/api/thumbs/warm",
     "/api/thumbs/stop", "/api/cache/clear", "/api/scan", "/api/export/selection",
     "/api/shutdown", "/api/ui-state",
+    "/api/studio/workspaces", "/api/studio/workspace", "/api/studio/import",
+    "/api/studio/check", "/api/studio/simulate", "/api/studio/delete", "/api/studio/copy",
 })
 DESKTOP_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -107,6 +111,7 @@ class HookyCreatorServer:
         self.desktop_token = desktop_token
         self.project = Project(Path(root), Path(work) if work else None, scan_limit=scan_limit)
         self.ui_session = session_mod.SessionStore(self.project.work, self.project.root)
+        self.studio = studio_mod.WorkspaceStore(self.project.work)
         self.scan_summary = self.project.scan()
         self.host = host
         self.port = port
@@ -121,6 +126,8 @@ class HookyCreatorServer:
         # L'import peut allouer des tampons et des maillages volumineux : une
         # seule requête à la fois, avant même de lire son corps HTTP.
         self.model_import_slot = threading.BoundedSemaphore(1)
+        # Les archives et projets .hooky sont bornés et lus un à la fois.
+        self.studio_slot = threading.BoundedSemaphore(1)
         self.thumbnail_activity = ThumbnailActivity()
         self._job_lock = threading.Lock()
         self.job: dict = {"running": False, "done": 0, "total": 0, "label": "",
@@ -175,6 +182,56 @@ class HookyCreatorServer:
             except session_mod.SessionError as exc:
                 raise ProjectError(str(exc)) from exc
             return _json({"saved": saved})
+
+        # HookyMod's stores only design projects in the work directory; none of
+        # these routes build a game mod or use the legacy assembly destination.
+        if route == "/api/studio/workspaces":
+            if method == "GET":
+                return _json(self.studio.list())
+            if method == "POST":
+                if not isinstance(body, dict):
+                    raise studio_mod.StudioError("Demande de création invalide.")
+                return _json({"workspace": self.studio.create(
+                    body.get("name", ""), body.get("description", ""),
+                    body.get("author", ""), body.get("target", ""))})
+
+        if route == "/api/studio/workspace":
+            if method == "GET":
+                return _json({"workspace": self.studio.load(query.get("id", [""])[0])})
+            if method == "POST":
+                if not isinstance(body, dict):
+                    raise studio_mod.StudioError("Demande de sauvegarde invalide.")
+                return _json({"workspace": self.studio.save(body.get("workspace"))})
+
+        if route == "/api/studio/check" and method == "POST":
+            if not isinstance(body, dict):
+                raise studio_mod.StudioError("Demande de vérification invalide.")
+            return _json(studio_mod.check_workspace(body.get("workspace")))
+
+        if route == "/api/studio/simulate" and method == "POST":
+            if not isinstance(body, dict):
+                raise studio_mod.StudioError("Demande de simulation invalide.")
+            return _json(studio_mod.simulate_element(body.get("element"), body.get("event"),
+                                                     body.get("items"), body.get("flags")))
+
+        if route == "/api/studio/import" and method == "POST":
+            if not isinstance(body, dict):
+                raise studio_mod.StudioError("Demande d'import invalide.")
+            return _json({"workspace": self.studio.import_archive(body.get("archive"))})
+
+        if route == "/api/studio/copy" and method == "POST":
+            if not isinstance(body, dict):
+                raise studio_mod.StudioError("Demande de copie invalide.")
+            return _json({"workspace": self.studio.copy(body.get("workspace"))})
+
+        if route == "/api/studio/delete" and method == "POST":
+            if not isinstance(body, dict):
+                raise studio_mod.StudioError("Demande de suppression invalide.")
+            self.studio.delete(body.get("id"), body.get("revision"))
+            return _json({"deleted": True})
+
+        if route == "/api/studio/export" and method == "GET":
+            return self.studio.export(query.get("id", [""])[0]), "application/vnd.hookymod+zip"
 
         if route == "/api/settings":
             if method == "POST":
@@ -682,7 +739,7 @@ def _make_handler(server: HookyCreatorServer):
                             body, kind = server.api("GET", parsed.path, query, {})
                     else:
                         body, kind = server.api("GET", parsed.path, query, {})
-                except (ProjectError, HookyError) as exc:
+                except (ProjectError, HookyError, studio_mod.StudioError) as exc:
                     return self._error(str(exc))
                 except Exception as exc:         # jamais de trace dans l'UI
                     return self._error(f"Erreur interne : {exc}", 500)
@@ -695,6 +752,9 @@ def _make_handler(server: HookyCreatorServer):
                     return self._send(body, kind, headers={
                         "ETag": etag,
                         "Cache-Control": "public, max-age=0, must-revalidate"})
+                if parsed.path == "/api/studio/export":
+                    return self._send(body, kind, headers={"Content-Disposition":
+                                      'attachment; filename="hookymods.hooky"'})
                 if parsed.path == "/api/animation/clip" and query.get("download") == ["1"]:
                     return self._send(body, kind, headers={"Content-Disposition":
                                       'attachment; filename="hookycreator-animation.json"'})
@@ -731,6 +791,7 @@ def _make_handler(server: HookyCreatorServer):
                 return self._error("Longueur de requête invalide.")
             if (length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024)
                     or (parsed.path == "/api/ui-state" and length > session_mod.MAX_BYTES)
+                    or (parsed.path.startswith("/api/studio/") and length > studio_mod.MAX_REQUEST_BYTES)
                     or (parsed.path == "/api/sound/import" and length > ((audio_codec.MAX_IMPORT_BYTES + 2) // 3) * 4 + 4096)
                     or (parsed.path == "/api/video/import" and length > ((video.MAX_IMPORT + 2) // 3) * 4 + 4096)
                     or (parsed.path in ("/api/model/import", "/api/model/inspect") and length > model_import_mod.MAX_REQUEST)):
@@ -750,6 +811,19 @@ def _make_handler(server: HookyCreatorServer):
                     return self._error("Session invalide.", 403)
                 cookie = f"hooky_session_{server.port}={token}; Path=/; HttpOnly; SameSite=Strict"
                 return self._send(*_json({"ok": True}), headers={"Set-Cookie": cookie})
+            if parsed.path.startswith("/api/studio/"):
+                if not server.studio_slot.acquire(blocking=False):
+                    self.close_connection = True
+                    return self._send(*_json({"error": "Une opération HookyMod's est déjà en cours."}),
+                                      status=429, headers={"Retry-After": "2"})
+                try:
+                    self.connection.settimeout(30)
+                    return self._post_json(parsed, length)
+                except TimeoutError:
+                    self.close_connection = True
+                    return self._error("Lecture du projet interrompue.", 408)
+                finally:
+                    server.studio_slot.release()
             if parsed.path in ("/api/model/import", "/api/model/inspect", "/api/video/import", "/api/sound/import"):
                 if not server.model_import_slot.acquire(blocking=False):
                     self.close_connection = True
@@ -769,13 +843,13 @@ def _make_handler(server: HookyCreatorServer):
             raw = self.rfile.read(length) if length else b"{}"
             try:
                 body = json.loads(raw.decode("utf-8") or "{}")
-            except ValueError:
+            except (ValueError, RecursionError):
                 return self._error("Requête JSON invalide.")
             if not parsed.path.startswith("/api/"):
                 return self._error("Page inconnue", 404)
             try:
                 content, kind = server.api("POST", parsed.path, parse_qs(parsed.query), body)
-            except (ProjectError, HookyError) as exc:
+            except (ProjectError, HookyError, studio_mod.StudioError) as exc:
                 return self._error(str(exc))
             except KeyError as exc:
                 return self._error(f"Champ manquant : {exc}")

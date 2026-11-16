@@ -30,7 +30,9 @@ LOD_MAX = 3
 #: préférences d'interface (le « look » de l'atelier)
 ACCENTS = ("menthe", "azur", "ambre", "framboise")
 DENSITIES = ("confort", "compact")
-THEMES = ("light", "dark", "newgenoldtendo")
+THEMES = ("light", "dark", "aurora")
+# Accept the previously saved theme identifier without exposing it in the UI.
+_LEGACY_THEMES = {"newgenoldtendo": "aurora"}
 LANGUAGES = ("fr", "en", "ru", "zh")
 
 #: plafond du cache de vignettes sur disque (Mo)
@@ -79,7 +81,7 @@ class Settings:
     # -- préférences d'interface
     accent: str = "azur"                    # couleur d'accent
     density: str = "confort"                  # confort | compact
-    theme: str = "light"                      # light | dark | newgenoldtendo
+    theme: str = "light"                      # light | dark | aurora
     language: str = "fr"                      # français | anglais | russe | chinois
     export_textures: bool = True              # joindre les PNG aux exports de modèles
     thumb_faces: int | None = None            # plafond facultatif des vignettes
@@ -102,7 +104,8 @@ class Settings:
             lod=int(_number(self.lod, "lod", 0, LOD_MAX)),
             accent=_choice(self.accent, "accent", ACCENTS),
             density=_choice(self.density, "density", DENSITIES),
-            theme=_choice(self.theme, "theme", THEMES),
+            theme=_choice(_LEGACY_THEMES.get(str(self.theme).strip().lower(), self.theme),
+                          "theme", THEMES),
             language=_choice(self.language, "language", LANGUAGES),
             export_textures=bool(self.export_textures),
             preview_faces=int(_number(self.preview_faces, "preview_faces", 0, 400_000)),

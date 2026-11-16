@@ -1,4 +1,4 @@
-"""Tests du lecteur de paquets .nup (dumps Switch 2)."""
+"""Tests du lecteur de paquets .nup synthétiques."""
 
 from __future__ import annotations
 

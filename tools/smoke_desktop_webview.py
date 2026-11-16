@@ -316,6 +316,55 @@ def run(application: Path) -> None:
                 assert json.loads(clip.read_text(encoding='utf-8'))['name'] == 'Walk'
                 print("Webview native : session, filtres, ZIP, sélection, audio, vidéo et JSON d'animation OK")
 
+                # L'archive .hooky utilise le véritable gestionnaire de
+                # téléchargement Tauri, pas seulement le backend HTTP.
+                close_panels(driver)
+                driver.click('button[data-view="studio"]')
+                driver.script("""
+                    const name = document.querySelector('#studio-new-name');
+                    name.value = 'Création synthétique';
+                    document.querySelector('#studio-create-form').requestSubmit();
+                """)
+                driver.wait("projet HookyMod's", "return !document.querySelector('#studio-workspace').hidden")
+                driver.click('[data-studio-kind="item"]')
+                driver.script("""
+                    const name = document.querySelector('#studio-element-name');
+                    name.value = 'Objet synthétique';
+                    name.dispatchEvent(new Event('input', { bubbles: true }));
+                """)
+                driver.click('[data-studio-block="when_use"]')
+                driver.click('[data-studio-block="give_item"]')
+                driver.script("""
+                    const value = document.querySelector('[data-block-value="1"]');
+                    value.value = 'Clé imaginaire';
+                    value.dispatchEvent(new Event('input', { bubbles: true }));
+                    const event = document.querySelector('#studio-simulation-event');
+                    event.value = 'when_use';
+                    event.dispatchEvent(new Event('change', { bubbles: true }));
+                """)
+                driver.click('#studio-simulate')
+                driver.wait("simulation hors jeu", """
+                    const result = document.querySelector('#studio-simulation-result');
+                    return result && !result.hidden && result.textContent.includes('Action simulée')
+                      && result.textContent.includes('Clé imaginaire');
+                """)
+                driver.click('#studio-export')
+                design = completed_download(driver, str(clip))
+                downloads.append(design)
+                assert design.name.startswith('hookymods--') and design.suffix == '.hooky'
+                with zipfile.ZipFile(design) as archive:
+                    assert set(archive.namelist()) == {'manifest.json', 'workspace.json'}
+                    assert json.loads(archive.read('manifest.json'))['playable'] is False
+                    assert json.loads(archive.read('workspace.json'))['elements'][0]['name'] == 'Objet synthétique'
+                close_panels(driver)
+                # Laisser un brouillon non enregistré : le checkpoint natif
+                # doit le sauver même après avoir changé de vue.
+                driver.script("""
+                    const description = document.querySelector('#studio-description');
+                    description.value = 'Brouillon HookyMod conservé';
+                    description.dispatchEvent(new Event('input', { bubbles: true }));
+                """)
+
                 # Une sauvegarde finale > 64 Kio et artificiellement retardée
                 # doit être confirmée avant l'arrêt, pas confiée à keepalive.
                 close_panels(driver)
@@ -354,6 +403,8 @@ def run(application: Path) -> None:
                 assert saved["fields"]["mod-name"] == "Brouillon conservé"
                 assert saved["fields"]["search"] == "Heros"
                 assert "model:Model/Heros.bfres" in saved["selection"]
+                designs = list((root / "hookycreator_work" / "hookymods").glob("*.json"))
+                assert len(designs) == 1 and json.loads(designs[0].read_text(encoding="utf-8"))["description"] == "Brouillon HookyMod conservé"
                 recent = json.loads((Path(tmp) / "config" / "recent-project.json").read_text(encoding="utf-8"))
                 assert Path(recent["project"]) == root
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import urllib.error
 import urllib.request
@@ -17,6 +18,17 @@ def webm(payload=b"some fake track data"):
     # EBML header with DocType=webm and unknown-size Segment. It is only a
     # container-header fixture, deliberately NOT a decodable video.
     return b"\x1a\x45\xdf\xa3\x87\x42\x82\x84webm\x18\x53\x80\x67\xff" + payload
+
+
+def test_generated_video_fixture_has_the_documented_hash_and_webm_header():
+    from tests.synth_video import make_webm
+
+    data = make_webm()
+    assert hashlib.sha256(data).hexdigest() == (
+        "df0670266ba2488c92e453ffb633c2f5c4abbeead2636467b973c2b29daf3f13"
+    )
+    assert b"V_VP8" in data
+    video.check_header(data, len(data))
 
 
 def test_header_check_rejects_non_webm_and_truncation():

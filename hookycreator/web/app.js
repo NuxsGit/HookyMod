@@ -205,7 +205,7 @@ function showView(view, options = {}) {
     if (scroll) scroll.scrollTop = 0;
     // Les espaces d'accueil doivent rester lisibles, surtout sur mobile où
     // l'inspecteur est superposé. L'onglet du document reste disponible.
-    if (view === "edit" || view === "create" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
+    if (view === "edit" || view === "create" || view === "studio" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
       hideInspector();
     }
   }
@@ -222,6 +222,7 @@ function showView(view, options = {}) {
   }
   if (view === "home") renderHome();
   if (view === "create") renderCreation();
+  if (view === "studio") window.HookyStudio?.show();
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
   if (view === "textures") renderTextures();
@@ -237,6 +238,7 @@ const VIEW_LABELS = {
   home: "Accueil",
   edit: "Modification",
   create: "Création de mod",
+  studio: "HookyMod's",
   models: "Modèles",
   ensembles: "Ensembles",
   textures: "Textures",
@@ -2008,6 +2010,7 @@ const MENUS = {
   affichage: [
     { label: "Accueil", hint: "Ctrl+1", run: () => showView("home") },
     { label: "Espace modification", run: () => showView("edit") },
+    { label: "HookyMod's", run: () => showView("studio") },
     { label: "Espace création de mod", run: () => showView("create") },
     { label: "Réglages", hint: "Ctrl+6", run: () => showView("settings") },
     { sep: true },
@@ -2062,6 +2065,7 @@ function paletteCommands() {
   const commands = [
     { label: "Aller à l'accueil", group: "vue", run: () => showView("home") },
     { label: "Espace modification", group: "vue", run: () => showView("edit") },
+    { label: "HookyMod's", group: "vue", run: () => showView("studio") },
     { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
     { label: "Aller aux animations", group: "vue", run: () => showView("animations") },
@@ -2361,7 +2365,7 @@ async function quitApp() {
   ]);
   clearTimeout(timeout);
   if (!saved && !window.confirm(tr(
-    "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?"))) {
+    "La session, les réglages ou le projet HookyMod's n'ont pas pu être enregistrés. Quitter quand même ?"))) {
     document.body.inert = false;
     return;
   }
@@ -2510,6 +2514,7 @@ function handleTileNavigation(event) {
 }
 
 function wire() {
+  window.HookyStudio?.wire({ api, toast });
   let paused = false;
   try { paused = localStorage.getItem("hooky-thumbnails-paused") === "1"; }
   catch (_) { /* stockage facultatif */ }
@@ -2929,7 +2934,10 @@ async function saveUiCheckpoint() {
     const settingsSaved = await finishPendingSettings();
     const sessionSaved = uiSessionWriter?.enabled
       ? await uiSessionWriter.flush() : !sessionTouchedDuringBoot;
-    return settingsSaved && sessionSaved;
+    // La fermeture et le changement de projet natifs attendent aussi les
+    // brouillons HookyMod's ; une erreur ne doit pas les perdre silencieusement.
+    const studioSaved = await (window.HookyStudio?.flush() ?? Promise.resolve(true));
+    return settingsSaved && sessionSaved && studioSaved;
   } catch (error) {
     toast(`Sauvegarde de session impossible : ${error.message}`, "error");
     return false;

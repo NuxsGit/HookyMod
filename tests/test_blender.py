@@ -418,7 +418,7 @@ class DictionaryDiscoveryTests(unittest.TestCase):
         (folder / "ZsDic.pack.zs").write_bytes(b"peu importe")
         deep = folder / "Tex"
         deep.mkdir()
-        asset = deep / "Mt_Body_Animal_Butterfly_Alb.bntx.zs"
+        asset = deep / "Mt_Body_Example_Alb.bntx.zs"
         asset.touch()
         found = zs.find_dictionaries_near(asset)
         self.assertEqual(len(found), 1)

@@ -1,8 +1,8 @@
 {
   "name": "hookycreator-desktop",
   "private": true,
-  "version": "0.1.0",
-  "description": "An experimental toolkit to explore assets and prepare mods for The Legend of Zelda: Ocarina of Time Remake.",
+  "version": "11.26.1",
+  "description": "An experimental local toolkit for exploring user-supplied assets and preparing working copies.",
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "tauri": "tauri"

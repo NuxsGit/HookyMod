@@ -16,10 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from hookymod import bfres, bfres_v10, zs  # noqa: E402
-
-MODEL = ROOT / "Animal_Butterfly.Animal_Butterfly.bfres.zs"
-DICTS = ROOT / "ZsDic.pack.zs"
+from hookymod import bfres, bfres_v10  # noqa: E402
 
 
 def _synthetic_vertices(positions, stride: int = 24) -> bytes:
@@ -36,8 +33,8 @@ def make_v10(positions, uvs=None, triangles=None):
     """BFRES 10.4 minimal mais **conforme au format mesuré** : en-tête, FMDL,
 
     FVTX avec vraie table d'attributs (chaînes préfixées par leur longueur) et
-    tampons index/sommets rangés comme dans le jeu.  Sert à verrouiller la
-    lecture pilotée par les données, sans dépendre d'un asset Nintendo.
+    tampons index/sommets synthétiques. Sert à vérifier la lecture pilotée
+    par les données sans dépendre de ressources externes.
     """
     triangles = triangles or []
     stride = 16
@@ -48,7 +45,7 @@ def make_v10(positions, uvs=None, triangles=None):
 
     data[0:4] = b"FRES"
     struct.pack_into("<I", data, 0x08, 0x000A0400)
-    data[0x0C:0x0E] = b"\xff\xfe"                 # BOM Switch little-endian
+    data[0x0C:0x0E] = b"\xff\xfe"                 # BOM little-endian
     struct.pack_into("<Q", data, 0x28, 0xF0)            # FMDL
     struct.pack_into("<Q", data, 0x170, base)           # base des tampons
 
@@ -300,40 +297,6 @@ class RefusalTests(unittest.TestCase):
         data[0:4] = b"FRES"
         struct.pack_into("<I", data, 0x08, 0x000A0400)
         self.assertIsNone(bfres_v10.parse(bytes(data)))
-
-
-@unittest.skipUnless(MODEL.is_file() and DICTS.is_file() and zs.zstd_available(),
-                     "modèle ou dictionnaires absents")
-class RealV10Tests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        store = zs.ZstdDicts()
-        store.load_file(DICTS)
-        cls.data = store.decompress(MODEL.read_bytes())
-
-    def test_geometry_is_found_and_validated(self):
-        result = bfres_v10.parse(self.data)
-        self.assertIsNotNone(result)
-        meshes, report = result
-        self.assertEqual(report.major, 10)
-        self.assertEqual(report.model_name, "Animal_Butterfly")
-        self.assertEqual(report.buffer_base, 0x4000)
-        self.assertEqual(report.stride, 24)
-        self.assertGreaterEqual(len(meshes), 1)
-        self.assertGreaterEqual(sum(len(m.faces) for m in meshes), 682)
-
-    def test_uv_are_accepted_only_when_plausible(self):
-        meshes, report = bfres_v10.parse(self.data)
-        self.assertTrue(report.uv)
-        self.assertEqual(len(meshes[0].uvs), len(meshes[0].positions))
-
-    def test_bfresfile_exposes_the_geometry(self):
-        file = bfres.BfresFile.parse(self.data)
-        self.assertEqual(len(file.models), 1)
-        meshes = bfres.meshes_from_file(file)
-        self.assertGreaterEqual(sum(len(m.faces) for m in meshes), 682)
-        lo, hi = meshes[0].bounds()
-        self.assertAlmostEqual(lo[0], -hi[0], places=3)     # ailes symétriques
 
 
 if __name__ == "__main__":
