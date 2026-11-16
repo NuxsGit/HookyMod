@@ -2,7 +2,8 @@
   "name": "hookycreator-desktop",
   "private": true,
   "version": "0.1.0",
-  "description": "Construction de la fenêtre Tauri v2 de HookyCreator",
+  "description": "An experimental toolkit to explore assets and prepare mods for The Legend of Zelda: Ocarina of Time Remake.",
+  "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "tauri": "tauri"
   },

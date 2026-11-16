@@ -19,14 +19,12 @@ We take the security of our application and users seriously. If you discover a s
 
 Instead, please report vulnerabilities by following these steps:
 
-1. **Email or Private Disclosure:** Reach out via GitHub Private Vulnerability Reporting (available under the **Security** tab of this repository) or contact the core maintainer directly.
-2. **Provide Details:** Include a detailed description of the issue, steps to reproduce, and any proof-of-concept files or code (e.g., a specially crafted dummy asset file causing a crash or heap overflow).
+1. **Private Disclosure:** If GitHub Private Vulnerability Reporting is enabled, use the **Security** tab; otherwise contact the maintainer privately.
+2. **Provide Details:** Include a description, reproduction steps, and a synthetic proof of concept when possible. Do not attach game files, keys, private data or copyrighted resources.
 
 ### What to Expect
 
-- **Acknowledgment:** You will receive a response within 48 hours acknowledging receipt of your report.
-- **Assessment:** The maintainers will investigate and verify the vulnerability within 5 business days.
-- **Resolution:** If confirmed, a patch will be prepared and released in a subsequent update. You will be credited in the release notes if you wish.
+Reports are reviewed on a best-effort basis; no response or fix time is guaranteed. Please coordinate disclosure with the maintainers and let them know if you wish to be credited.
 
 ## Scope & Intellectual Property Notice
 

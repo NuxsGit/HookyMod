@@ -1,50 +1,89 @@
-# HookyMod · HookyCreator
+<h1 align="center">
+  <img src="assets/HookyMod-logo.png" alt="HookyMod retro fish logo" width="200"><br>
+  HookyMod
+</h1>
 
-HookyMod is a local toolkit for inspecting and modifying game resources. HookyCreator is its visual workspace: it explores user-supplied models, textures, sounds, animations and WebM videos, prepares standard exports, and assembles working copies. The original Python/Tk explorer and command-line tools are still available.
+<p align="center"><strong>HookyMod is an experimental toolkit to explore assets and prepare mods for The Legend of Zelda: Ocarina of Time Remake.</strong></p>
 
-**Bring your own legally obtained files.** No game dump or proprietary asset is required to run the test suite. Format support is partial: successful export or replacement does not guarantee visual accuracy or compatibility in game.
+<p align="center">
+  <a href="#project-status">Status</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="#features-and-limitations">Features</a> ·
+  <a href="#command-line">Command line</a> ·
+  <a href="#builds-and-tests">Builds and tests</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#license-and-credits">License and credits</a>
+</p>
 
-## Quick start
+**HookyCreator** is HookyMod's local visual workspace for exploring user-supplied models, textures, sounds, animations and WebM videos, making standard exports, and assembling working copies. A Python/Tk explorer and command-line tools are also available.
 
-Python 3.10 or newer is required. Install the dependencies from the repository:
+> [!IMPORTANT]
+> This source snapshot does not intentionally contain the game, game artwork, cryptographic keys or a game executable. Bring your own legally obtained files and check your rights before using or sharing them. Tests use synthetic fixtures and do not require game files. No decryption capability or keys are supplied.
+
+HookyMod is an independent fan project, not affiliated with or endorsed by Nintendo, Team MagicBean, or the authors of Hookshot. Nintendo and The Legend of Zelda are trademarks of their respective owners, used here to identify the intended game.
+
+[Longshot](https://git.magicbean.dev/MagicBeanDev/Longshot), maintained by Team MagicBean, is a separate fork of Hookshot. It is not a dependency of HookyMod. Direct integration with Longshot and compatibility of generated mods in that environment have **not** been verified.
+
+## Project status
+
+HookyMod is experimental. Format support is partial; a successful export, replacement or package does not guarantee visual accuracy or in-game compatibility.
+
+| Area | Current support and limits |
+| --- | --- |
+| Local workspace | Browse and filter assets, maintain a per-project session, and work on copies. Some diagnostics and native-window messages remain in French. |
+| Models | Inspect and export OBJ / glTF with available textures. Geometry import is restricted to some BFRES 9.x targets; BFRES 10.x injection, rigs and morphs are not supported. |
+| Textures | Preview, export PNG and replace supported BNTX images. ASTC and BC7 encoding is not available. |
+| Animations | Preview supported BFRES 10.x FSKA Euler clips and export curves as JSON. Rigs and animations are not exported to glTF or injected. |
+| Audio and video | Experimental BWAV conversion and replacement, plus WebM preview and replacement. Game compatibility is not validated. |
+| Mod assembly | Collect working copies and preparatory mob records. It does not create playable actors or update RESTBL automatically. Building deletes and recreates `mods/<name>` without a backup. |
+| Desktop | Tauri and a standalone backend can be built on Windows and Linux. CI packages are test artifacts, not a guarantee of a supported release; macOS is unvalidated. |
+
+## Getting started
+
+### What you need
+
+- Python 3.10 or newer and the packages in `requirements.txt` for the browser workspace.
+- Your own legally obtained extracted assets, including any required zstd dictionary. No game files are needed for the tests.
+- A WebGL2-capable browser for the interactive model view; a static PNG fallback is available.
+- Optionally, Tkinter for the original explorer. To build the native window, see [desktop prerequisites](docs/DESKTOP.md).
+
+### Start the workspace from source
+
+From the project source directory:
 
 ```bash
 python -m pip install -r requirements.txt
 python -m hookycreator /path/to/romfs --host 127.0.0.1 --open
 ```
 
-The workspace opens at `http://127.0.0.1:8765/`. `--host 127.0.0.1` restricts the browser server to the local machine; do not expose it to an untrusted network. The project may also be a folder of extracted assets. Add `--work /path/to/work` to change where working copies and caches are stored.
+The workspace opens at `http://127.0.0.1:8765/`. Keeping `--host 127.0.0.1` restricts the browser server to the local machine; do not expose it to an untrusted network. A folder of extracted assets can be used instead of a `romfs`. Add `--work /path/to/work` to choose where working copies and caches are stored.
 
-For the original explorer, install Tkinter and run `python AssetViewer.py`. The native Tauri window and standalone backend are described in [docs/DESKTOP.md](docs/DESKTOP.md).
+The original explorer is available with `python AssetViewer.py`. For the native Tauri window and standalone backend, follow [docs/DESKTOP.md](docs/DESKTOP.md). These builds are not necessarily signed; platform security warnings can appear.
 
-## Models: export and return
+## Features and limitations
 
-1. In **Edit → Models**, open a model to inspect it in the interactive 3D view (WebGL2, with a static PNG fallback). Decoded triangles are not reduced for display; oversized models may be refused by safety limits. Drag to orbit, use the wheel to zoom, and optionally enable wireframe or experimental FSR 1. Click **Export glTF / OBJ** to produce glTF 2.0 (`.gltf` + `.bin`), OBJ and MTL, available decodable PNGs, a notice and a report. The panel shows the absolute folder and offers a ZIP containing only that export. Exporting again replaces files with the same names in that folder: save your edits elsewhere.
-2. Recognized explicit material texture references are resolved per material. When references are missing, name matching is heuristic and identified as such; missing or ambiguous references are not connected arbitrarily. `TEXTURES.md` and `RAPPORT_MODELE.txt` describe the limitations. Some BFRES 10.x rigid pieces are placed in their rest pose; unsupported variants are reported. The exported model does not reconstruct a rig, complete game pose, animations, morphs, shaders or other LODs. Check UVs and rendering in your 3D software.
-3. After editing, use **Import a model**: select a triangulated OBJ, GLB or glTF 2.0 with any external `.bin` files, analyze it, and explicitly choose a compatible target. Only **geometry** is imported; target materials and textures are retained rather than those of the source.
-4. Injection writes a copy under `hookycreator_work/assets/`, never the original project file. Only one shape and one LOD are accepted in certain BFRES 9.x structures, and existing buffers have fixed capacity. BFRES 10.x targets, skeletons, morphs, bounds requiring rewriting, unsupported attributes and other unverified structures are refused. It is normal to find no compatible target. Checks and rereading do not prove in-game safety.
+### Models: export and return
 
-Provided UVs and normals must be representable by the target. Missing normals are not invented in exports, although a preview may compute its own face normals. OBJ polygons must be triangulated before injection. Required glTF extensions, compressed buffers, deformations, sparse accessors and network access are not supported.
+1. In **Edit → Models**, open a model in the interactive 3D view. Decoded triangles are not reduced for display; oversized models may be refused by safety limits. Drag to orbit, use the wheel to zoom, and optionally enable wireframe or experimental FSR 1.
+2. Choose **Export glTF / OBJ** to generate glTF 2.0 (`.gltf` + `.bin`), OBJ and MTL, available PNGs, a notice and a report. The panel offers a ZIP containing that export. Re-exporting replaces files with the same names in the export folder: save edits elsewhere.
+3. Recognized explicit material references are resolved per material. Missing references use reported name-matching heuristics; ambiguous references are not linked arbitrarily. Some BFRES 10.x rigid pieces use their rest pose. Exports do not reconstruct a rig, complete pose, animation, morphs, shaders or other LODs.
+4. After editing, choose **Import a model** and analyze a triangulated OBJ, GLB or glTF 2.0 with its external `.bin` files. Only geometry is imported; the target's materials and textures are retained.
+5. Injection writes a copy under `hookycreator_work/assets/`, not the original. It accepts only one shape and one LOD in certain BFRES 9.x structures, within existing buffer capacity. BFRES 10.x targets, skeletons, morphs, bounds requiring rewriting and unverified structures are refused. A successful re-read does not prove in-game safety.
 
-See the [workspace guide](docs/HOOKYCREATOR.md) for details on limitations, PNG maps and batch operations.
+Provided UVs and normals must be representable by the target. Missing normals are not invented in exports, although a preview may compute face normals. OBJ polygons must be triangulated. Required glTF extensions, compressed buffers, deformations, sparse accessors and network access are not supported. See the [workspace guide](docs/HOOKYCREATOR.md).
 
-## Animations and sounds
+### Animations, sounds and video
 
-- **Animations:** the experimental viewer reads supported BFRES 10.x FSKA Euler skeletal clips and matches bones by name to a compatible structured model. Select a clip and model in **Animations**, or choose a linked animation in the model inspector. Playback uses 30 frames per second by convention, not a rate verified from the file. The viewer retains up to eight skin influences; unsupported skeletons and curve types are refused. Curves can be exported as JSON, but animation and rig are **not** included in glTF/OBJ exports or injected into a game. Physics, materials and full game fidelity are not reproduced.
-- **Sounds:** the experimental BWAV reader supports complete PCM16 or DSP-ADPCM mono/stereo and the existing mono Opus variant. It can export WAV, FLAC, MP3 and Ogg Vorbis, or remux supported Opus without re-encoding. Loop markers are not retained by the converted exports. A replacement must match the original sample rate and channel count; it creates an experimental PCM16 BWAV working copy even when the original was Opus or DSP. BARS banks, prefetch audio, other layouts and codecs, events and RESTBL are not rewritten. **In-game compatibility has not been validated.**
+- **Animations:** supported FSKA Euler skeletal clips are matched by bone name to a compatible structured model. Playback uses 30 frames per second by convention, not a verified game rate. The viewer retains up to eight skin influences; unsupported skeletons and curves are refused. Physics, materials and full game fidelity are not reproduced.
+- **Sounds:** the BWAV reader supports complete PCM16 or DSP-ADPCM mono/stereo and the existing mono Opus variant. It exports WAV, FLAC, MP3 and Ogg Vorbis, or remuxes supported Opus. Loop markers are not retained. Replacement must match the original sample rate and channel count and produces an experimental PCM16 working copy. BARS, prefetch audio, other layouts, events and RESTBL are not rewritten.
+- **Video:** WebM can be previewed when the browser supports its codec, downloaded or copied verbatim as a replacement. The check covers only the EBML header, WebM DocType and Segment bounds, not tracks, codecs, duration, resolution or game compatibility. Streaming is limited to 1 GiB and replacement input to 32 MiB. NDVE, separate audio and RESTBL are not updated.
 
-## Video (experimental)
+### Other tools
 
-The **Videos** view lists WebM files, streams them with seeking when the browser supports their codecs, and downloads the current file. Replacement copies a supplied WebM verbatim into the work folder, without transcoding or changing the original. The check covers only the EBML header, WebM DocType and Segment bounds; it does **not** validate tracks, codecs, duration, resolution or game compatibility. Streaming is limited to 1 GiB and replacement input to 32 MiB. NDVE data, separate audio and RESTBL are neither interpreted nor updated, so a valid WebM is not necessarily a usable game replacement.
-
-## Other features
-
-- Interface: light, dark and NewGenOldTendo themes, with French, English, Russian and Chinese UI translations in Settings. Some backend diagnostics and native-window messages may remain in French.
-
-- BNTX textures: preview, export PNG and replace an image in a working copy for encodable formats. ASTC/BC7 encoding is not supported; some decoders require `texture2ddecoder`.
-- SARC archives and `.zs`: inspect, extract and rebuild, using user-supplied zstd dictionaries. Missing dictionaries and incomplete data are reported.
-- Session: navigation, filters, selection, inspector and drafts are saved per project. Modified copies and settings are separate from the session. An abrupt shutdown may lose the last save; see [performance and session recovery](docs/PERFORMANCE.md).
-- Mod creation: assemble working copies and preparatory mob records. **Building deletes and recreates `mods/<name>` without a backup**; a mob record does not create a playable actor, and RESTBL is not updated automatically.
+- **Textures:** preview and export BNTX PNGs; replace an image in a working copy for encodable formats. Some decoders require `texture2ddecoder`.
+- **Archives:** inspect, extract and rebuild SARC and `.zs` files using user-supplied zstd dictionaries. Missing dictionaries and incomplete data are reported.
+- **Session:** navigation, filters, selection, inspector and drafts are saved per project. Working copies and settings are separate from the session; an abrupt shutdown can lose the last save. See [session recovery](docs/PERFORMANCE.md).
+- **Languages and themes:** French, English, Russian and Chinese UI translations, plus light, dark and NewGenOldTendo themes. Translation coverage is partial.
 
 ## Command line
 
@@ -54,7 +93,7 @@ python -m hookymod.cli doctor /path/to/romfs
 python -m hookymod.cli scan /path/to/romfs
 python -m hookymod.cli list archive.pack.zs --recursive
 
-# Standard export; use --formats gltf or --formats obj for one format
+# Standard model export; --formats gltf or --formats obj selects one format
 python -m hookymod.cli export-model model.bfres -o model_export
 python -m hookymod.cli export-model model.bfres -o model_export --no-textures
 
@@ -67,11 +106,11 @@ python -m hookymod.cli translate pack -p project -o mods --mod-name MyMod
 python -m hookycreator export-all /path/to/romfs -o export_all
 ```
 
-The `export-model` CLI searches neighboring textures by name and links only an unambiguous single albedo to a single material; the association remains heuristic. Multi-image BNTX files and ambiguous output names are skipped and reported. For OBJ input it retains per-corner UV and normal indices, but does not read source MTL libraries or textures. Nonzero LOD requests for prebuilt BFRES 10.x are refused. Choose a dedicated output folder: the CLI may replace files with the same names. In the Tk explorer, glTF/OBJ export does not automatically link textures. The translator writes only supported geometry and reports refusals. Check `--help` for available commands and options.
+The `export-model` CLI searches neighboring textures by name and links only an unambiguous single albedo to a single material; this remains heuristic. Multi-image BNTX files and ambiguous output names are skipped and reported. OBJ input retains per-corner UV and normal indices, but source MTL libraries and textures are not imported. Nonzero LOD requests for prebuilt BFRES 10.x are refused. Choose a dedicated output folder: files with the same names may be replaced. In the Tk explorer, glTF/OBJ export does not automatically link textures. Check `--help` for the supported options.
 
 The default scan limit is 200,000 recognized files. Incomplete scans and unreadable entries are reported; `--scan-limit 0` removes the limit but may use more memory.
 
-## Tests and builds
+## Builds and tests
 
 ```bash
 python -m pip install -r requirements.txt pytest pytest-subtests pillow
@@ -80,18 +119,33 @@ python -m pytest -q
 for f in tests/*_test.js; do node "$f" || break; done
 ```
 
-Format tests use synthetic fixtures. A synthetic software-browser WebGL2 / FSR smoke test is described in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Blender interoperability is tested optionally when Blender is installed, solely as a glTF/OBJ consumer. Additional native tests and Windows/Linux prerequisites are documented in [docs/DESKTOP.md](docs/DESKTOP.md). The Rust core accelerates some operations but does not yet replace the Python application; see [docs/RUST.md](docs/RUST.md).
+Format tests use synthetic fixtures. A software-browser WebGL2 / FSR smoke test is described in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Blender interoperability is tested optionally as a glTF/OBJ consumer. [docs/DESKTOP.md](docs/DESKTOP.md) covers native builds and tests; the [Rust core](docs/RUST.md) accelerates some operations but does not replace the Python application.
 
-## Documentation and provenance
+### Troubleshooting
+
+- **Files are missing:** check the selected folder, read permissions, scan-limit warnings and any required user-supplied zstd dictionary.
+- **A texture or model cannot be exported or reimported:** the format or target may be unsupported; inspect the report rather than assuming the output is complete.
+- **A rebuilt mod does not work:** review its target loader's instructions, RESTBL requirements and the limitations above. HookyMod does not validate the result in a game.
+- **A native build fails:** check the platform prerequisites and diagnostics in [docs/DESKTOP.md](docs/DESKTOP.md). Do not attach game files or keys when reporting an issue.
+
+## Documentation
 
 - [Workspace, formats and limitations](docs/HOOKYCREATOR.md)
 - [Native window and build](docs/DESKTOP.md)
 - [Session recovery and performance](docs/PERFORMANCE.md)
 - [Asset inspection and dictionaries](docs/OUVRIR_LES_ASSETS.md)
+- [NUP, translation and mod folders](docs/HOOKSHOT.md)
 - [Provenance, references and third-party dependencies](docs/PROVENANCE.md)
+- [Publication checklist](docs/PUBLICATION.md)
 
-The repository provides no game, keys or proprietary assets. Each user is responsible for checking their rights and applicable licenses. Third-party components retain their own attributions and licenses.
+## License and credits
+
+Project-authored material offered under the [HookyMod Noncommercial License 1.0](LICENSE) may be used, modified and shared for noncommercial purposes. Sale and commercial use or distribution are not permitted, including for modified versions. Genuine voluntary donations with no benefits in return remain possible. The project is **source-available**, not open source as defined by the Open Source Initiative.
+
+Third-party components retain their own licenses and notices, and prior rights validly granted under other terms are not revoked. The license text governs this summary. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [PROVENANCE.md](docs/PROVENANCE.md) for credits, format references and the limits of the dependency audit. Hookshot's public format notes were consulted; HookyMod does not embed Hookshot or Longshot source code.
 
 ## Support the project
+
+Voluntary donations with no goods, services, access or other benefits in return are welcome but never required to obtain or use the software.
 
 Solana address: `y8eeEqNTo7pANwRVvwsrNDu9gpPTFYW5FrP2oMUtfhZ`.

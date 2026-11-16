@@ -42,6 +42,8 @@ previews/
 # HookyCreator (démo locale, dossier de travail)
 demo/
 hookycreator_work/
+# Archives temporaires préparées pour une publication après vérification.
+/release-preparation/
 
 # Bibliothèques locales compilées par tools/build_rust.py (reproductibles).
 /rust/target/

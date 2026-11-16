@@ -3,7 +3,7 @@ name = "hookycreator-desktop"
 version = "0.1.0"
 description = "Fenêtre native HookyCreator"
 edition = "2021"
-license = "MIT"
+license-file = "../LICENSE"
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }

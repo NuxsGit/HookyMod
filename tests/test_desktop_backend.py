@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from test_ensembles_blend import _make_project  # noqa: E402
+from synth_audio import make_opus_bwav  # noqa: E402
 from synth_video import make_webm  # noqa: E402
 from hookycreator.server import HookyCreatorServer  # noqa: E402
 
@@ -54,11 +55,11 @@ class DesktopBackendTests(unittest.TestCase):
             self.process.stderr.close()
 
     def request(self, route: str, *, method: str = "GET", headers: dict | None = None,
-                body: bytes | None = None):
+                body: bytes | None = None, timeout: int = 5):
         request = urllib.request.Request(self.origin + route, method=method,
                                          headers=headers or {}, data=body)
         try:
-            response = urllib.request.urlopen(request, timeout=5)
+            response = urllib.request.urlopen(request, timeout=timeout)
         except urllib.error.HTTPError as error:
             response = error
         with response:
@@ -198,11 +199,32 @@ class DesktopBackendTests(unittest.TestCase):
             with zipfile.ZipFile(BytesIO(archive)) as files:
                 self.assertIn("modeles/Heros/Heros.gltf", files.namelist())
 
+    def test_audio_conversion_with_parent_pipe_open(self) -> None:
+        # The backend has not imported NumPy yet. On Windows a blocking read
+        # on stdin previously prevented its OpenBLAS DLL from loading here.
+        sound = self.project.root / "Model" / "Silence.bwav"
+        sound.write_bytes(make_opus_bwav())
+        cookie, _ = self.login()
+        status, headers, wav = self.request(
+            "/api/sound/convert?path=Model%2FSilence.bwav&format=wav",
+            headers={"Cookie": cookie}, timeout=20,
+        )
+        self.assertEqual(status, 200, wav)
+        self.assertEqual(headers["Content-Type"], "audio/wav")
+        self.assertTrue(wav.startswith(b"RIFF") and wav[8:12] == b"WAVE")
+        self.assertIsNone(self.process.poll())  # the parent's pipe is still open
+
     def test_parent_eof_stops_backend_and_closes_port(self) -> None:
         self.process.stdin.close()
         self.assertEqual(self.process.wait(timeout=10), 0)
         with self.assertRaises(urllib.error.URLError):
             self.request("/")
+
+    def test_parent_input_also_stops_backend(self) -> None:
+        # Preserve the old one-byte-read behavior even though Tauri sends no data.
+        self.process.stdin.write(b"x")
+        self.process.stdin.flush()
+        self.assertEqual(self.process.wait(timeout=10), 0)
 
     def test_parent_eof_during_initial_scan_does_not_leave_an_orphan(self) -> None:
         script = (
