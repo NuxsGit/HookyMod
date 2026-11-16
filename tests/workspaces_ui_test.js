@@ -69,7 +69,7 @@ async function buildingRequiresConfirmationAndCannotDoubleSubmit() {
   let confirm = false, resolve, reject;
   const form = { querySelector: () => button, name: "MonMod" };
   const event = { target: form, preventDefault() {} };
-  const ctx = vm.createContext({ event, console, esc: String, $: () => log,
+  const ctx = vm.createContext({ event, console, esc: String, tr: String, $: () => log,
     FormData: class { constructor(target) { this.target = target; } get() { return this.target.name; } },
     window: { confirm: (message) => { messages.push(message); return confirm; } },
     toast: (...args) => messages.push(args),

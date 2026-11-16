@@ -8,7 +8,7 @@ const state = {
   project: null,
   settings: null,
   view: "home",
-  filters: { models: "", textures: "", ensembles: "", sounds: "" },
+  filters: { models: "", textures: "", ensembles: "", sounds: "", animations: "", videos: "" },
   tabs: [],
   tab: "home",
   logs: [],
@@ -18,7 +18,7 @@ const state = {
   busy: 0,
   selection: new Set(),
   anchor: null,
-  shown: { models: 48, textures: 48, ensembles: 48, sounds: 48, chooser: 48 },
+  shown: { models: 48, textures: 48, ensembles: 48, sounds: 48, animations: 48, videos: 48, chooser: 48 },
   modelCandidates: [], textureCandidates: [], ensembleCandidates: [], soundCandidates: [],
   chooserModels: [], chooserTextures: [],
   system: null,
@@ -37,6 +37,10 @@ const assetValidation = new AssetValidationQueue({ onChange: updateValidatedAsse
 let apiThumbnailHold = null;
 let apiValidationHold = null;
 let inspectionSequence = 0;
+let modelViewport = null;
+// Après la planche PNG, conserver uniquement de quoi libérer le contexte à
+// la fermeture ; le canvas doit rester réutilisable si l'on revient en 3D.
+let modelViewportForCleanup = null;
 let ensembleLoad = null;
 let ensembleRenderSequence = 0;
 let projectSnapshotRevision = null;
@@ -54,14 +58,16 @@ let nativeCheckpointSerial = 0;
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+// Native dialogs are not DOM nodes, so translate them explicitly.
+const tr = (text) => window.HookyI18n?.translate(text) ?? text;
 
 const esc = (text) => String(text ?? "").replace(/[&<>"']/g, (ch) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
 ));
 
 function humanBytes(bytes) {
-  if (!bytes) return "0 o";
-  const units = ["o", "Ko", "Mo", "Go"];
+  if (!bytes) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB"];
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   return `${(bytes / 1024 ** i).toFixed(i ? 2 : 0)} ${units[i]}`;
 }
@@ -158,7 +164,7 @@ function renderTabs() {
     <button class="tab" data-tab="${esc(tab.id)}" data-kind="${esc(tab.kind || "view")}"
             aria-selected="${state.tab === tab.id}">
       <i class="dot"></i>
-      <span class="label">${esc(tab.label)}</span>
+      <span class="label" ${tab.doc ? "data-no-i18n" : ""}>${esc(tab.label)}</span>
       ${tab.closable === false ? "" : `<span class="close" data-close="${esc(tab.id)}"
         title="Fermer">✕</span>`}
     </button>`).join("");
@@ -219,6 +225,8 @@ function showView(view, options = {}) {
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
   if (view === "textures") renderTextures();
+  if (view === "animations") renderAnimations();
+  if (view === "videos") renderVideos();
   if (view === "sounds") renderSounds();
   if (view === "mobs") renderMobs();
   if (view === "import") renderModelImport();
@@ -232,6 +240,8 @@ const VIEW_LABELS = {
   models: "Modèles",
   ensembles: "Ensembles",
   textures: "Textures",
+  animations: "Animations",
+  videos: "Vidéos",
   sounds: "Sons",
   mobs: "Mobs",
   import: "Importer un modèle",
@@ -285,7 +295,7 @@ function renderStatus() {
   const budget = $("#status-budget");
   if (budget) {
     const cache = state.system?.thumbs || state.project?.cache?.thumbs;
-    budget.textContent = `budget ${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go`
+    budget.textContent = `budget ${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} GiB`
       + (cache ? ` · cache ${humanBytes(cache.bytes)}` : "");
   }
   const project = $("#status-project");
@@ -302,7 +312,7 @@ function renderStatus() {
       <span class="chip"><b>${state.project?.mobs?.length || 0}</b> fiches de mobs</span>
       <span class="chip"><b>${state.project?.edited?.length || 0}</b> fichiers modifiés</span>
       <span class="chip" title="Budget mémoire des aperçus">budget
-        <b>${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} Go</b></span>`;
+        <b>${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} GiB</b></span>`;
   }
 }
 
@@ -384,7 +394,9 @@ function updateValidatedAssets() {
 }
 
 function thumbFaces() {
-  return state.settings?.thumb_faces || "";
+  // Les préférences d'anciennes versions pouvaient limiter à 20 000 faces
+  // sans que l'utilisateur l'ait demandé. Les vignettes actuelles sont entières.
+  return 0;
 }
 
 // Certains navigateurs réutilisent l'image décodée en mémoire sans requête,
@@ -398,7 +410,7 @@ function imageRevisionQuery(assetRevision = "") {
 function modelThumb(asset) {
   const faces = thumbFaces();
   return `/api/model/preview?path=${encodeURIComponent(asset.rel)}&w=320&h=240&thumb=1`
-    + (faces ? `&faces=${faces}` : "")
+    + `&faces=${faces}`
     + (asset.mtime ? `&v=${asset.mtime}` : "") + imageRevisionQuery();
 }
 
@@ -452,7 +464,7 @@ function tileMarkup(asset, kind) {
       <button class="pick" data-pick="${esc(key)}" title="Sélectionner (Ctrl+clic)">✓</button>
       <div class="thumb ${shown === "aperçu désactivé" ? "placeholder" : ""} ${kind === "texture" ? "checker" : ""}">${shown}</div>
       <div class="meta">
-        <strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
+        <strong data-no-i18n title="${esc(asset.rel)}">${esc(asset.name)}</strong>
         <small>${humanSize(asset.size)}${asset.compressed ? " · compressé" : ""}
           ${kind === "texture" ? ROLE_BADGE(asset.role) : ""}</small>
       </div>
@@ -473,7 +485,7 @@ function ensembleThumb(row) {
   const faces = thumbFaces();
   const textured = $("#ens-textures")?.checked !== false;
   return `/api/model/preview?path=${encodeURIComponent(row.rel)}&w=320&h=240&thumb=1`
-    + (faces ? `&faces=${faces}` : "")
+    + `&faces=${faces}`
     + (textured ? "&tex=1" : "&tex=0")
     + (row.mtime ? `&v=${row.mtime}` : "") + imageRevisionQuery();
 }
@@ -527,7 +539,7 @@ async function renderEnsembles() {
           <img decoding="async" alt="" data-thumb="${esc(ensembleThumb(row))}">
         </div>
         <div class="meta">
-          <strong title="${esc(row.rel)}">${esc(row.name)}</strong>
+          <strong data-no-i18n title="${esc(row.rel)}">${esc(row.name)}</strong>
           <small>${humanSize(row.size)}</small>
           <span class="badges">
             <span class="badge ${row.textures ? "" : "off"}">${row.textures} texture(s)</span>
@@ -585,7 +597,7 @@ function matches(asset, filter) {
 }
 
 function focusSearch() {
-  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens", sounds: "#search-sound" }[state.view];
+  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens", sounds: "#search-sound", animations: "#search-animation", videos: "#search-video" }[state.view];
   if (selector) $(selector)?.focus();
 }
 
@@ -605,26 +617,56 @@ async function openModel(rel, options = {}) {
   if (request !== inspectionSequence) return;
 
   const name = info.models[0] || rel.split("/").pop();
-  const qualities = [
-    { id: "auto", label: "Auto (budget)", faces: null },
-    { id: "detail", label: "Détaillé", faces: 400000 },
-    { id: "rapide", label: "Rapide", faces: 30000 },
-  ];
+  const animationFiles = [...info.animations];
+  if (options.animationRel && !animationFiles.some((item) => item.rel === options.animationRel)) {
+    animationFiles.push({ rel: options.animationRel, name: options.animationRel.split("/").pop() });
+  }
   const textured = info.textured ? "&tex=1" : "&tex=0";
-  const shot = (faces) => `/api/model/preview?path=${encodeURIComponent(rel)}&w=460&h=345`
-    + (faces ? `&faces=${faces}` : "") + textured + imageRevisionQuery(info.revision);
+  // Une ancienne session peut contenir « rapide » : ne jamais reprendre son
+  // ancien plafond implicite de 30 000 faces dans cette vue.
+  const shot = () => `/api/model/preview?path=${encodeURIComponent(rel)}&w=460&h=345&faces=0`
+    + textured + imageRevisionQuery(info.revision);
 
   showInspector("Modèle", `
-    <h3>${esc(name)}</h3>
-    <div class="sub">${esc(rel)}</div>
-    <img class="preview" id="model-shot" alt="" src="${esc(shot(null))}">
+    <h3 data-no-i18n>${esc(name)}</h3>
+    <div class="sub" data-no-i18n>${esc(rel)}</div>
+    <canvas class="preview model-canvas" id="model-canvas" tabindex="0"
+      aria-label="Vue 3D : glisser pour tourner, molette pour zoomer, flèches et plus ou moins au clavier"></canvas>
+    <img class="preview" id="model-shot" alt="Aperçu fixe de ${esc(name)}" hidden>
+    <p class="model-view-status" id="model-view-status" role="status">Chargement de la géométrie complète…</p>
+    <p class="hint">Glisser pour tourner · molette pour zoomer · flèches et +/− au clavier · Échap quitte le plein écran</p>
+    <div class="model-view-controls" aria-label="Contrôles de la vue 3D">
+      <button class="btn tiny" id="model-reset" type="button">Recentrer</button>
+      <button class="btn tiny" id="model-fullscreen" type="button">Plein écran</button>
+      <label><input type="checkbox" id="model-flat"> Faces plates</label>
+      <label><input type="checkbox" id="model-wire"> Fil de fer</label>
+      <label><input type="checkbox" id="model-tex" ${info.textured ? "checked" : ""}> Texturé</label>
+      <label for="model-upscale">Rendu</label>
+      <select id="model-upscale" aria-label="Rendu 3D">
+        <option value="native">Résolution native</option>
+        <option value="fsr">FSR 1 expérimental</option>
+      </select>
+    </div>
+    <p class="hint">Matériaux du jeu non reproduits. FSR n'altère pas les faces ; l'animation est une prévisualisation expérimentale.</p>
+    ${animationFiles.length ? `<div class="animation-controls">
+      <label>Fichier d'animation <select id="model-animation-file"><option value="">Pose statique</option>
+        ${animationFiles.map((a) => `<option data-no-i18n value="${esc(a.rel)}">${esc(a.name)}</option>`).join("")}</select></label>
+      <label>Clip <select id="model-animation-clip" disabled><option value="">Choisir un fichier</option></select></label>
+      <div class="model-view-controls">
+        <button class="btn tiny" type="button" id="model-animation-play" disabled>Pause</button>
+        <label><input type="checkbox" id="model-animation-loop"> Boucle</label>
+        <input type="range" id="model-animation-frame" min="0" max="1" step="0.1" value="0" disabled aria-label="Image d'animation">
+        <output id="model-animation-time">0 / 0</output>
+      </div>
+      <p class="hint" id="model-animation-status">30 images/s par convention ; rig, matériaux et physique non validés en jeu.</p>
+    </div>` : ""}
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}</dd>
       <dt>Maillages</dt><dd>${info.meshes}${info.dropped ? ` <span class="warn">(${info.dropped} ignoré(s))</span>` : ""}</dd>
       <dt>Faces</dt><dd>${info.faces.toLocaleString("fr-FR")}</dd>
       <dt>Sommets</dt><dd>${info.vertices.toLocaleString("fr-FR")}</dd>
       <dt>Dimensions</dt><dd>${info.bounds.map((value) => value.toFixed(3)).join(" × ")}</dd>
-      <dt>Matériaux</dt><dd>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
+      <dt>Matériaux</dt><dd data-no-i18n>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
       <dt>Textures</dt><dd>${info.textures.length ? esc(info.texture_match || "candidats à vérifier") : "aucune repérée"}</dd>
       <dt>Animations</dt><dd>${info.animations.length ? `${info.animations.length} fichier(s)` : "aucune repérée"}</dd>
       <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
@@ -636,52 +678,169 @@ async function openModel(rel, options = {}) {
       <div class="strip">${info.textures.map((t) => `
         <button class="strip-item" data-open-texture="${esc(t.rel)}" data-open-texture-index="${Number(t.index) || 0}" title="${esc(t.rel)}">
           <img decoding="async" alt="" data-thumb="${esc(textureThumb(t, 192))}">
-          <span>${esc(t.name)}${t.material ? ` · ${esc(t.material)}` : ""}</span>
+          <span data-no-i18n>${esc(t.name)}${t.material ? ` · ${esc(t.material)}` : ""}</span>
           <span class="strip-role">${ROLE_BADGE(t.role)}</span>
         </button>`).join("")}</div>
     </div>` : ""}
     ${info.animations.length ? `<details class="warns anims"><summary>${info.animations.length} animation(s) liée(s)</summary>
-      <ul class="todo">${info.animations.map((a) => `<li>${esc(a.name)} <span class="muted">${humanSize(a.size)}</span></li>`).join("")}</ul>
+      <ul class="todo">${info.animations.map((a) => `<li><span data-no-i18n>${esc(a.name)}</span> <span class="muted">${humanSize(a.size)}</span></li>`).join("")}</ul>
       <p class="hint">Les animations restent des fichiers séparés du jeu : elles ne sont pas
         encore injectées dans le modèle exporté.</p></details>` : ""}
     <div class="actions">
       <button class="btn" id="btn-uv">Vérifier les UV</button>
       <button class="btn primary" id="btn-export-model">Exporter en glTF / OBJ</button>
-      <button class="btn ghost" id="btn-turntable">Planche de rotations</button>
+      <button class="btn ghost" id="btn-turntable">Planche PNG</button>
       <button class="btn ghost" id="btn-translate-model">Importer un modèle…</button>
     </div>
-    <label class="field"><span>Qualité de l'aperçu</span>
-      <select id="model-quality">
-        ${qualities.map((q) => `<option value="${q.id}">${esc(q.label)}</option>`).join("")}
-      </select>
-    </label>
-    <p class="hint" id="model-budget-note">Le budget et le culling se règlent dans Réglages.</p>`);
+    <p class="hint" id="model-budget-note">Estimation de l'aperçu PNG complet…</p>`);
 
   ensureTab({ id: `model:${rel}`, kind: "model", label: name, doc: { type: "model", rel } });
   state.tab = `model:${rel}`;
   renderTabs();
   markTile("model", rel);
 
-  async function refreshBudget(faces) {
+  async function refreshBudget() {
     const node = $("#model-budget");
     const note = $("#model-budget-note");
     if (!node) return;
     try {
-      const payload = await api(`/api/model/plan?path=${encodeURIComponent(rel)}&w=460&h=345`
-        + (faces ? `&faces=${faces}` : ""));
+      const payload = await api(`/api/model/plan?path=${encodeURIComponent(rel)}&w=460&h=345&faces=0`);
+      if (node !== $("#model-budget")) return;
       const plan = payload.plan;
       node.innerHTML = `${humanBytes(plan.total_bytes)} estimés sur `
-        + `${humanBytes(plan.budget_bytes)} (${Math.round(plan.fill * 100)} %)`;
+        + `${humanBytes(plan.budget_bytes)} (${Math.round(plan.fill * 100)} %) · PNG`;
       note.textContent = plan.notes.length ? plan.notes.join(" · ")
-        : "Le modèle tient dans le budget sans dégradation.";
+        : "Aperçu PNG complet : toutes les faces dans le budget.";
     } catch (error) {
-      node.textContent = "indisponible";
+      if (node !== $("#model-budget")) return;
+      node.textContent = "PNG indisponible";
       note.textContent = error.message;
     }
   }
 
+  const canvas = $("#model-canvas"), image = $("#model-shot"), viewStatus = $("#model-view-status");
+  const animFile = $("#model-animation-file"), animClip = $("#model-animation-clip");
+  const animFrame = $("#model-animation-frame"), animPlay = $("#model-animation-play");
+  const animLoop = $("#model-animation-loop"), animStatus = $("#model-animation-status");
+  let animationRequest = 0, modelReady = Promise.resolve();
+  const animationIdle = () => {
+    if (!animClip) return;
+    animClip.disabled = true; animFrame.disabled = true; animPlay.disabled = true;
+    animFrame.value = "0"; $("#model-animation-time").textContent = "0 / 0";
+  };
+  const loadSelectedClip = async () => {
+    if (!animFile?.value || !animClip?.value) return;
+    const serial = ++animationRequest, file = animFile.value, index = Number(animClip.value);
+    animStatus.textContent = "Chargement du clip et du squelette…";
+    animFrame.disabled = true; animPlay.disabled = true;
+    try {
+      const [clip] = await Promise.all([
+        api(`/api/animation/clip?path=${encodeURIComponent(file)}&index=${index}`), modelReady,
+      ]);
+      if (serial !== animationRequest || canvas !== $("#model-canvas")) return;
+      const viewport = modelViewport;
+      if (!viewport || canvas.hidden) throw new Error("Ouvre d'abord la vue 3D.");
+      const matched = await viewport.setAnimation(`/api/model/skin?path=${encodeURIComponent(rel)}`, clip);
+      if (!matched || serial !== animationRequest || viewport !== modelViewport) return;
+      animFrame.max = String(Math.max(clip.frames, 1)); animFrame.value = "0"; animFrame.disabled = false;
+      animPlay.disabled = false; animPlay.textContent = "Pause";
+      animLoop.checked = Boolean(clip.loop); viewport.loopAnimation(animLoop.checked);
+      animStatus.textContent = `${matched.matched} os associés${matched.missing ? `, ${matched.missing} absents` : ""} · `
+        + "30 images/s par convention · lecture expérimentale, non validée en jeu.";
+    } catch (error) {
+      if (serial !== animationRequest || canvas !== $("#model-canvas")) return;
+      modelViewport?.stopAnimation(); animStatus.textContent = `Animation indisponible : ${error.message}`;
+    }
+  };
+  const loadAnimationFile = async (preferred = null) => {
+    if (!animFile) return;
+    const serial = ++animationRequest, file = animFile.value;
+    modelViewport?.stopAnimation(); animationIdle();
+    animClip.innerHTML = '<option value="">Choisir un fichier</option>';
+    if (!file) { animStatus.textContent = "Pose statique."; return; }
+    animStatus.textContent = "Recherche des clips…";
+    try {
+      const result = await api(`/api/animation/list?path=${encodeURIComponent(file)}`);
+      if (serial !== animationRequest || canvas !== $("#model-canvas")) return;
+      const clips = result.clips.filter((clip) => clip.supported);
+      animClip.innerHTML = clips.length ? clips.map((clip) => `<option value="${clip.index}">${esc(clip.name)} · ${clip.frames} images</option>`).join("")
+        : '<option value="">Aucun clip Euler pris en charge</option>';
+      if (!clips.length) { animStatus.textContent = "Aucun clip squelettique Euler pris en charge."; return; }
+      animClip.disabled = false;
+      if (preferred !== null && clips.some((clip) => clip.index === preferred)) animClip.value = String(preferred);
+      await loadSelectedClip();
+    } catch (error) {
+      if (serial === animationRequest && canvas === $("#model-canvas")) animStatus.textContent = `Animation indisponible : ${error.message}`;
+    }
+  };
+  if (animFile) {
+    animFile.onchange = () => loadAnimationFile();
+    animClip.onchange = loadSelectedClip;
+    animFrame.oninput = () => modelViewport?.seekAnimation(Number(animFrame.value));
+    animLoop.onchange = () => modelViewport?.loopAnimation(animLoop.checked);
+    animPlay.onclick = () => modelViewport?.playAnimation(!modelViewport?.animation?.playing);
+  }
+  const failView = (message) => {
+    if (canvas !== $("#model-canvas")) return;
+    disposeModelViewport();
+    canvas.hidden = true; image.hidden = false; image.src = shot();
+    $("#btn-turntable").textContent = "Réessayer la 3D";
+    viewStatus.textContent = `${message} Tentative d'aperçu PNG fixe.`;
+  };
+  image.onerror = () => { viewStatus.textContent += " PNG indisponible : consulte le budget ci-dessous."; };
+  const startView = () => {
+    canvas.hidden = false; image.hidden = true; $("#btn-turntable").textContent = "Planche PNG";
+    $("#model-flat").checked = false; $("#model-wire").checked = false;
+    $("#model-upscale").value = "native";
+    viewStatus.textContent = "Chargement de la géométrie complète…";
+    try {
+      const viewport = new ModelViewport(canvas, {
+        textured: $("#model-tex").checked, revision: info.revision,
+        onStatus: (message) => { if (modelViewport === viewport) viewStatus.textContent = message; },
+        onFailure: failView,
+        onModeFallback: () => { if (modelViewport === viewport) $("#model-upscale").value = "native"; },
+        onAnimationFrame: (frame, playing) => {
+          if (modelViewport !== viewport || !animFrame) return;
+          animFrame.value = String(frame);
+          $("#model-animation-time").textContent = `${frame.toFixed(1)} / ${animFrame.max}`;
+          animPlay.textContent = playing ? "Pause" : "Lire";
+        },
+      });
+      modelViewport = viewport;
+      modelViewportForCleanup = viewport;
+      modelReady = viewport.load(`/api/model/geometry?path=${encodeURIComponent(rel)}`).catch((error) => {
+        if (modelViewport === viewport) failView(`Vue 3D indisponible : ${error.message}`);
+      });
+      if (animFile?.value && animClip?.value) void loadSelectedClip();
+    } catch (error) { failView(`Vue 3D indisponible : ${error.message}`); }
+  };
+  startView();
+  if (animFile && options.animationRel) {
+    animFile.value = options.animationRel;
+    void loadAnimationFile(Number.isInteger(options.animationIndex) ? options.animationIndex : null);
+  }
+  $("#model-reset").onclick = () => modelViewport?.reset();
+  $("#model-fullscreen").onclick = async () => {
+    if (!modelViewport || canvas.hidden || !canvas.requestFullscreen) {
+      toast("Plein écran 3D indisponible.", "error"); return;
+    }
+    try { await canvas.requestFullscreen(); canvas.focus(); }
+    catch (_) { toast("Plein écran refusé par le navigateur ou la fenêtre native.", "error"); }
+  };
+  $("#model-flat").onchange = (event) => modelViewport?.setFlat(event.target.checked);
+  $("#model-wire").onchange = (event) => {
+    if (!modelViewport?.setWire(event.target.checked)) event.target.checked = false;
+  };
+  $("#model-tex").onchange = (event) => modelViewport?.setTextured(event.target.checked);
+  $("#model-upscale").onchange = (event) => modelViewport?.setMode(event.target.value);
   $("#btn-turntable").onclick = () => {
-    $("#model-shot").src = `${shot(null)}&views=4`;
+    if (canvas.hidden) { startView(); return; }
+    animationRequest += 1;
+    disposeModelViewport();
+    if (animFrame) { animFrame.disabled = true; animPlay.disabled = true; }
+    canvas.hidden = true; image.hidden = false; image.src = `${shot()}&views=4`;
+    $("#btn-turntable").textContent = "Retour 3D";
+    viewStatus.textContent = "Planche PNG fixe · toutes les faces décodées";
   };
   $("#btn-export-model").onclick = () => exportModel(rel);
   $("#btn-uv").onclick = () => showUv(rel);
@@ -698,18 +857,68 @@ async function openModel(rel, options = {}) {
     if (select && assetValidation.entry("model", rel)?.injectable) select.value = rel;
     modelTargetChanged();
   };
-  $("#model-quality").onchange = (event) => {
-    const chosen = qualities.find((q) => q.id === event.target.value) || qualities[0];
-    restoredModelQuality = chosen.id;
-    $("#model-shot").src = shot(chosen.faces);
-    refreshBudget(chosen.faces);
-    uiSessionWriter?.schedule();
-  };
-  const quality = qualities.find((q) => q.id === restoredModelQuality) || qualities[0];
-  $("#model-quality").value = quality.id;
-  if (quality.faces) $("#model-shot").src = shot(quality.faces);
-  refreshBudget(quality.faces);
+  refreshBudget();
   if (options.inspect === false) return;
+}
+
+/* ------------------------------------------------------------------ animations */
+function renderAnimations() {
+  const grid = $("#animation-grid");
+  if (!grid || state.view !== "animations") return;
+  const assets = (state.project?.assets || []).filter((a) => a.kind === "animation" && matches(a, state.filters.animations));
+  const shown = assets.slice(0, state.shown.animations);
+  $("#animation-count").textContent = `${assets.length} fichier(s) d'animation repéré(s) · cliquer pour inspecter`;
+  grid.innerHTML = shown.length ? shown.map((a) => `
+    <article class="tile sound-tile" role="button" tabindex="0" aria-label="Ouvrir ${esc(a.name)}"
+             data-kind="animation" data-rel="${esc(a.rel)}">
+      <div class="thumb" aria-hidden="true">▶</div>
+      <div class="meta"><strong data-no-i18n title="${esc(a.rel)}">${esc(a.name)}</strong>
+        <small>${humanSize(a.size)} · BFRES</small></div>
+    </article>`).join("") : `<p class="muted">Aucune animation repérée dans ce dossier.</p>`;
+  updateMore("animation", assets.length, shown.length);
+}
+
+async function openAnimation(rel) {
+  showInspector("Animation", `<h3>Chargement des clips…</h3><p class="muted">${esc(rel)}</p>`);
+  const request = inspectionSequence;
+  let result;
+  try { result = await api(`/api/animation/list?path=${encodeURIComponent(rel)}`); }
+  catch (error) {
+    if (request === inspectionSequence) showInspector("Animation", `<h3>Animation indisponible</h3><p>${esc(error.message)}</p>`);
+    return;
+  }
+  if (request !== inspectionSequence) return;
+  const clips = result.clips.filter((clip) => clip.supported);
+  const models = (state.project?.assets || []).filter((a) => a.kind === "model");
+  const key = rel.split("/").pop().split(".")[0].replace(/_(?:player_)?animation$/i, "").replace(/_anim$/i, "").toLowerCase();
+  const candidate = models.find((a) => a.name.split(".")[0].toLowerCase() === key);
+  const filename = rel.split("/").pop();
+  showInspector("Animation", `
+    <h3 data-no-i18n>${esc(filename)}</h3><div class="sub" data-no-i18n>${esc(rel)}</div>
+    <p>${result.clips.length} clip(s) squelettique(s), ${clips.length} en rotations Euler prises en charge.</p>
+    <label>Clip <select id="animation-clip" ${clips.length ? "" : "disabled"}>
+      ${clips.map((c) => `<option value="${c.index}">${esc(c.name)} · ${c.frames} images</option>`).join("")}</select></label>
+    <label>Modèle à associer <select id="animation-model" ${models.length ? "" : "disabled"}>
+      <option value="">Choisir un modèle…</option>
+      ${models.map((m) => `<option data-no-i18n value="${esc(m.rel)}" ${m === candidate ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
+    <div class="actions"><button class="btn primary" type="button" id="animation-open-model" ${clips.length && models.length ? "" : "disabled"}>
+      Ouvrir le modèle et lire</button>
+      <a class="btn" id="animation-download" download="animation.json">Exporter les courbes JSON</a></div>
+    <p class="hint">Association par nom proposée à titre indicatif. L'aperçu associe les os par leur nom et utilise 30 images/s par convention.
+      Les animations ne sont pas injectées ni exportées dans glTF / OBJ.</p>`);
+  const clipSelect = $("#animation-clip"), download = $("#animation-download");
+  const updateDownload = () => {
+    download.hidden = !clipSelect.value;
+    download.href = `/api/animation/clip?path=${encodeURIComponent(rel)}&index=${encodeURIComponent(clipSelect.value)}&download=1`;
+  };
+  clipSelect.onchange = updateDownload; updateDownload();
+  $("#animation-open-model").onclick = () => {
+    const model = $("#animation-model").value;
+    if (!model || !clipSelect.value) { toast("Choisis un modèle et un clip.", "error"); return; }
+    void openModel(model, { animationRel: rel, animationIndex: Number(clipSelect.value) });
+  };
+  ensureTab({ id: `animation:${rel}`, kind: "animation", label: filename, doc: { type: "animation", rel } });
+  state.tab = `animation:${rel}`; renderTabs();
 }
 
 /* ------------------------------------------------------------------ textures */
@@ -756,11 +965,11 @@ async function openTexture(rel, index = 0) {
   const image = `/api/texture/png?path=${encodeURIComponent(rel)}&index=${index}`
     + imageRevisionQuery(info.revision);
   showInspector("Texture", `
-    <h3>${esc(texture.name)}</h3>
-    <div class="sub">${esc(rel)}</div>
+    <h3 data-no-i18n>${esc(texture.name)}</h3>
+    <div class="sub" data-no-i18n>${esc(rel)}</div>
     ${info.textures.length > 1 ? `<label class="field"><span>Texture du conteneur</span>
       <select id="texture-index">${info.textures.map((item) =>
-        `<option value="${item.index}" ${item.index === index ? "selected" : ""}>${esc(item.name)} · ${item.index}</option>`).join("")}</select></label>` : ""}
+        `<option data-no-i18n value="${item.index}" ${item.index === index ? "selected" : ""}>${esc(item.name)} · ${item.index}</option>`).join("")}</select></label>` : ""}
     <img class="preview" alt="" src="${esc(image)}">
     <dl class="kv">
       <dt>Version</dt><dd>${esc(info.version)}${info.orin ? " · Orin" : ""}</dd>
@@ -823,7 +1032,7 @@ async function openTexture(rel, index = 0) {
   };
 }
 
-/* ------------------------------------------------------------------ sons (lecture seule) */
+/* ------------------------------------------------------------------ sons */
 async function renderSounds() {
   const grid = $("#sound-grid");
   if (!grid || state.view !== "sounds") return;
@@ -836,8 +1045,8 @@ async function renderSounds() {
              data-kind="sound" data-rel="${esc(asset.rel)}"
              data-check-kind="sound" data-check-rel="${esc(asset.rel)}" hidden>
       <div class="thumb" aria-hidden="true">♫</div>
-      <div class="meta"><strong title="${esc(asset.rel)}">${esc(asset.name)}</strong>
-        <small>${humanSize(asset.size)} · BWAV Opus</small></div>
+      <div class="meta"><strong data-no-i18n title="${esc(asset.rel)}">${esc(asset.name)}</strong>
+        <small>${humanSize(asset.size)} · BWAV</small></div>
     </article>`).join("") : `<p class="muted">Aucun fichier BWAV repéré dans ce dossier.</p>`;
   assetValidation.setScope("view", shown, state.project?.image_revision);
   updateValidatedAssets();
@@ -858,27 +1067,114 @@ async function openSound(rel) {
     return;
   }
   if (request !== inspectionSequence) return;
-  const url = `/api/sound/ogg?path=${encodeURIComponent(rel)}` + imageRevisionQuery();
-  const filename = rel.split("/").pop().replace(/\.bwav(?:\.zs)?$/i, "") + ".opus";
+  const baseUrl = `/api/sound/convert?path=${encodeURIComponent(rel)}`;
+  const url = baseUrl + `&format=${info.output === "opus" ? "opus" : "wav"}` + imageRevisionQuery();
+  const filename = rel.split("/").pop().replace(/\.bwav(?:\.zs)?$/i, "");
+  const formats = ["wav", "mp3", "flac", "ogg", ...(info.output === "opus" ? ["opus"] : [])];
   showInspector("Son", `
-    <h3>${esc(filename)}</h3><div class="sub">${esc(rel)}</div>
+    <h3 data-no-i18n>${esc(filename)}</h3><div class="sub" data-no-i18n>${esc(rel)}</div>
     <audio class="sound-player" id="sound-player" controls preload="none" src="${esc(url)}"></audio>
     <dl class="kv">
       <dt>Format source</dt><dd>${esc(info.format)}</dd>
-      <dt>Fréquence</dt><dd>${info.sample_rate.toLocaleString("fr-FR")} Hz</dd>
+      <dt>Canaux</dt><dd>${info.channels}</dd>
+      <dt>Fréquence</dt><dd>${info.sample_rate.toLocaleString(document.documentElement.lang || "fr")} Hz</dd>
       <dt>Durée</dt><dd>${info.seconds.toFixed(2)} s</dd>
       <dt>Boucle</dt><dd>${info.loop_start === null ? "aucune repérée"
         : `${info.loop_start} → ${info.loop_end} échantillons`}</dd>
     </dl>
-    <a class="btn primary" href="${esc(url + "&download=1")}" download="${esc(filename)}">Télécharger en Ogg Opus</a>
-    <p class="hint">Conversion sans réencodage. L'import et la réinjection dans le jeu ne sont pas encore disponibles.</p>`);
+    <div class="actions">${formats.map((format) => `<a class="btn ${format === "wav" ? "primary" : ""}"
+      href="${esc(baseUrl + `&format=${format}&download=1`)}" download="${esc(filename + "." + format)}">${format.toUpperCase()}</a>`).join("")}</div>
+    <p class="hint">Opus est exporté sans réencodage. WAV, MP3, FLAC et Ogg sont décodés puis convertis ; les marqueurs de boucle ne sont pas conservés dans ces exports.</p>
+    <button class="btn" id="sound-import-btn" type="button">Remplacer le son…</button>
+    <input type="file" id="sound-import-file" accept=".wav,.mp3,.flac,.ogg,.opus,.aiff,audio/*" hidden>
+    <p class="hint">La source doit avoir ${info.channels} canal(aux) à ${info.sample_rate} Hz (24 Mio maximum).
+      Le remplacement produit un BWAV PCM16 dans la copie de travail, même si l'original est Opus ou DSP.
+      BARS, événements et RESTBL ne sont pas modifiés ; fonctionnement en jeu non garanti.</p>`);
   $("#sound-player").onerror = () => {
-    assetValidation.markError("sound", rel, "Lecture audio impossible dans ce navigateur.");
     toast("Lecture audio impossible dans ce navigateur.", "error");
+  };
+  const input = $("#sound-import-file");
+  $("#sound-import-btn").onclick = () => input.click();
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > 24 * 1024 * 1024) { toast("Fichier audio trop volumineux (24 Mio maximum).", "error"); input.value = ""; return; }
+    if (!window.confirm(tr("Remplacer la copie de travail ? Le son sera converti en BWAV PCM16 expérimental. BARS et RESTBL ne seront pas mis à jour ; la compatibilité en jeu n'est pas garantie."))) { input.value = ""; return; }
+    const selected = inspectionSequence;
+    try {
+      const encoded = await readModelFile(file);
+      const result = await api("/api/sound/import", {
+        method: "POST", body: JSON.stringify({ path: rel, audio: encoded.data }),
+      });
+      toast(`Copie audio enregistrée → ${result.wrote}`);
+      await refresh();
+      if (selected === inspectionSequence) openSound(rel);
+    } catch (error) { toast(error.message, "error"); }
+    finally { input.value = ""; }
   };
   ensureTab({ id: `sound:${rel}`, kind: "sound", label: filename, doc: { type: "sound", rel } });
   state.tab = `sound:${rel}`;
   renderTabs();
+}
+
+/* ------------------------------------------------------------------ vidéos */
+function renderVideos() {
+  const grid = $("#video-grid");
+  if (!grid || state.view !== "videos") return;
+  const assets = (state.project?.assets || []).filter((a) => a.kind === "video" && matches(a, state.filters.videos));
+  const shown = assets.slice(0, state.shown.videos);
+  $("#video-count").textContent = `${assets.length} vidéo(s) WebM repérée(s)`;
+  grid.innerHTML = shown.length ? shown.map((a) => `
+    <article class="tile sound-tile" role="button" tabindex="0" aria-label="Ouvrir ${esc(a.name)}"
+             data-kind="video" data-rel="${esc(a.rel)}">
+      <div class="thumb" aria-hidden="true">▶</div>
+      <div class="meta"><strong data-no-i18n title="${esc(a.rel)}">${esc(a.name)}</strong>
+        <small>${humanSize(a.size)} · WebM</small></div>
+    </article>`).join("") : `<p class="muted">Aucune vidéo WebM repérée dans ce dossier.</p>`;
+  updateMore("video", assets.length, shown.length);
+}
+
+async function openVideo(rel) {
+  showInspector("Vidéo", `<h3>Ouverture de la vidéo…</h3><p class="muted">${esc(rel)}</p>`);
+  const request = inspectionSequence;
+  let info;
+  try { info = await api(`/api/video/info?path=${encodeURIComponent(rel)}`); }
+  catch (error) {
+    if (request === inspectionSequence) showInspector("Vidéo", `<h3>Vidéo indisponible</h3><p>${esc(error.message)}</p>`);
+    return;
+  }
+  if (request !== inspectionSequence) return;
+  const url = `/api/video/stream?path=${encodeURIComponent(rel)}`;
+  showInspector("Vidéo", `
+    <h3 data-no-i18n>${esc(rel.split("/").pop())}</h3><div class="sub" data-no-i18n>${esc(rel)}</div>
+    <video class="video-player" id="video-player" controls preload="metadata" src="${esc(url + imageRevisionQuery())}"></video>
+    <p class="hint" id="video-status">Conteneur WebM vérifié ; lecture selon les codecs du navigateur.</p>
+    <p class="hint">${humanSize(info.size)} · ${info.edited ? "copie de travail" : "fichier source"}</p>
+    <div class="actions"><a class="btn primary" href="${esc(url + "&download=1")}" download="video.webm">Télécharger WebM</a>
+      <button class="btn" id="video-import-btn" type="button">Remplacer la vidéo…</button></div>
+    <input type="file" id="video-import-file" accept=".webm,video/webm" hidden>
+    <p class="warning-note">Copie WebM sans transcodage (32 Mio maximum). Seul l'en-tête du conteneur est vérifié ;
+      codecs, durée, résolution et compatibilité en jeu ne sont pas garantis. Les données NDVE, audio séparé et RESTBL ne sont pas mis à jour.</p>`);
+  const player = $("#video-player"), statusNode = $("#video-status"), input = $("#video-import-file");
+  player.onloadedmetadata = () => { statusNode.textContent = `${player.videoWidth} × ${player.videoHeight} · ${Number.isFinite(player.duration) ? player.duration.toFixed(2) + " s" : "durée inconnue"}`; };
+  player.onerror = () => { statusNode.textContent = "Lecture impossible : ce navigateur ne prend peut-être pas en charge les codecs de cette vidéo."; };
+  $("#video-import-btn").onclick = () => input.click();
+  input.onchange = async () => {
+    const file = input.files?.[0]; if (!file) return;
+    if (file.size > 32 * 1024 * 1024) { toast("Fichier vidéo trop volumineux (32 Mio maximum).", "error"); input.value = ""; return; }
+    if (!window.confirm(tr("Remplacer la copie de travail ? Aucun transcodage ni vérification en jeu ; NDVE et RESTBL ne seront pas mis à jour."))) { input.value = ""; return; }
+    const selected = inspectionSequence;
+    try {
+      const encoded = await readModelFile(file);
+      const result = await api("/api/video/import", { method: "POST", body: JSON.stringify({ path: rel, video: encoded.data }) });
+      toast(`Copie vidéo enregistrée → ${result.wrote}`);
+      await refresh();
+      if (selected === inspectionSequence) openVideo(rel);
+    } catch (error) { toast(error.message, "error"); }
+    finally { input.value = ""; }
+  };
+  ensureTab({ id: `video:${rel}`, kind: "video", label: rel.split("/").pop(), doc: { type: "video", rel } });
+  state.tab = `video:${rel}`; renderTabs();
 }
 
 /* ------------------------------------------------------------------ mobs */
@@ -887,7 +1183,7 @@ function fillMobSelects() {
   const textures = (state.chooserTextures || []).filter((asset) => assetValidation.valid("texture", asset.rel));
   const injectable = models.filter((asset) => assetValidation.entry("model", asset.rel)?.injectable);
   const options = (items) => items.map((asset) =>
-    `<option value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
+    `<option data-no-i18n value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
   const setSingle = (select, items, empty, requireChoice = false) => {
     if (!select) return;
     const prompt = requireChoice && items.length ? "(choisir un modèle cible)" : empty;
@@ -939,8 +1235,8 @@ async function renderMobs() {
     <article class="tile" role="button" tabindex="0" aria-label="Ouvrir ${esc(mob.name)}"
              data-kind="mob" data-slug="${esc(mob.slug)}">
       <div class="meta">
-        <strong>${esc(mob.name)}</strong>
-        <small>parent : ${esc(mob.parent)}</small>
+        <strong data-no-i18n>${esc(mob.name)}</strong>
+        <small><span>parent :</span> <span data-no-i18n>${esc(mob.parent)}</span></small>
         <small>${mob.files.length} fichier(s) copié(s) · fiche préparatoire</small>
       </div>
     </article>`).join("") || `<p class="muted">Aucune fiche pour l'instant.</p>`;
@@ -950,12 +1246,12 @@ function openMob(slug) {
   const mob = (state.project?.mobs || []).find((item) => item.slug === slug);
   if (!mob) return;
   showInspector("Mob", `
-    <h3>${esc(mob.name)}</h3>
-    <div class="sub">${esc(mob.slug)} · parent ${esc(mob.parent)}</div>
+    <h3 data-no-i18n>${esc(mob.name)}</h3>
+    <div class="sub"><span data-no-i18n>${esc(mob.slug)}</span> · <span>parent</span> <span data-no-i18n>${esc(mob.parent)}</span></div>
     <dl class="kv">
-      <dt>Modèle source</dt><dd>${esc(mob.model_source || "—")}</dd>
-      <dt>Textures</dt><dd>${mob.texture_sources.map(esc).join(", ") || "—"}</dd>
-      <dt>Fichiers</dt><dd>${mob.files.map((file) => esc(file.to)).join(", ") || "—"}</dd>
+      <dt>Modèle source</dt><dd data-no-i18n>${esc(mob.model_source || "—")}</dd>
+      <dt>Textures</dt><dd data-no-i18n>${mob.texture_sources.map(esc).join(", ") || "—"}</dd>
+      <dt>Fichiers</dt><dd data-no-i18n>${mob.files.map((file) => esc(file.to)).join(", ") || "—"}</dd>
     </dl>
     <p class="warning-note">Fiche préparatoire : aucun acteur jouable n'a été créé.</p>
     <strong>Reste à faire côté jeu</strong>
@@ -969,6 +1265,8 @@ function openDoc(doc) {
   if (doc.type === "model") return openModel(doc.rel);
   if (doc.type === "texture") return openTexture(doc.rel, doc.index || 0);
   if (doc.type === "sound") return openSound(doc.rel);
+  if (doc.type === "animation") return openAnimation(doc.rel);
+  if (doc.type === "video") return openVideo(doc.rel);
   if (doc.type === "mob") return openMob(doc.slug);
 }
 
@@ -1017,7 +1315,7 @@ function setModelImportFiles(fileList) {
   }
   const list = $("#model-file-summary");
   if (list) list.innerHTML = modelImportFiles.length
-    ? modelImportFiles.map((file) => `<li><strong>${esc(file.name)}</strong><span>${humanSize(file.size)}</span></li>`).join("")
+    ? modelImportFiles.map((file) => `<li><strong data-no-i18n>${esc(file.name)}</strong><span>${humanSize(file.size)}</span></li>`).join("")
     : `<li>${esc(error || "Aucun fichier choisi")}</li>`;
   const report = $("#model-import-report");
   if (report) report.innerHTML = `<li class="muted">${error ? esc(error) : "Prêt à analyser le fichier."}</li>`;
@@ -1113,7 +1411,7 @@ async function runModelImport(inject = false) {
         const summary = inject
           ? `<li><span class="badge">écrit</span><span><code>${esc(result.wrote)}</code></span></li>`
             + `<li><span class="badge">${result.faces} f.</span><span>${result.vertices} sommet(s) sur ${result.capacity_vertices} disponibles</span></li>`
-          : `<li><span class="badge">source</span><span><b>${esc(result.file)}</b> · ${result.meshes} maillage(s) · ${result.vertices} sommet(s) · ${result.faces} triangle(s)</span></li>`;
+          : `<li><span class="badge">source</span><span><b data-no-i18n>${esc(result.file)}</b> · ${result.meshes} maillage(s) · ${result.vertices} sommet(s) · ${result.faces} triangle(s)</span></li>`;
         const notes = inject ? [...(result.report || []), ...(result.notes || [])] : (result.warnings || []);
         report.innerHTML = summary + notes.map((note) => `<li><span class="badge warn">note</span><span>${esc(note)}</span></li>`).join("");
       }
@@ -1139,7 +1437,7 @@ function settingsOrDefault() {
   return state.settings || {
     vram_gb: 6, vram_max_gb: 25, vram_min_gb: 1, supersample: 2,
     cull: true, frustum: true, adaptive: true, max_faces: null, lod: 0,
-    accent: "azur", density: "confort", export_textures: true, thumb_faces: null,
+    accent: "azur", density: "confort", theme: "light", language: "fr", export_textures: true, thumb_faces: null,
     accents: ["menthe", "azur", "ambre", "framboise"], densities: ["confort", "compact"],
   };
 }
@@ -1147,6 +1445,8 @@ function settingsOrDefault() {
 function applyUiSettings(settings = settingsOrDefault()) {
   document.documentElement.dataset.accent = settings.accent || "azur";
   document.documentElement.dataset.density = settings.density || "confort";
+  document.documentElement.dataset.theme = settings.theme || "light";
+  window.HookyI18n?.setLanguage(settings.language || "fr");
 }
 
 function renderSettings() {
@@ -1158,7 +1458,7 @@ function renderSettings() {
   vram.min = settings.vram_min_gb ?? 1;
   vram.max = settings.vram_max_gb ?? 25;
   vram.value = settings.vram_gb;
-  $("#set-vram-out").textContent = `${settings.vram_gb} Go`;
+  $("#set-vram-out").textContent = `${settings.vram_gb} GiB`;
   $("#set-vram-fill").style.width =
     `${((settings.vram_gb - (settings.vram_min_gb ?? 1)) / ((settings.vram_max_gb ?? 25) - (settings.vram_min_gb ?? 1))) * 100}%`;
   $("#set-ss").value = settings.supersample;
@@ -1166,23 +1466,20 @@ function renderSettings() {
   $("#set-cull").checked = settings.cull;
   $("#set-frustum").checked = settings.frustum;
   $("#set-adaptive").checked = settings.adaptive;
-  $("#set-faces").value = settings.max_faces || 0;
-  $("#set-faces-out").textContent = settings.max_faces
-    ? `${settings.max_faces.toLocaleString("fr-FR")} faces` : "auto";
 
+  $("#set-theme").value = settings.theme || "light";
+  $("#set-language").value = settings.language || "fr";
   const accents = $("#set-accent");
   accents.innerHTML = (settings.accents || ["menthe"]).map((accent) =>
     `<option value="${accent}" ${accent === settings.accent ? "selected" : ""}>${accent}</option>`).join("");
   const densities = $("#set-density");
   densities.innerHTML = (settings.densities || ["confort"]).map((density) =>
     `<option value="${density}" ${density === settings.density ? "selected" : ""}>${density}</option>`).join("");
-  $("#set-thumb-faces").value = String(settings.thumb_faces || 0);
-  $("#set-preview-faces").value = String(settings.preview_faces ?? 60000);
   const cacheSlider = $("#set-cache");
   if (cacheSlider) {
     cacheSlider.max = settings.cache_max_mb || 1024;
     cacheSlider.value = settings.cache_mb ?? 256;
-    $("#set-cache-out").textContent = `${settings.cache_mb ?? 256} Mo`;
+    $("#set-cache-out").textContent = `${settings.cache_mb ?? 256} MiB`;
   }
   $("#set-export-textures").checked = settings.export_textures !== false;
   $("#set-textured").checked = settings.textured_previews !== false;
@@ -1190,18 +1487,15 @@ function renderSettings() {
 
   $("#settings-summary").innerHTML = [
     `<li><span class="k">Budget</span>${humanBytes(settings.budget_bytes
-      || settings.vram_gb * 1024 ** 3)} (${settings.vram_gb} Go)</li>`,
+      || settings.vram_gb * 1024 ** 3)} (${settings.vram_gb} GiB)</li>`,
     `<li><span class="k">Anticrénelage</span>×${settings.supersample}</li>`,
     `<li><span class="k">Culling</span>${[
       settings.cull ? "faces arrière" : null,
       settings.frustum ? "hors écran" : null,
     ].filter(Boolean).join(" + ") || "désactivé"}</li>`,
-    `<li><span class="k">Adaptation</span>${settings.adaptive
-      ? "active" : "désactivée (refus net)"}</li>`,
-    `<li><span class="k">Faces</span>${settings.max_faces
-      ? `${settings.max_faces.toLocaleString("fr-FR")} maximum` : "automatique"}</li>`,
-    `<li><span class="k">Vignettes</span>${settings.thumb_faces
-      ? `${settings.thumb_faces.toLocaleString("fr-FR")} faces` : "selon le budget"}</li>`,
+    `<li><span class="k">Anticrénelage adaptatif</span>${settings.adaptive
+      ? "actif" : "désactivé (refus net)"}</li>`,
+    `<li><span class="k">Faces</span>toutes les faces décodées ou refus</li>`,
     `<li><span class="k">Export glTF / OBJ</span>${settings.export_textures !== false
       ? "avec les PNG" : "géométrie seule"}</li>`,
   ].join("");
@@ -1299,30 +1593,21 @@ function wireSettings() {
   };
   on("#set-vram", "oninput", (event) => saveSettings({ vram_gb: Number(event.target.value) }));
   on("#set-ss", "oninput", (event) => saveSettings({ supersample: Number(event.target.value) }));
-  on("#set-faces", "oninput", (event) => {
-    const value = Number(event.target.value);
-    saveSettings({ max_faces: value > 0 ? value : null });
-  });
   on("#set-cull", "onchange", (event) => saveSettings({ cull: event.target.checked }));
   on("#set-frustum", "onchange", (event) => saveSettings({ frustum: event.target.checked }));
   on("#set-adaptive", "onchange", (event) => saveSettings({ adaptive: event.target.checked }));
   on("#set-accent", "onchange", (event) => saveSettings({ accent: event.target.value }));
   on("#set-density", "onchange", (event) => saveSettings({ density: event.target.value }));
+  on("#set-theme", "onchange", (event) => saveSettings({ theme: event.target.value }));
+  on("#set-language", "onchange", (event) => saveSettings({ language: event.target.value }));
   on("#set-textured", "onchange", (event) => {
     saveSettings({ textured_previews: event.target.checked });
-  });
-  on("#set-preview-faces", "onchange", (event) => {
-    saveSettings({ preview_faces: Number(event.target.value) });
-  });
-  on("#set-thumb-faces", "onchange", (event) => {
-    const value = Number(event.target.value);
-    saveSettings({ thumb_faces: value > 0 ? value : null });
   });
   on("#set-export-textures", "onchange", (event) =>
     saveSettings({ export_textures: event.target.checked }));
   on("#set-cache", "oninput", (event) => {
     const value = Number(event.target.value);
-    $("#set-cache-out").textContent = `${value} Mo`;
+    $("#set-cache-out").textContent = `${value} MiB`;
     saveSettings({ cache_mb: value });
   });
   on("#cache-clear", "onclick", clearCache);
@@ -1331,8 +1616,8 @@ function wireSettings() {
   on("#warm-stop", "onclick", stopPreparingThumbnails);
   on("#set-reset", "onclick", () => saveSettings({
     vram_gb: 6, supersample: 2, cull: true, frustum: true, adaptive: true,
-    max_faces: null, lod: 0, accent: "azur", density: "confort",
-    export_textures: true, thumb_faces: null, cache_mb: 256,
+    max_faces: null, lod: 0, accent: "azur", density: "confort", theme: "light", language: "fr",
+    export_textures: true, thumb_faces: null, preview_faces: 0, cache_mb: 256,
   }, { quiet: false }));
 }
 
@@ -1406,7 +1691,15 @@ async function exportSelection() {
 }
 
 /* ------------------------------------------------------------------ inspecteur */
+function disposeModelViewport(releaseContext = false) {
+  const viewport = modelViewport || (releaseContext ? modelViewportForCleanup : null);
+  if (viewport) viewport.dispose(releaseContext);
+  modelViewport = null;
+  if (releaseContext) modelViewportForCleanup = null;
+}
+
 function showInspector(title, html) {
+  disposeModelViewport(true);
   inspectionSequence += 1;
   assetValidation.clearScope("inspector");
   const body = $("#inspector-body");
@@ -1420,6 +1713,7 @@ function showInspector(title, html) {
 }
 
 function hideInspector() {
+  disposeModelViewport(true);
   inspectionSequence += 1;
   assetValidation.clearScope("inspector");
   thumbnailQueue.release($("#inspector-body"));
@@ -1500,7 +1794,7 @@ async function showUv(rel) {
        <li><span class="k">Étirement max</span>×${report.stretch.toFixed(1)}</li>`
     : `<li><span class="k">UV</span>aucune coordonnée de texture dans ce modèle</li>`;
   showInspector("UV", `
-    <h3>${esc(name)}</h3>
+    <h3 data-no-i18n>${esc(name)}</h3>
     <div class="sub">Contours des triangles UV dessinés sur l'atlas :
       si le maillage épouse les zones utiles de la texture, elle tombe juste.</div>
     <img class="uv-shot" id="uv-shot" alt="atlas UV" src="${uvShot(rel, false)}">
@@ -1609,7 +1903,7 @@ async function pollBulk() {
     const detail = item.status === "ok"
       ? (item.kind === "model" ? `${item.faces} faces · v${item.version}` : item.format)
       : (item.reason || "");
-    return `<li>${flavor}<span>${esc(item.label)}<br><small class="muted">${esc(detail)}</small></span></li>`;
+    return `<li>${flavor}<span><span data-no-i18n>${esc(item.label)}</span><br><small class="muted">${esc(detail)}</small></span></li>`;
   }).join("");
   if (incompleteScan) {
     toast(`Export partiel : ${report.ok} élément(s), scan incomplet`, "error");
@@ -1623,9 +1917,9 @@ async function buildMod(event) {
   event.preventDefault();
   if (modBuildPending) return;
   const name = new FormData(event.target).get("name");
-  if (!window.confirm("Assembler ce mod ?\n\nLe nom du dossier est nettoyé : seuls les lettres, "
+  if (!window.confirm(tr("Assembler ce mod ?\n\nLe nom du dossier est nettoyé : seuls les lettres, "
       + "chiffres, tirets et _ sont conservés (ou HookyMod s'il ne reste rien). "
-      + "Si ce dossier existe déjà dans mods/, il sera entièrement remplacé, sans sauvegarde.")) return;
+      + "Si ce dossier existe déjà dans mods/, il sera entièrement remplacé, sans sauvegarde."))) return;
   modBuildPending = true;
   const button = event.target.querySelector('button[type="submit"]');
   if (button) button.disabled = true;
@@ -1635,7 +1929,7 @@ async function buildMod(event) {
       body: JSON.stringify({ name }),
     });
     $("#mod-log").innerHTML = `
-      <li><span class="k">Mod</span><span>${esc(result.mod)}</span></li>
+      <li><span class="k">Mod</span><span data-no-i18n>${esc(result.mod)}</span></li>
       <li><span class="k">Dossier</span><code>${esc(result.path)}</code></li>
       <li><span class="k">Fichiers</span><span>${result.files}</span></li>
       <li><span class="k">Fiches de mobs</span><span>${result.mobs}</span></li>`;
@@ -1770,8 +2064,10 @@ function paletteCommands() {
     { label: "Espace modification", group: "vue", run: () => showView("edit") },
     { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
+    { label: "Aller aux animations", group: "vue", run: () => showView("animations") },
     { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
     { label: "Aller aux sons", group: "vue", run: () => showView("sounds") },
+    { label: "Aller aux vidéos", group: "vue", run: () => showView("videos") },
     { label: "Aller aux mobs", group: "vue", run: () => showView("mobs") },
     { label: "Importer un modèle", group: "vue", run: () => showView("import") },
     { label: "Aller aux réglages", group: "vue", run: () => showView("settings") },
@@ -1828,10 +2124,14 @@ function closePalette() {
 }
 
 function filterPalette(query) {
-  const text = String(query || "").toLowerCase().trim();
+  // Search both the displayed translation and the original command, with or
+  // without accents. User-supplied asset paths are not translated.
+  const searchable = (value) => String(value || "").normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const text = searchable(query).trim();
   const all = paletteCommands();
   paletteItems = (text
-    ? all.filter((item) => `${item.label} ${item.hint || ""}`.toLowerCase().includes(text))
+    ? all.filter((item) => searchable(`${item.label} ${tr(item.label)} ${tr(item.group || "")} ${item.hint || ""}`).includes(text))
     : all
   ).slice(0, 60);
   paletteIndex = Math.min(paletteIndex, Math.max(0, paletteItems.length - 1));
@@ -2010,10 +2310,14 @@ async function rescanProject() {
     state.shown.textures = 48;
     state.shown.ensembles = 48;
     state.shown.sounds = 48;
+    state.shown.animations = 48;
+    state.shown.videos = 48;
     renderStatus();
     if (state.view === "models") await renderModels();
     if (state.view === "ensembles") await renderEnsembles();
     if (state.view === "textures") await renderTextures();
+    if (state.view === "animations") renderAnimations();
+    if (state.view === "videos") renderVideos();
     if (state.view === "sounds") await renderSounds();
     if (state.view === "mobs") await renderMobs();
     if (state.view === "import") await renderModelImport();
@@ -2048,7 +2352,7 @@ async function quitApp() {
     location.assign("/__hooky/quit");
     return;
   }
-  if (!window.confirm("Quitter l'atelier ? Le serveur local va s'arrêter.")) return;
+  if (!window.confirm(tr("Quitter l'atelier ? Le serveur local va s'arrêter."))) return;
   document.body.inert = true;
   let timeout;
   const saved = await Promise.race([
@@ -2056,8 +2360,8 @@ async function quitApp() {
     new Promise((resolve) => { timeout = setTimeout(() => resolve(false), 5000); }),
   ]);
   clearTimeout(timeout);
-  if (!saved && !window.confirm(
-    "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?")) {
+  if (!saved && !window.confirm(tr(
+    "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?"))) {
     document.body.inert = false;
     return;
   }
@@ -2148,6 +2452,8 @@ async function refresh(options = {}) {
   if (state.view === "models") await renderModels();
   if (state.view === "ensembles") await renderEnsembles();
   if (state.view === "textures") await renderTextures();
+  if (state.view === "animations") renderAnimations();
+  if (state.view === "videos") renderVideos();
   if (state.view === "sounds") await renderSounds();
   if (state.view === "mobs") await renderMobs();
   if (state.view === "import") await renderModelImport();
@@ -2249,6 +2555,16 @@ function wire() {
     state.shown.sounds = 48;
     renderSounds();
   });
+  onInputDebounced("#search-animation", (value) => {
+    state.filters.animations = value.trim().toLowerCase();
+    state.shown.animations = 48;
+    renderAnimations();
+  });
+  onInputDebounced("#search-video", (value) => {
+    state.filters.videos = value.trim().toLowerCase();
+    state.shown.videos = 48;
+    renderVideos();
+  });
   onInputDebounced("#mob-resource-search", () => {
     state.shown.chooser = 48;
     requestChooserChecks(true);
@@ -2281,6 +2597,14 @@ function wire() {
   $("#sound-more-btn").onclick = () => {
     state.shown.sounds += 48;
     renderSounds();
+  };
+  $("#animation-more-btn").onclick = () => {
+    state.shown.animations += 48;
+    renderAnimations();
+  };
+  $("#video-more-btn").onclick = () => {
+    state.shown.videos += 48;
+    renderVideos();
   };
   $$("[data-validate-retry]").forEach((button) => {
     button.onclick = () => {
@@ -2358,6 +2682,8 @@ function wire() {
       if (tile.dataset.kind === "model") openModel(tile.dataset.rel);
       if (tile.dataset.kind === "texture") openTexture(tile.dataset.rel);
       if (tile.dataset.kind === "sound") openSound(tile.dataset.rel);
+      if (tile.dataset.kind === "animation") openAnimation(tile.dataset.rel);
+      if (tile.dataset.kind === "video") openVideo(tile.dataset.rel);
       if (tile.dataset.kind === "mob") openMob(tile.dataset.slug);
     }
   });
@@ -2455,7 +2781,7 @@ function wire() {
 }
 
 /* ------------------------------------------------------------------ reprise automatique */
-const SESSION_TEXT_FIELDS = ["search", "search-tex", "search-ens", "search-sound", "tex-role",
+const SESSION_TEXT_FIELDS = ["search", "search-tex", "search-ens", "search-sound", "search-animation", "search-video", "tex-role",
   "mod-name", "mob-name", "mob-parent", "mob-resource-search", "model-axis", "model-scale",
   "model-target-search"];
 const SESSION_CHECK_FIELDS = ["model-shots", "ens-textures", "bulk-anim", "model-fit"];
@@ -2512,7 +2838,7 @@ function captureUiSession() {
     return tab.doc ? { ...tab.doc } : null;
   }).filter(Boolean);
   const shown = {};
-  for (const key of ["models", "textures", "ensembles", "sounds", "chooser"]) {
+  for (const key of ["models", "textures", "ensembles", "sounds", "animations", "videos", "chooser"]) {
     shown[key] = Math.max(48, Math.min(10000, Math.round(state.shown[key] || 48)));
   }
   return {
@@ -2541,10 +2867,10 @@ async function restoreUiSession(saved) {
   restoredModelQuality = ["auto", "detail", "rapide"].includes(saved.fields?.["model-quality"])
     ? saved.fields["model-quality"] : "";
   for (const [kind, id] of Object.entries({ models: "search", textures: "search-tex",
-                                            ensembles: "search-ens", sounds: "search-sound" })) {
+                                            ensembles: "search-ens", sounds: "search-sound", animations: "search-animation", videos: "search-video" })) {
     state.filters[kind] = ($(`#${id}`)?.value || "").trim().toLowerCase();
   }
-  for (const key of ["models", "textures", "ensembles", "sounds", "chooser"]) {
+  for (const key of ["models", "textures", "ensembles", "sounds", "animations", "videos", "chooser"]) {
     const value = saved.shown?.[key];
     if (Number.isInteger(value)) state.shown[key] = Math.max(48, Math.min(10000, value));
   }
@@ -2562,7 +2888,7 @@ async function restoreUiSession(saved) {
   for (const tab of saved.tabs || []) {
     if (tab.type === "view" && Object.hasOwn(VIEW_LABELS, tab.view)) {
       ensureViewTab(tab.view, VIEW_LABELS[tab.view]);
-    } else if (["model", "texture", "sound"].includes(tab.type)) {
+    } else if (["model", "texture", "sound", "animation", "video"].includes(tab.type)) {
       const asset = assets.get(`${tab.type}:${tab.rel}`);
       const index = tab.type === "texture" && Number.isInteger(tab.index) && tab.index >= 0 ? tab.index : 0;
       if (asset) ensureTab({ id: `${tab.type}:${tab.rel}${index ? `#${index}` : ""}`,

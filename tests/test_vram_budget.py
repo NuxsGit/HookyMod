@@ -133,6 +133,28 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan.face_limit, 1000)
         self.assertLessEqual(plan.total_bytes, Settings().budget_bytes)
 
+    def test_complete_preview_does_not_apply_old_manual_or_automatic_limits(self) -> None:
+        settings = Settings(max_faces=400, preview_faces=0, vram_gb=1.0)
+        model = [FakeMesh(faces=5000, vertices=3000)]
+        plan = vram.plan(settings, model, 640, 480, preserve_faces=True)
+        self.assertIsNone(plan.face_limit)
+        self.assertEqual(plan.geometry_bytes, vram.geometry_bytes(model)[1])
+        self.assertEqual(plan.notes, [])
+        limited = vram.plan(settings, model, 640, 480, face_limit=600)
+        self.assertEqual(limited.face_limit, 600)
+        self.assertTrue(any("à la demande" in note for note in limited.notes))
+
+    def test_complete_preview_refuses_budget_and_safety_caps_without_decimation(self) -> None:
+        heavy = [FakeMesh(faces=3_000_000, vertices=10_000_000)]
+        for adaptive in (True, False):
+            with self.subTest(adaptive=adaptive), self.assertRaises(vram.BudgetError) as caught:
+                vram.plan(Settings(vram_gb=1.0, adaptive=adaptive), heavy, 640, 480,
+                          preserve_faces=True)
+            self.assertIn("Aucune face n'a été supprimée", str(caught.exception))
+        enormous = [FakeMesh(faces=vram.FACES_CEILING + 1)]
+        with self.assertRaisesRegex(vram.BudgetError, "plafond de sécurité"):
+            vram.plan(Settings(vram_gb=25), enormous, 640, 480, preserve_faces=True)
+
     def test_trim_keeps_a_coherent_subset(self) -> None:
         mesh = small_mesh(100)
         kept = vram.trim([mesh], 40)
@@ -177,6 +199,27 @@ class ProjectSettingsTests(unittest.TestCase):
             plan = project.preview_plan("Model/Petit.bfres", 320, 240)
             self.assertTrue(plan["fits"])
             self.assertGreater(plan["frame_bytes"], 0)
+
+    def test_zero_faces_reaches_both_png_and_plan_as_full_geometry(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "dump"
+            (root / "Model").mkdir(parents=True)
+            (root / "Model" / "Petit.bfres").write_bytes(synth.make_bfres())
+            project = Project(root, Path(tmp) / "work")
+            project.scan()
+            project.update_settings({"max_faces": 400, "preview_faces": 60000})
+            meshes = [small_mesh(5000)]
+            stamp = project._version("Model/Petit.bfres")
+            with patch.object(project, "_model_mesh_entry", return_value=(meshes, {}, stamp)), \
+                    patch.object(project, "_flatten", return_value=object()), \
+                    patch("hookycreator.project.render.render_png", return_value=b"png") as render:
+                plan = project.preview_plan("Model/Petit.bfres", 320, 240, face_limit=0)
+                self.assertIsNone(plan["face_limit"])
+                self.assertEqual(plan["geometry_bytes"], vram.geometry_bytes(meshes)[1])
+                project.model_preview("Model/Petit.bfres", 320, 240, face_limit=0)
+                self.assertIsNone(render.call_args.kwargs["max_faces"])
 
     def test_preview_respects_a_face_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

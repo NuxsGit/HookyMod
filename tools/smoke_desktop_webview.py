@@ -184,6 +184,28 @@ def run(application: Path) -> None:
                 assert driver.script("return document.querySelectorAll('#model-grid .tile:not([hidden])').length") == 1
                 driver.click('#model-grid .tile:not([hidden])')
                 driver.wait("fiche du modèle", "return !!document.querySelector('#btn-export-model')")
+                # Environnement sans WebGL2 : le repli PNG doit rester visible.
+                # Sinon, le modèle complet et le pipeline FSR sont exercés dans
+                # la vraie WebView ; un refus FSR doit être affiché explicitement.
+                driver.wait("vue 3D ou repli", """
+                    const status = document.querySelector('#model-view-status')?.textContent || '';
+                    return status.includes('triangles') || status.includes('Vue 3D indisponible');
+                """, timeout=60)
+                if driver.script("return !!modelViewport && modelViewport.ready"):
+                    assert driver.script("return modelViewport.model.triangles") == 1
+                    driver.script("""
+                        const select = document.querySelector('#model-upscale');
+                        select.value = 'fsr'; select.dispatchEvent(new Event('change', {bubbles: true}));
+                    """)
+                    driver.wait("FSR ou repli explicite", """
+                        const status = document.querySelector('#model-view-status')?.textContent || '';
+                        return (!!modelViewport && modelViewport.mode === 'fsr' && !!modelViewport.targets)
+                          || status.includes('FSR 1 indisponible');
+                    """, timeout=60)
+                    print('Vue native : ' + driver.script("return document.querySelector('#model-view-status').textContent"))
+                else:
+                    assert driver.script("return !document.querySelector('#model-shot').hidden")
+                    print('Vue native : repli PNG (WebGL indisponible)')
                 driver.click('#btn-export-model')
                 first = completed_download(driver)
                 downloads.append(first)
@@ -246,12 +268,53 @@ def run(application: Path) -> None:
                     return p && (p.readyState >= 1 || p.error);
                 """)
                 assert not driver.script("return !!document.querySelector('#sound-player').error")
-                driver.click('#inspector-body a[download]')
+                driver.click('#inspector-body a[href*="/api/sound/convert"][href*="format=opus"]')
                 audio = completed_download(driver, str(selected))
                 downloads.append(audio)
                 assert audio.name.startswith('Silence--') and audio.suffix == '.opus'
                 assert audio.read_bytes().startswith(b'OggS')
-                print("Webview native : session, filtres, ZIP, sélection et son OK")
+                close_panels(driver)
+                driver.click('#inspector-body a[href*="/api/sound/convert"][href*="format=wav"]')
+                wav = completed_download(driver, str(audio))
+                downloads.append(wav)
+                assert wav.name.startswith('Silence--') and wav.suffix == '.wav'
+                assert wav.read_bytes().startswith(b'RIFF')
+
+                close_panels(driver)
+                driver.click('button[data-view="videos"]')
+                driver.wait("liste des vidéos", "return document.querySelectorAll('#video-grid .tile').length === 1")
+                driver.click('#video-grid .tile')
+                driver.wait("lecteur vidéo", "return !!document.querySelector('#video-player')")
+                driver.script("const p = document.querySelector('#video-player'); p.preload = 'auto'; p.load()")
+                driver.wait("métadonnées vidéo ou refus du codec", """
+                    const p = document.querySelector('#video-player');
+                    return p && (p.readyState >= 1 || p.error);
+                """)
+                if driver.script("return !!document.querySelector('#video-player').error"):
+                    driver.wait("message de codec non pris en charge", """
+                        return document.querySelector('#video-status').textContent.includes('Lecture impossible');
+                    """)
+                    print("WebM : codec indisponible dans cette WebView ; message de repli affiché")
+                else:
+                    assert driver.script("return document.querySelector('#video-player').videoWidth") == 32
+                    assert driver.script("return document.querySelector('#video-player').videoHeight") == 32
+                driver.click('#inspector-body a[href*="/api/video/stream"][download]')
+                movie = completed_download(driver, str(wav))
+                downloads.append(movie)
+                assert movie.name.startswith('Synthetic--') and movie.suffix == '.webm'
+                assert movie.read_bytes() == (root / 'Model' / 'Synthetic.webm').read_bytes()
+
+                close_panels(driver)
+                driver.click('button[data-view="animations"]')
+                driver.wait("liste des animations", "return document.querySelectorAll('#animation-grid .tile').length === 1")
+                driver.click('#animation-grid .tile')
+                driver.wait("fiche d'animation", "return !!document.querySelector('#animation-download')?.href")
+                driver.click('#animation-download')
+                clip = completed_download(driver, str(movie))
+                downloads.append(clip)
+                assert clip.name.startswith('Heros--') and clip.suffix == '.json'
+                assert json.loads(clip.read_text(encoding='utf-8'))['name'] == 'Walk'
+                print("Webview native : session, filtres, ZIP, sélection, audio, vidéo et JSON d'animation OK")
 
                 # Une sauvegarde finale > 64 Kio et artificiellement retardée
                 # doit être confirmée avant l'arrêt, pas confiée à keepalive.

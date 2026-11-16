@@ -37,9 +37,12 @@ def run(binary: Path) -> None:
         original = bytes(original)
         model.write_bytes(original)
         with tempfile.TemporaryFile() as log:
+            child_env = {**os.environ, "PYTHONUTF8": "1"}
+            # A standalone sidecar must not silently load dependencies from the
+            # test runner's PYTHONPATH instead of its own bundled modules.
+            child_env.pop("PYTHONPATH", None)
             process = subprocess.Popen([str(binary.resolve()), str(root)], stdin=subprocess.PIPE,
-                                       stdout=subprocess.PIPE, stderr=log,
-                                       env={**os.environ, "PYTHONUTF8": "1"})
+                                       stdout=subprocess.PIPE, stderr=log, env=child_env)
             try:
                 lines: queue.Queue[bytes] = queue.Queue()
                 threading.Thread(target=lambda: lines.put(process.stdout.readline()), daemon=True).start()
@@ -55,12 +58,14 @@ def run(binary: Path) -> None:
                 origin = f"http://127.0.0.1:{int(ready['port'])}"
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                                      urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-                try:
-                    opener.open(origin + "/api/state", timeout=10)
-                except urllib.error.HTTPError as exc:
-                    assert exc.code == 403
-                else:
-                    raise AssertionError("Le backend accepte une requête sans session.")
+                for protected in ("/api/state", "/api/video/info?path=Model%2FSynthetic.webm",
+                                  "/api/video/stream?path=Model%2FSynthetic.webm"):
+                    try:
+                        opener.open(origin + protected, timeout=10)
+                    except urllib.error.HTTPError as exc:
+                        assert exc.code == 403, (protected, exc.code)
+                    else:
+                        raise AssertionError(f"Le backend accepte une requête sans session : {protected}")
                 request = urllib.request.Request(
                     origin + "/api/desktop/session", method="POST",
                     data=json.dumps({"token": ready["token"]}).encode(),
@@ -71,6 +76,25 @@ def run(binary: Path) -> None:
                 with opener.open(origin + "/api/state", timeout=20) as response:
                     state = json.load(response)
                 assert any(item["rel"] == "Model/Heros.bfres" for item in state["project"]["assets"])
+                assert any(item["rel"] == "Model/Synthetic.webm" and item["kind"] == "video"
+                           for item in state["project"]["assets"])
+                assert any(item["rel"] == "Model/Heros.anim.bfres" and item["kind"] == "animation"
+                           for item in state["project"]["assets"])
+                with opener.open(origin + "/api/animation/list?path=Model%2FHeros.anim.bfres", timeout=10) as response:
+                    assert json.load(response)["clips"][0]["name"] == "Walk"
+                with opener.open(origin + "/api/animation/clip?path=Model%2FHeros.anim.bfres&index=0&download=1", timeout=10) as response:
+                    assert "attachment" in response.headers["Content-Disposition"]
+                    assert json.load(response)["bones"][0]["name"] == "Root"
+                video_original = (root / "Model" / "Synthetic.webm").read_bytes()
+                with opener.open(origin + "/api/video/info?path=Model%2FSynthetic.webm", timeout=10) as response:
+                    video_info = json.load(response)
+                assert video_info["format"] == "WebM" and not video_info["edited"], video_info
+                request = urllib.request.Request(origin + "/api/video/stream?path=Model%2FSynthetic.webm",
+                                                 headers={"Range": "bytes=4-15"})
+                with opener.open(request, timeout=10) as response:
+                    assert response.status == 206
+                    assert response.headers["Content-Range"] == f"bytes 4-15/{len(video_original)}"
+                    assert response.read() == video_original[4:16]
                 with opener.open(origin + "/api/system", timeout=10) as response:
                     engine = json.load(response)["engine"]
                 assert engine["rust"]["available"], engine["rust"]
@@ -78,8 +102,32 @@ def run(binary: Path) -> None:
                 with opener.open(origin + "/api/asset/check?kind=model&path=Model%2FHeros.bfres", timeout=30) as response:
                     check = json.load(response)
                 assert check["valid"] and check["injectable"], check
+                with opener.open(origin + "/api/model/geometry?path=Model%2FHeros.bfres", timeout=30) as response:
+                    assert response.headers.get_content_type() == "application/octet-stream"
+                    assert response.read().startswith(b"H3D1")
+                # A sidecar built earlier may still start correctly while serving
+                # stale UI assets. Compare the bundled files with this checkout.
+                for name in ("index.html", "style.css", "app.js", "i18n.js", "HookyMod.png",
+                             "model_viewer.js", "model_animation.js", "shaders/common.glsl",
+                             "shaders/easu.frag.glsl", "shaders/rcas.frag.glsl",
+                             "shaders/fullscreen.vert.glsl", "shaders/LICENSE-FSR1.txt"):
+                    with opener.open(origin + "/static/" + name, timeout=10) as response:
+                        content = response.read()
+                    assert len(content) > 100 and content == (ROOT / "hookycreator" / "web" / name).read_bytes(), name
                 with opener.open(origin + "/api/sound/ogg?path=Model%2FSilence.bwav&download=1", timeout=30) as response:
                     assert response.read().startswith(b"OggS")
+                # Exercise libsndfile and bundled codecs, not just the pure-Python
+                # Opus remux. A missing numpy/CFFI/libsndfile must fail the build.
+                formats = {"wav": b"RIFF", "flac": b"fLaC", "ogg": b"OggS"}
+                wav = None
+                for fmt, magic in formats.items():
+                    with opener.open(origin + f"/api/sound/convert?path=Model%2FSilence.bwav&format={fmt}", timeout=30) as response:
+                        converted = response.read()
+                        assert converted.startswith(magic), (fmt, converted[:12])
+                        if fmt == "wav": wav = converted
+                with opener.open(origin + "/api/sound/convert?path=Model%2FSilence.bwav&format=mp3", timeout=30) as response:
+                    mp3 = response.read()
+                    assert mp3.startswith(b"ID3") or (mp3[0] == 0xff and mp3[1] & 0xe0 == 0xe0), mp3[:8]
                 request = urllib.request.Request(
                     origin + "/api/model/export", method="POST",
                     data=json.dumps({"path": "Model/Heros.bfres"}).encode(),
@@ -104,6 +152,27 @@ def run(binary: Path) -> None:
                     with opener.open(request, timeout=60) as response:
                         return json.load(response)
 
+                # Replacement copies the supplied bytes under the work directory;
+                # neither the original nor codecs/game compatibility are rewritten.
+                replacement = video_original + b"synthetic trailer"
+                imported_video = post("/api/video/import", {"path": "Model/Synthetic.webm",
+                                                              "video": base64.b64encode(replacement).decode("ascii")})
+                assert imported_video["size"] == len(replacement), imported_video
+                assert (root / "Model" / "Synthetic.webm").read_bytes() == video_original
+                with opener.open(origin + "/api/video/info?path=Model%2FSynthetic.webm", timeout=10) as response:
+                    assert json.load(response)["edited"]
+                with opener.open(origin + "/api/video/stream?path=Model%2FSynthetic.webm&download=1", timeout=10) as response:
+                    assert response.read() == replacement
+                    assert "attachment" in response.headers["Content-Disposition"]
+
+                sound_original = (root / "Model" / "Silence.bwav").read_bytes()
+                imported_sound = post("/api/sound/import", {"path": "Model/Silence.bwav",
+                                                              "audio": base64.b64encode(wav).decode("ascii")})
+                assert imported_sound["format"] == "BWAV PCM16", imported_sound
+                assert (root / "Model" / "Silence.bwav").read_bytes() == sound_original
+                with opener.open(origin + "/api/sound/info?path=Model%2FSilence.bwav", timeout=30) as response:
+                    assert json.load(response)["format"] == "BWAV PCM16"
+
                 png = post("/api/texture/export", {"path": "Model/Heros_Alb.bntx", "index": 0})
                 assert png["index"] == 0 and Path(png["absolute_file"]).read_bytes().startswith(b"\x89PNG")
                 def as_file(name: str, data: bytes) -> dict:
@@ -121,7 +190,7 @@ def run(binary: Path) -> None:
                 assert struct.unpack_from("<9f", copy.read_bytes(), 0x808) == (0., 0., 0., 2., 0., 0., 0., 3., 0.)
                 process.stdin.close()
                 assert process.wait(timeout=20) == 0
-                print("Sidecar autonome : session, Rust, PNG, glTF/OBJ, injection, son et arrêt OK")
+                print("Sidecar autonome : session, Rust, PNG, glTF/OBJ, injection, animation, audio, vidéo et arrêt OK")
             except Exception:
                 log.seek(0)
                 print(log.read().decode("utf-8", errors="replace"), file=sys.stderr)

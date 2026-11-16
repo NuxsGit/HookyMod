@@ -10,13 +10,19 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn safe_stem(input: &str) -> String {
     let name = input.rsplit(['/', '\\']).next().unwrap_or("");
     let lower = name.to_ascii_lowercase();
-    let size = if lower.ends_with(".bwav.zs") {
-        name.len() - ".bwav.zs".len()
-    } else if lower.ends_with(".bwav") {
-        name.len() - ".bwav".len()
-    } else {
-        name.len()
-    };
+    // Longer compound extensions must be checked before their suffixes.
+    let size = [
+        ".animation.bfres.zs",
+        ".animation.bfres",
+        ".anim.bfres.zs",
+        ".anim.bfres",
+        ".bwav.zs",
+        ".bwav",
+        ".webm",
+    ]
+    .iter()
+    .find(|suffix| lower.ends_with(**suffix))
+    .map_or(name.len(), |suffix| name.len() - suffix.len());
     let stem: String = name[..size]
         .chars()
         .take(80)
@@ -33,6 +39,41 @@ pub(crate) fn safe_stem(input: &str) -> String {
         "son".to_owned()
     } else {
         stem.to_owned()
+    }
+}
+
+/// Map only supported backend downloads to fixed extensions. Never use a
+/// query parameter as an unchecked filename extension.
+pub(crate) fn download_target(
+    route: &str,
+    source: &str,
+    format: &str,
+    selection: bool,
+) -> Option<(String, &'static str)> {
+    match route {
+        "/api/export/download" => Some((
+            if selection {
+                "hookycreator-selection".into()
+            } else {
+                "hookycreator-modele".into()
+            },
+            "zip",
+        )),
+        "/api/sound/ogg" => Some((safe_stem(source), "opus")),
+        "/api/sound/convert" => {
+            let extension = match format.to_ascii_lowercase().as_str() {
+                "" | "wav" => "wav",
+                "flac" => "flac",
+                "mp3" => "mp3",
+                "ogg" => "ogg",
+                "opus" => "opus",
+                _ => return None,
+            };
+            Some((safe_stem(source), extension))
+        }
+        "/api/video/stream" => Some((safe_stem(source), "webm")),
+        "/api/animation/clip" => Some((safe_stem(source), "json")),
+        _ => None,
     }
 }
 
@@ -81,6 +122,30 @@ mod tests {
         assert_eq!(safe_stem("..."), "son");
         assert_eq!(safe_stem("x\n\".bwav"), "x__");
         assert_eq!(safe_stem(&"a".repeat(120)).chars().count(), 80);
+    }
+
+    #[test]
+    fn media_downloads_use_fixed_safe_extensions() {
+        assert_eq!(
+            download_target("/api/video/stream", "../../Movie.webm", "", false),
+            Some(("Movie".into(), "webm"))
+        );
+        assert_eq!(
+            download_target("/api/animation/clip", "Heros.anim.bfres.zs", "", false),
+            Some(("Heros".into(), "json"))
+        );
+        assert_eq!(
+            download_target("/api/animation/clip", "Heros.animation.bfres", "", false),
+            Some(("Heros".into(), "json"))
+        );
+        for format in ["wav", "flac", "mp3", "ogg", "opus"] {
+            assert_eq!(
+                download_target("/api/sound/convert", "Voix.bwav.zs", format, false),
+                Some(("Voix".into(), format))
+            );
+        }
+        assert!(download_target("/api/sound/convert", "x.bwav", "../../exe", false).is_none());
+        assert!(download_target("/api/unknown", "x", "wav", false).is_none());
     }
 
     #[test]

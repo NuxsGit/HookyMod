@@ -39,13 +39,14 @@ class TriangulationTests(unittest.TestCase):
                         faces=[(0, 1, 2, 3)])
         self.assertEqual(triangulated(mesh), [(0, 1, 2), (0, 2, 3)])
 
-    def test_out_of_range_indices_are_dropped(self):
-        mesh = MeshData(positions=[(0, 0, 0), (1, 0, 0)], faces=[(0, 1, 7), (0, 1)])
-        self.assertEqual(triangulated(mesh), [])
+    def test_invalid_faces_are_refused_not_dropped(self):
+        for face in ((0, 1, 7), (0, 1), (-1, 0, 1), (0, 1, 1.0)):
+            with self.subTest(face=face), self.assertRaisesRegex(HookyError, "sans retirer de faces"):
+                triangulated(MeshData(positions=[(0, 0, 0), (1, 0, 0)], faces=[face]))
 
-    def test_degenerate_face_is_dropped(self):
+    def test_degenerate_face_is_retained(self):
         mesh = MeshData(positions=[(0, 0, 0)] * 3, faces=[(0, 0, 1)])
-        self.assertEqual(triangulated(mesh), [])
+        self.assertEqual(triangulated(mesh), [(0, 0, 1)])
 
 
 class GltfTests(unittest.TestCase):
@@ -114,6 +115,16 @@ class GltfTests(unittest.TestCase):
         document = json.loads(Path(written["gltf"]).read_text())
         self.assertEqual(document["accessors"][-1]["componentType"], 5125)
 
+    def test_reserved_uint16_restart_index_is_promoted(self):
+        mesh = MeshData(positions=[(0.0, 0.0, 0.0)] * 65536, faces=[(0, 1, 65535)])
+        written = blender.export_bundle([mesh], self.folder, "limite", formats=("gltf",))
+        document = json.loads(written["gltf"].read_text())
+        primitive = document["meshes"][0]["primitives"][0]
+        accessor = document["accessors"][primitive["indices"]]
+        self.assertEqual(accessor["componentType"], 5125)
+        offset = document["bufferViews"][accessor["bufferView"]]["byteOffset"]
+        self.assertEqual(struct.unpack_from("<3I", written["bin"].read_bytes(), offset), (0, 1, 65535))
+
     def test_texture_is_copied_and_linked(self):
         png = self.folder / "Mt_Aile_Alb.png"
         png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
@@ -158,6 +169,25 @@ class ObjTests(unittest.TestCase):
         vertices = [line.rstrip() for line in obj if line.startswith("v ")]
         self.assertIn("v 0.5 0.5 0", vertices)
 
+    def test_obj_and_gltf_preserve_all_triangles_and_split_polygons_identically(self):
+        first, second = _quad("first"), _quad("second")
+        first.faces = [(0, 1, 2), (0, 0, 1), (0, 1, 2, 3)]
+        second.faces = [(3, 2, 1)]
+        written = blender.export_bundle([first, second], self.folder, "faces")
+        obj_faces = [tuple(int(vertex.split("/")[0]) - 1 for vertex in line.split()[1:])
+                     for line in written["obj"].read_text().splitlines() if line.startswith("f ")]
+        self.assertEqual(obj_faces, [(0, 1, 2), (0, 0, 1), (0, 1, 2), (0, 2, 3), (7, 6, 5)])
+        document = json.loads(written["gltf"].read_text())
+        binary = written["bin"].read_bytes()
+        gltf_faces = []
+        for gl_mesh in document["meshes"]:
+            accessor = document["accessors"][gl_mesh["primitives"][0]["indices"]]
+            offset = document["bufferViews"][accessor["bufferView"]]["byteOffset"]
+            indices = struct.unpack_from(f"<{accessor['count']}H", binary, offset)
+            gltf_faces.append([tuple(indices[i:i + 3]) for i in range(0, len(indices), 3)])
+        self.assertEqual(gltf_faces, [[(0, 1, 2), (0, 0, 1), (0, 1, 2), (0, 2, 3)], [(3, 2, 1)]])
+        self.assertIn("triangles dégénérés", written["note"].read_text())
+
     def test_import_note_is_written(self):
         written = blender.export_bundle([_quad()], self.folder, "papillon")
         note = Path(written["note"]).read_text()
@@ -176,6 +206,23 @@ class RefusalTests(unittest.TestCase):
         mesh = MeshData(name="sans face", positions=[(0, 0, 0), (1, 0, 0)])
         with self.assertRaises(HookyError):
             blender.export_bundle([mesh], Path(tempfile.mkdtemp()))
+
+    def test_invalid_face_refuses_each_format_without_writing_geometry(self):
+        for formats in (("gltf",), ("obj",), ("gltf", "obj")):
+            for face in ((0, 1, 9), (0, 1), (-1, 0, 1)):
+                with self.subTest(formats=formats, face=face), tempfile.TemporaryDirectory() as tmp:
+                    invalid = _quad("invalide")
+                    invalid.faces = [face]
+                    with self.assertRaisesRegex(HookyError, "sans retirer de faces"):
+                        blender.export_bundle([_quad(), invalid], Path(tmp), "test", formats=formats)
+                    self.assertFalse((Path(tmp) / "test.gltf").exists())
+                    self.assertFalse((Path(tmp) / "test.bin").exists())
+                    self.assertFalse((Path(tmp) / "test.obj").exists())
+
+    def test_faces_without_positions_are_not_silently_dropped(self):
+        bad = MeshData(name="sans sommets", faces=[(0, 1, 2)])
+        with self.assertRaisesRegex(HookyError, "sans sommets"):
+            blender.export_bundle([_quad(), bad], Path(tempfile.mkdtemp()))
 
     def test_mismatched_uv_are_dropped(self):
         mesh = _quad()

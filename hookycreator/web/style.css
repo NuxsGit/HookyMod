@@ -125,12 +125,7 @@ html[data-min="1"] .rail { display: none; }
   color: var(--text);
 }
 
-.brand-mark {
-  width: 14px; height: 14px;
-  background: linear-gradient(140deg, var(--accent), var(--accent-2));
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent) 55%, transparent));
-}
+.brand-mark { width: 28px; height: 28px; object-fit: contain; flex: none; }
 
 .menubar { display: flex; gap: 1px; }
 
@@ -800,6 +795,12 @@ input[type="range"]::-moz-range-thumb {
 }
 .thumb.placeholder { color: var(--faint); font-size: 11px; }
 .sound-tile .thumb { color: var(--accent); font-size: 42px; }
+.animation-controls { display: grid; gap: 7px; margin: 12px 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.animation-controls > label, #inspector-body > label { display: grid; gap: 5px; margin: 6px 0; }
+.animation-controls select, #inspector-body > label select { width: 100%; min-width: 0; }
+#model-animation-frame { flex: 1 1 100px; min-width: 80px; }
+#model-animation-time { font-variant-numeric: tabular-nums; color: var(--muted); }
+.video-player { display: block; width: 100%; max-height: 50vh; background: #101521; border-radius: 8px; }
 .sound-player { display: block; max-width: 100%; width: 100%; margin: 14px 0; }
 
 .tile .meta { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -860,6 +861,15 @@ input[type="range"]::-moz-range-thumb {
   aspect-ratio: 4 / 3;
   object-fit: contain;
 }
+.model-canvas { display: block; touch-action: none; cursor: grab; }
+.model-canvas:active { cursor: grabbing; }
+.model-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.model-canvas:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border: 0; border-radius: 0; }
+.model-canvas[hidden], .preview[hidden] { display: none; }
+.model-view-status { color: var(--muted); font-size: 11px; margin: 0; overflow-wrap: anywhere; }
+.model-view-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px; font-size: 11.5px; }
+.model-view-controls label { display: inline-flex; align-items: center; gap: 4px; }
+.model-view-controls select { max-width: 100%; font-size: 11px; }
 
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 0; font-size: 12px; }
 .kv dt { color: var(--muted); }
@@ -1289,16 +1299,7 @@ body {
 }
 .titlebar { padding: 0 18px; box-shadow: 0 3px 16px rgba(30, 66, 86, 0.06); }
 .brand { font-size: 14px; letter-spacing: 0; }
-.brand-mark {
-  width: 24px; height: 24px; border-radius: 8px;
-  clip-path: none; filter: none;
-  background: linear-gradient(145deg, #00a8e8, #286dc4);
-  box-shadow: 0 3px 9px rgba(0, 168, 232, 0.25);
-}
-.brand-mark::after {
-  content: ""; display: block; width: 8px; height: 8px; margin: 6px auto 0;
-  border: 2px solid white; border-radius: 2px; transform: rotate(45deg);
-}
+.brand-mark { width: 32px; height: 32px; object-fit: contain; }
 .workspace {
   grid-template-columns: 76px minmax(0, 1fr) 0;
   gap: 12px;
@@ -1409,4 +1410,71 @@ html[data-min="1"] .workspace.with-inspector { grid-template-columns: 0 minmax(0
 }
 @media (max-width: 700px) {
   .split.import-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Dark and NewGenOldtendo themes. The blue/violet selection glow is cosmetic;
+   it does not change model data. Respect reduced-motion preferences. */
+html[data-theme="dark"], html[data-theme="newgenoldtendo"] {
+  color-scheme: dark;
+  --bg: #0b111c;
+  --bg-soft: #101a29;
+  --panel: #172234;
+  --panel-2: #1d2a3e;
+  --panel-3: #273750;
+  --line: #34455d;
+  --line-soft: #27364a;
+  --text: #edf4ff;
+  --muted: #bdcadb;
+  --faint: #9bacc1;
+  --focus: #75d6ff;
+  --danger: #ff8296;
+  --warn: #f6c27b;
+  --ok: #6ee2bd;
+  --accent-ink: #081626;
+  --sunken: #121d2d;
+  --shadow: 0 9px 28px rgba(0, 0, 0, .26);
+}
+html[data-theme="dark"][data-accent="menthe"] { --accent: #66dec5; --accent-2: #59bde9; }
+html[data-theme="dark"][data-accent="azur"] { --accent: #68d2f8; --accent-2: #98b4ff; }
+html[data-theme="dark"][data-accent="ambre"] { --accent: #ffc773; --accent-2: #ff9b82; }
+html[data-theme="dark"][data-accent="framboise"] { --accent: #ff9cc6; --accent-2: #c8a5ff; }
+html[data-theme="newgenoldtendo"] {
+  --bg: #090d1c;
+  --panel: #141b30;
+  --panel-2: #1c2540;
+  --panel-3: #283454;
+  --accent: #82cfff;
+  --accent-2: #ba93ff;
+  --focus: #9bdcff;
+}
+html:is([data-theme="dark"], [data-theme="newgenoldtendo"]) body {
+  background-image: radial-gradient(circle at 82% 0%, color-mix(in srgb, var(--accent-2) 15%, transparent), transparent 42%),
+    linear-gradient(rgba(125, 160, 215, .025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(125, 160, 215, .025) 1px, transparent 1px);
+}
+html:is([data-theme="dark"], [data-theme="newgenoldtendo"]) :is(.titlebar, .statusbar, .editor) {
+  background: var(--panel);
+}
+html:is([data-theme="dark"], [data-theme="newgenoldtendo"]) :is(.panel, .space-card, .quick-card, .tile) {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .22);
+}
+html:is([data-theme="dark"], [data-theme="newgenoldtendo"]) .btn:not(.primary):not(.ghost) {
+  background: var(--panel-3); color: var(--text);
+}
+html:is([data-theme="dark"], [data-theme="newgenoldtendo"]) .tile .pick { background: var(--panel-3); }
+html:is([data-theme="dark"], [data-theme="newgenoldtendo"]) :is(.badge.role-albedo, .badge.role-normal, .badge.role-roughness,
+  .badge.role-metallic, .badge.role-occlusion, .badge.role-emissive) { color: var(--text); }
+html[data-theme="newgenoldtendo"] :is(.tile.selected, .rail-btn[aria-current="page"], .tab[aria-selected="true"],
+  .palette-list li[aria-selected="true"]) {
+  border-color: #84cfff;
+  box-shadow: 0 0 0 1px #84cfff, 0 0 14px rgba(132, 114, 255, .35);
+  animation: newgen-glow 4s ease-in-out infinite alternate;
+}
+@keyframes newgen-glow {
+  from { box-shadow: 0 0 0 1px #77cbff, 0 0 12px rgba(83, 164, 255, .40); }
+  to { box-shadow: 0 0 0 1px #c19cff, 0 0 17px rgba(161, 105, 255, .50); }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="newgenoldtendo"] :is(.tile.selected, .rail-btn[aria-current="page"],
+    .tab[aria-selected="true"], .palette-list li[aria-selected="true"]) { animation: none; }
 }

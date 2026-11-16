@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="fr" data-accent="azur" data-density="confort">
+<html lang="fr" data-theme="light" data-accent="azur" data-density="confort">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HookyCreator</title>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2300a8e8'/><path d='M8 22 L16 8 L24 22 Z' fill='none' stroke='%23ffffff' stroke-width='2.5'/></svg>">
+<link rel="icon" type="image/png" href="/static/HookyMod.png">
 </head>
 <body>
 <div class="app">
@@ -17,7 +17,7 @@
       <button class="dot min" id="win-min" title="Réduire l'interface (mode compact, sans rail)"></button>
       <button class="dot max" id="win-max" title="Plein écran"></button>
     </div>
-    <div class="brand"><span class="brand-mark"></span>HookyCreator</div>
+    <div class="brand"><img class="brand-mark" src="/static/HookyMod.png" alt="">HookyCreator</div>
 
     <nav class="menubar" id="menubar">
       <button class="menu-btn" data-menu="fichier">Fichier</button>
@@ -67,6 +67,10 @@
         <svg viewBox="0 0 24 24"><path d="M12 3 21 8l-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg>
         <span>Ensembles</span>
       </button>
+      <button class="rail-btn" data-view="animations" title="Animations squelettiques (expérimental)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="4" r="2"/><path d="M12 6v7m-5-3 5-2 5 2m-5 3-4 7m4-7 4 7"/></svg>
+        <span>Animations</span>
+      </button>
       <button class="rail-btn" data-view="textures" title="Textures (Ctrl+3)">
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-4 4 3 4-4 5 5"/></svg>
         <span>Textures</span>
@@ -74,6 +78,10 @@
       <button class="rail-btn" data-view="sounds" title="Sons BWAV (expérimental)">
         <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
         <span>Sons</span>
+      </button>
+      <button class="rail-btn" data-view="videos" title="Vidéos WebM (expérimental)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
+        <span>Vidéos</span>
       </button>
       <button class="rail-btn" data-view="import" title="Importer un modèle (Ctrl+5)">
         <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 12 21 6"/></svg>
@@ -193,7 +201,7 @@
             </button>
             <button class="quick-card" type="button" data-goto="sounds">
               <span class="tool-number">04</span><b>Sons (expérimental)</b>
-              <small>Écouter et convertir les fichiers BWAV Opus mono compatibles.</small>
+              <small>Écouter, exporter et remplacer les sons BWAV compatibles.</small>
             </button>
             <button class="quick-card" type="button" data-goto="import">
               <span class="tool-number">05</span><b>Importer un modèle</b>
@@ -247,7 +255,7 @@
                 <p class="hint">Le nom du dossier conserve uniquement les lettres, chiffres, tirets et
                   caractères <code>_</code> ; les espaces sont retirés. S'il ne reste rien,
                   le nom utilisé est <code>HookyMod</code>.</p>
-                <p class="warning-note">Attention : le dossier <code>mods/&lt;nom nettoyé&gt;</code>,
+                <p class="warning-note">Attention : le dossier <code>mods/&lt;mod&gt;</code>,
                   s'il existe déjà, sera entièrement remplacé, sans sauvegarde.</p>
                 <button class="btn primary" type="submit">Assembler dans <code>mods/</code></button>
               </form>
@@ -306,6 +314,21 @@
           </div>
         </section>
 
+        <!-- ---------------------------------------------------------- animations -->
+        <section class="view" id="view-animations" hidden>
+          <div class="view-head">
+            <div><h2>Animations <span class="badge">expérimental</span></h2>
+              <p class="muted" id="animation-count">—</p></div>
+            <div class="toolbar"><input type="search" class="search" id="search-animation" placeholder="Filtrer…"></div>
+          </div>
+          <p class="hint">Ouvre un fichier FSKA, choisis un clip et un modèle compatible pour prévisualiser le mouvement.
+            Les courbes et l'association des os restent expérimentales ; l'export du modèle reste statique.</p>
+          <div class="grid" id="animation-grid"></div>
+          <div class="more" id="animation-more" hidden>
+            <button class="btn ghost" id="animation-more-btn">Afficher plus</button>
+          </div>
+        </section>
+
         <!-- ---------------------------------------------------------- textures -->
         <section class="view" id="view-textures" hidden>
           <div class="view-head">
@@ -348,12 +371,25 @@
               <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
             </div>
           </div>
-          <p class="hint">Première étape : BWAV Opus mono complet → Ogg Opus, sans réencodage.
-            Les banques BARS, autres codecs, sons multicanaux et l'import vers le jeu ne sont pas encore pris en charge.</p>
+          <p class="hint">BWAV PCM16 ou DSP-ADPCM mono/stéréo et Opus mono : écoute et export WAV, MP3, FLAC ou Ogg.
+            Un remplacement écrit une copie BWAV PCM16 expérimentale ; les banques BARS et la compatibilité en jeu ne sont pas validées.</p>
           <div class="grid" id="sound-grid"></div>
           <div class="more" id="sound-more" hidden>
             <button class="btn ghost" id="sound-more-btn">Vérifier plus de sons</button>
           </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- vidéos -->
+        <section class="view" id="view-videos" hidden>
+          <div class="view-head">
+            <div><h2>Vidéos <span class="badge">expérimental</span></h2>
+              <p class="muted" id="video-count">—</p></div>
+            <div class="toolbar"><input type="search" class="search" id="search-video" placeholder="Filtrer…"></div>
+          </div>
+          <p class="hint">Lecture WebM selon les codecs du navigateur. Le remplacement copie un WebM fourni sans transcodage ;
+            la compatibilité en jeu et les données NDVE associées ne sont pas vérifiées ou modifiées.</p>
+          <div class="grid" id="video-grid"></div>
+          <div class="more" id="video-more" hidden><button class="btn ghost" id="video-more-btn">Afficher plus</button></div>
         </section>
 
         <!-- ---------------------------------------------------------- mobs -->
@@ -495,39 +531,36 @@
                 <label class="field"><span>Anticrénelage <b id="set-ss-out">×2</b></span>
                   <input type="range" id="set-ss" min="1" max="4" step="1">
                 </label>
-                <label class="field"><span>Plafond de faces <b id="set-faces-out">auto</b></span>
-                  <input type="range" id="set-faces" min="0" max="500000" step="5000">
-                </label>
+                <p class="hint">Les vues conservent toutes les faces décodées ; si le budget ne suffit pas, le PNG est refusé.</p>
                 <label class="check"><input type="checkbox" id="set-cull">
                   culling des faces vues de dos</label>
                 <label class="check"><input type="checkbox" id="set-frustum">
                   culling des faces hors écran</label>
                 <label class="check"><input type="checkbox" id="set-adaptive">
-                  dégrader plutôt que refuser</label>
+                  réduire l'anticrénelage si nécessaire</label>
               </div>
             </section>
 
             <section class="panel">
               <header class="panel-head"><h3>Interface</h3></header>
               <div class="panel-body">
+                <label class="field"><span>Thème</span>
+                  <select id="set-theme">
+                    <option value="light">Clair</option>
+                    <option value="dark">Sombre</option>
+                    <option value="newgenoldtendo">NewGenOldtendo</option>
+                  </select></label>
+                <label class="field"><span>Langue</span>
+                  <select id="set-language">
+                    <option value="fr">Français</option>
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                    <option value="zh">简体中文</option>
+                  </select></label>
                 <label class="field"><span>Couleur d'accent</span>
                   <select id="set-accent"></select></label>
                 <label class="field"><span>Densité</span>
                   <select id="set-density"></select></label>
-                <label class="field"><span>Plafond des vignettes</span>
-                  <select id="set-thumb-faces">
-                    <option value="0">auto (budget)</option>
-                    <option value="20000">20 000 faces</option>
-                    <option value="80000">80 000 faces</option>
-                    <option value="300000">300 000 faces</option>
-                  </select></label>
-                <label class="field"><span>Plafond de l'aperçu détaillé</span>
-                  <select id="set-preview-faces">
-                    <option value="0">tout (le plus fidèle)</option>
-                    <option value="60000">60 000 faces (rapide)</option>
-                    <option value="150000">150 000 faces</option>
-                    <option value="400000">400 000 faces</option>
-                  </select></label>
                 <label class="check"><input type="checkbox" id="set-textured">
                   colorer les aperçus avec les textures du modèle</label>
                 <label class="check"><input type="checkbox" id="set-export-textures">
@@ -637,6 +670,9 @@
 <script src="/static/thumbnails.js"></script>
 <script src="/static/asset_checks.js"></script>
 <script src="/static/session.js"></script>
+<script src="/static/i18n.js"></script>
+<script src="/static/model_animation.js"></script>
+<script src="/static/model_viewer.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -30,6 +30,8 @@ LOD_MAX = 3
 #: préférences d'interface (le « look » de l'atelier)
 ACCENTS = ("menthe", "azur", "ambre", "framboise")
 DENSITIES = ("confort", "compact")
+THEMES = ("light", "dark", "newgenoldtendo")
+LANGUAGES = ("fr", "en", "ru", "zh")
 
 #: plafond du cache de vignettes sur disque (Mo)
 CACHE_MIN_MB, CACHE_MAX_MB, CACHE_DEFAULT_MB = 0, 4096, 256
@@ -77,9 +79,11 @@ class Settings:
     # -- préférences d'interface
     accent: str = "azur"                    # couleur d'accent
     density: str = "confort"                  # confort | compact
+    theme: str = "light"                      # light | dark | newgenoldtendo
+    language: str = "fr"                      # français | anglais | russe | chinois
     export_textures: bool = True              # joindre les PNG aux exports de modèles
-    thumb_faces: int | None = 20_000          # plafond des vignettes (None = auto)
-    preview_faces: int = 60_000               # plafond de l'aperçu détaillé (0 = tout)
+    thumb_faces: int | None = None            # plafond facultatif des vignettes
+    preview_faces: int = 0                     # 0 = toutes les faces ou refus explicite
     textured_previews: bool = True            # vignettes colorées par les textures
     cache_mb: int = CACHE_DEFAULT_MB          # cache de vignettes sur disque
 
@@ -98,6 +102,8 @@ class Settings:
             lod=int(_number(self.lod, "lod", 0, LOD_MAX)),
             accent=_choice(self.accent, "accent", ACCENTS),
             density=_choice(self.density, "density", DENSITIES),
+            theme=_choice(self.theme, "theme", THEMES),
+            language=_choice(self.language, "language", LANGUAGES),
             export_textures=bool(self.export_textures),
             preview_faces=int(_number(self.preview_faces, "preview_faces", 0, 400_000)),
             textured_previews=bool(self.textured_previews),
@@ -126,6 +132,8 @@ class Settings:
             "lod": self.lod,
             "accent": self.accent,
             "density": self.density,
+            "theme": self.theme,
+            "language": self.language,
             "export_textures": self.export_textures,
             "thumb_faces": self.thumb_faces,
             "preview_faces": self.preview_faces,
@@ -154,6 +162,8 @@ class Settings:
             "lod": payload.get("lod", base.lod),
             "accent": payload.get("accent", base.accent),
             "density": payload.get("density", base.density),
+            "theme": payload.get("theme", base.theme),
+            "language": payload.get("language", base.language),
             "export_textures": payload.get("export_textures", base.export_textures),
             "thumb_faces": payload.get("thumb_faces", base.thumb_faces),
             "preview_faces": payload.get("preview_faces", base.preview_faces),

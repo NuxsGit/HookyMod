@@ -23,8 +23,8 @@ MAX_TEXT = 2048
 MAX_TABS = 64
 MAX_SELECTION = 5000
 VIEWS = frozenset({"home", "edit", "create", "models", "ensembles", "textures",
-                   "sounds", "mobs", "import", "settings"})
-TEXT_FIELDS = frozenset({"search", "search-tex", "search-ens", "search-sound", "tex-role",
+                   "sounds", "animations", "videos", "mobs", "import", "settings"})
+TEXT_FIELDS = frozenset({"search", "search-tex", "search-ens", "search-sound", "search-animation", "search-video", "tex-role",
                          "mod-name", "mob-name", "mob-parent", "mob-resource-search",
                          "model-axis", "model-scale", "model-target-search", "model-quality"})
 CHECK_FIELDS = frozenset({"model-shots", "ens-textures", "bulk-anim", "model-fit"})
@@ -78,7 +78,7 @@ def validate_state(value: object) -> dict:
             if name not in VIEWS:
                 raise SessionError("Vue d'onglet inconnue.")
             tabs.append({"type": kind, "view": name})
-        elif kind in {"model", "texture", "sound"}:
+        elif kind in {"model", "texture", "sound", "animation", "video"}:
             entry = {"type": kind, "rel": _text(tab.get("rel"), allow_empty=False)}
             if kind == "texture" and "index" in tab:
                 index = tab["index"]
@@ -127,7 +127,7 @@ def validate_state(value: object) -> dict:
     if not isinstance(shown, dict):
         raise SessionError("Nombre d'éléments affichés invalide.")
     clean_shown = {}
-    for key in ("models", "textures", "ensembles", "sounds", "chooser"):
+    for key in ("models", "textures", "ensembles", "sounds", "animations", "videos", "chooser"):
         count = shown.get(key, 48)
         if type(count) is not int or not 48 <= count <= 10_000:
             raise SessionError("Nombre d'éléments affichés invalide.")

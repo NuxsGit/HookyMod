@@ -71,8 +71,10 @@ Si une texture semble à l'envers dans Blender : ouvre « Vérifier les UV » da
 HookyCreator (le maillage tracé sur l'atlas montre tout de suite l'orientation),
 plutôt que de retourner l'image dans un éditeur.
 
-L'import produit un objet par maillage exporté. Des parties ou attributs du
-fichier d'origine peuvent manquer selon la version et la méthode de décodage.
+L'import produit un objet par maillage exporté. Les triangles dégénérés
+(indices répétés) restent dans les fichiers ; certains logiciels les écartent à
+l'import. Des parties ou attributs du fichier d'origine peuvent manquer selon
+la version et la méthode de décodage.
 """
 
 
@@ -81,8 +83,10 @@ def _finish_meshes(meshes: list[MeshData]) -> list[MeshData]:
     """Vérifie et complète ce qui peut l'être sans mentir sur le reste."""
     out: list[MeshData] = []
     for index, mesh in enumerate(meshes):
-        if not mesh.positions or not mesh.faces:
+        if not mesh.faces:
             continue
+        if not mesh.positions:
+            raise HookyError(f"Maillage {mesh.name} sans sommets : export refusé.")
         if not mesh.name:
             mesh.name = f"mesh_{index}"
         if mesh.uvs is not None and len(mesh.uvs) != len(mesh.positions):
@@ -330,7 +334,9 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         if not triangles:
             continue
         largest = max(max(tri) for tri in triangles)
-        wide = largest > 0xFFFF
+        # 0xffff est réservé au primitive restart et interdit dans un
+        # accessor glTF uint16 ; promouvoir même quand il est le maximum.
+        wide = largest >= 0xFFFF
         indices = array("I" if wide else "H",
                         [value for tri in triangles for value in tri])
         view = binary.add(indices.tobytes(), 34963)

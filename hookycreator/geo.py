@@ -19,7 +19,7 @@ from array import array
 from pathlib import Path
 
 MAGIC = b"HOOKYGEO1"
-VERSION = 3  # v3 : ne pas réutiliser les normales synthétiques de l'ancien cache
+VERSION = 4  # v4 : les anciennes positions rigides n'avaient pas leur pose FSKL
 
 
 def _array_bytes(type_code: str) -> bytes:

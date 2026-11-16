@@ -100,20 +100,22 @@ def frame_bytes(width: int, height: int, supersample: int) -> int:
 
 
 def plan(settings: Settings, meshes, width: int, height: int,
-         face_limit: int | None = None) -> Plan:
-    """Décide quoi rendre pour tenir dans le budget, sans jamais dépasser.
+         face_limit: int | None = None, *, preserve_faces: bool = False) -> Plan:
+    """Décide quoi rendre pour tenir dans le budget.
 
-    ``face_limit`` est un plafond venant de l'appelant (interface) ; il est
-    respecté même s'il est plus généreux que le budget, mais descendu si le
-    budget l'exige.
+    En mode ``preserve_faces``, aucun plafond ni réduction adaptative de faces
+    ne s'applique : si même l'image sans suréchantillonnage dépasse le budget,
+    elle est refusée explicitement. Les plafonds restent disponibles pour les
+    appelants qui les demandent volontairement.
     """
     settings = settings.clamp()
     faces, geom = geometry_bytes(meshes)
     notes: list[str] = []
-    limit = settings.max_faces if face_limit is None else face_limit
+    limit = None if preserve_faces else (settings.max_faces if face_limit is None else face_limit)
     if limit is not None:
         limit = max(MIN_RENDER_FACES, min(int(limit), FACES_CEILING))
         if limit < faces:
+            notes.append(f"faces limitées à {limit} sur {faces} à la demande")
             faces = limit
             geom = _geom_for(meshes, limit)
 
@@ -121,6 +123,11 @@ def plan(settings: Settings, meshes, width: int, height: int,
     budget = settings.budget_bytes
     current = Plan(supersample, limit, geom, frame_bytes(width, height, supersample),
                    budget, notes)
+    if preserve_faces and faces > FACES_CEILING:
+        raise BudgetError(
+            f"Aperçu complet refusé : {faces:,} faces dépassent le plafond de sécurité "
+            f"de {FACES_CEILING:,}. Aucune face n'a été supprimée.",
+            needed=current.total_bytes, budget=budget)
     if current.fits:
         return current
 
@@ -128,7 +135,8 @@ def plan(settings: Settings, meshes, width: int, height: int,
         raise BudgetError(
             f"Aperçu trop lourd : {_gb(current.total_bytes)} pour un budget de "
             f"{_gb(budget)}. Monte le budget mémoire dans les réglages "
-            f"(jusqu'à 25 Go) ou active la dégradation automatique.",
+            f"(jusqu'à 25 Go) ou active la réduction de l'anticrénelage."
+            + (" Aucune face n'a été supprimée." if preserve_faces else ""),
             needed=current.total_bytes, budget=budget)
 
     # 1. anticrénelage
@@ -140,6 +148,12 @@ def plan(settings: Settings, meshes, width: int, height: int,
                        budget, notes)
         if current.fits:
             return current
+
+    if preserve_faces:
+        raise BudgetError(
+            f"Aperçu complet trop lourd : {_gb(current.total_bytes)} pour un budget de "
+            f"{_gb(budget)}. Aucune face n'a été supprimée ; augmente le budget "
+            "ou utilise une image plus petite.", needed=current.total_bytes, budget=budget)
 
     # 2. nombre de faces dessinées — en tenant compte des sommets qu'elles
     #    gardent avec elles (un maillage dense coûte plus cher par face)

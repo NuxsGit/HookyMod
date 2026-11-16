@@ -24,7 +24,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hookymod import animation as animation_mod
 from hookymod import audio as audio_mod
+from hookymod import audio_codec as audio_codec_mod
+from hookymod import video as video_mod
 from hookymod import bfres as bfres_mod
 from hookymod import bntx as bntx_mod
 from hookymod import bntx_encode, blender, native, render, zs
@@ -44,6 +47,7 @@ from . import vram
 MODEL_SUFFIXES = (".bfres.zs", ".bfres")
 TEXTURE_SUFFIXES = (".bntx.zs", ".bntx")
 SOUND_SUFFIXES = (".bwav.zs", ".bwav")
+VIDEO_SUFFIXES = (".webm",)
 # Garde-fou configurable : 0 désactive le plafond. Une troncature est signalée.
 MAX_SCAN_FILES = 200_000
 # Cache mémoire de bundles complets glTF / OBJ.
@@ -670,6 +674,8 @@ class Project:
                     kind = "texture"
                 elif low.endswith(SOUND_SUFFIXES):
                     kind = "sound"
+                elif low.endswith(VIDEO_SUFFIXES):
+                    kind = "video"
                 elif low.endswith((".byml", ".bgyml", ".bcett.byml")):
                     kind = "bytecode"
                 elif low.endswith((".pack.zs", ".pack", ".sarc", ".szs", ".sarc.zs")):
@@ -739,6 +745,7 @@ class Project:
             "auxiliary": sum(1 for a in assets if a.kind == "auxiliary"),
             "textures": sum(1 for a in assets if a.kind == "texture"),
             "sounds": sum(1 for a in assets if a.kind == "sound"),
+            "videos": sum(1 for a in assets if a.kind == "video"),
             "bytecode": sum(1 for a in assets if a.kind == "bytecode"),
             "archives": sum(1 for a in assets if a.kind == "archive"),
             "scanned_at": self.scanned_at,
@@ -808,7 +815,7 @@ class Project:
         settings = self.settings
         # « couleurs v2 » : une couleur par matériau (les vignettes d'avant,
         # colorées par sous-maillage, ne doivent pas être réutilisées)
-        return cache_mod.digest(("rendu", "couleurs-v3", settings.supersample,
+        return cache_mod.digest(("rendu", "couleurs-v4-pose", settings.supersample,
                                  settings.cull, settings.frustum,
                                  settings.max_faces, settings.thumb_faces,
                                  settings.preview_faces, settings.vram_gb,
@@ -924,14 +931,14 @@ class Project:
             textures = cache_mod.digest(("textures", stamps))
         return cache_mod.digest(("apercu", rel, self._version(rel), width, height,
                                  round(yaw, 2), round(pitch, 2), views,
-                                 self.settings.thumb_faces if face_limit is None
+                                 self.settings.preview_faces if face_limit is None
                                  else face_limit,
                                  self._render_digest(), textures))
 
     def thumbnail_cached(self, rel: str, width: int, height: int,
                          textured: bool = False) -> bool:
         try:
-            key = self.thumbnail_key(rel, width, height, textured=textured)
+            key = self.thumbnail_key(rel, width, height, face_limit=0, textured=textured)
         except ProjectError:
             return False
         return self.thumbs.get(key) is not None
@@ -1006,8 +1013,7 @@ class Project:
                                     textured = bool(self.settings.textured_previews)
                                     if not self.thumbnail_cached(rel, width, height, textured=textured):
                                         self.model_preview(rel, width, height,
-                                                           face_limit=self.settings.thumb_faces,
-                                                           textured=textured)
+                                                           face_limit=0, textured=textured)
                                 except Exception as exc:  # un échec ne casse pas la série
                                     with self._warm_lock:
                                         state["failed"] += 1
@@ -1139,9 +1145,9 @@ class Project:
                 self.texture_png(rel, 0)
                 stamp, injectable = before, None
             else:
-                # Vérification du conteneur et de tous les paquets, pas un test
-                # de rendu audio : le navigateur décodera l'Opus au playback.
-                audio_mod.read_bwav_opus(self._read_sound(rel))
+                # Vérifie le conteneur et les données audio décodables, pas la
+                # compatibilité avec un jeu ou un lecteur spécifique.
+                audio_codec_mod.decode(self._read_sound(rel))
                 stamp, injectable = before, None
             if before != stamp or self._version(rel) != before:
                 return {"kind": kind, "rel": rel, "valid": False,
@@ -1150,7 +1156,42 @@ class Project:
         except (ProjectError, HookyError, OSError, ValueError, IndexError) as exc:
             return {"kind": kind, "rel": rel, "valid": False, "reason": str(exc)}
 
-    # ------------------------------------------------------------------ audio (lecture seule)
+    # ------------------------------------------------------------------ animations
+    def _read_animation(self, rel: str) -> bytes:
+        if not is_animation_bfres(rel):
+            raise ProjectError("Seul un BFRES d'animation peut être ouvert ici.")
+        path, _ = self._current_asset(rel)
+        limit = animation_mod.MAX_BYTES
+        with path.open("rb") as source:
+            raw = source.read(limit + 1)
+        if len(raw) > limit:
+            raise ProjectError("Animation trop volumineuse (64 Mio maximum).")
+        if not zs.is_zstd(raw):
+            return raw
+        dict_id, _ = zs.frame_info(raw)
+        dictionaries = self._load_dicts() if dict_id else zs.ZstdDicts(require_complete=True)
+        if dict_id and not dictionaries:
+            raise ProjectError(f"Dictionnaire zstd id {dict_id} introuvable pour cette animation.")
+        try:
+            return dictionaries.decompress(raw, max_output_size=limit)
+        except zs.DecompressionLimit as exc:
+            raise ProjectError("Animation décompressée trop volumineuse (64 Mio maximum).") from exc
+
+    def animation_list(self, rel: str) -> dict:
+        before = self._version(rel)
+        clips = animation_mod.list_clips(self._read_animation(rel))
+        if before != self._version(rel):
+            raise ProjectError("L'animation a changé pendant la lecture ; recommence.")
+        return {"rel": rel, "clips": clips}
+
+    def animation_clip(self, rel: str, index: int) -> dict:
+        before = self._version(rel)
+        clip = animation_mod.read_clip(self._read_animation(rel), index)
+        if before != self._version(rel):
+            raise ProjectError("L'animation a changé pendant la lecture ; recommence.")
+        return {"rel": rel, **clip}
+
+    # ------------------------------------------------------------------ audio
     def _read_sound(self, rel: str) -> bytes:
         if not rel.lower().endswith(SOUND_SUFFIXES):
             raise ProjectError("Seul un fichier BWAV peut être ouvert ici.")
@@ -1174,10 +1215,83 @@ class Project:
             raise ProjectError("Son décompressé trop volumineux (64 Mio maximum).") from exc
 
     def sound_info(self, rel: str) -> dict:
-        return {"rel": rel, **audio_mod.read_bwav_opus(self._read_sound(rel)).info()}
+        return {"rel": rel, **audio_codec_mod.info(self._read_sound(rel))}
 
     def sound_ogg(self, rel: str) -> bytes:
         return audio_mod.to_ogg_opus(self._read_sound(rel))[0]
+
+    def sound_convert(self, rel: str, fmt: str) -> tuple[bytes, str, str]:
+        return audio_codec_mod.convert(self._read_sound(rel), fmt)
+
+    def import_sound(self, rel: str, data: bytes) -> dict:
+        """Replace an existing sound by an experimental PCM16 working copy.
+
+        No BARS entry, event reference, RESTBL or original asset is rewritten.
+        The source audio must match the target's channel count and sample rate;
+        a shorter replacement that would invalidate an existing loop is refused.
+        """
+        source = self.asset(rel)
+        with self._edit_flights.hold(source):
+            before = self._version(rel)
+            template = self.sound_info(rel)
+            pcm = audio_codec_mod.read_import(data, template["sample_rate"], template["channels"])
+            result = audio_codec_mod.encode_bwav_pcm(pcm, template["sample_rate"],
+                                                      template["loop_start"], template["loop_end"])
+            if self._version(rel) != before:
+                raise ProjectError("Le son cible a changé pendant l'import ; recommence.")
+            payload = result
+            if rel.lower().endswith(".zs"):
+                with source.open("rb") as stream:
+                    original = stream.read(audio_mod.MAX_BWAV_BYTES + 1)
+                if len(original) > audio_mod.MAX_BWAV_BYTES:
+                    raise ProjectError("Son source trop volumineux (64 Mio maximum).")
+                if not zs.is_zstd(original):
+                    raise ProjectError("Le son cible .zs n'est pas une frame zstd valide.")
+                original_id, _ = zs.frame_info(original)
+                payload = self._load_dicts().compress(result, dict_id=original_id)
+            target = self.edited_asset_path(rel)
+            write_atomic(target, payload)
+            self.bump()
+            return {"rel": rel, "wrote": self.shown_path(target), "size": len(payload),
+                    "format": "BWAV PCM16", "samples": len(pcm),
+                    "warning": "Copie expérimentale : aucune validation en jeu, BARS ou RESTBL."}
+
+    # ------------------------------------------------------------------ video
+    def video_file(self, rel: str) -> Path:
+        """Return a validated current WebM path for streaming, never NDVE data."""
+        if not rel.lower().endswith(VIDEO_SUFFIXES):
+            raise ProjectError("Seul un fichier WebM peut être ouvert ici.")
+        path, _edited = self._current_asset(rel)
+        with path.open("rb") as source:
+            size = os.fstat(source.fileno()).st_size
+            video_mod.check_header(source.read(video_mod.MAX_HEADER), size)
+        return path
+
+    def video_info(self, rel: str) -> dict:
+        before = self._version(rel)
+        path = self.video_file(rel)
+        size = path.stat().st_size
+        if before != self._version(rel):
+            raise ProjectError("La vidéo a changé pendant la lecture ; recommence.")
+        return {"rel": rel, "size": size, "format": "WebM", "edited": path != self.asset(rel),
+                "warning": "Conteneur contrôlé uniquement ; codecs et compatibilité en jeu non vérifiés."}
+
+    def import_video(self, rel: str, data: bytes) -> dict:
+        """Copy a user-supplied WebM verbatim; never rewrite NDVE or the original."""
+        if not data or len(data) > video_mod.MAX_IMPORT:
+            raise ProjectError("Vidéo vide ou trop volumineuse (32 Mio maximum).")
+        video_mod.check_header(data[:video_mod.MAX_HEADER], len(data))
+        source = self.asset(rel)
+        with self._edit_flights.hold(source):
+            before = self._version(rel)
+            self.video_file(rel)
+            if self._version(rel) != before:
+                raise ProjectError("La vidéo cible a changé pendant l'import ; recommence.")
+            target = self.edited_asset_path(rel)
+            write_atomic(target, data)
+            self.bump()
+            return {"rel": rel, "wrote": self.shown_path(target), "size": len(data),
+                    "warning": "Copie expérimentale : codecs, NDVE et compatibilité en jeu non validés."}
 
     # ------------------------------------------------------------------ textures
     def texture_file(self, rel: str) -> bntx_mod.BntxFile:
@@ -1480,15 +1594,51 @@ class Project:
         """Maillages d'un modèle, utilisés notamment pour l'adaptation d'échelle."""
         return self._model_meshes(rel)
 
-    def preview_plan(self, rel: str, width: int = 640, height: int = 480,
-                     face_limit: int | None = None) -> dict:
-        """Chiffre ce que coûterait l'aperçu avant de le rendre."""
-        meshes = self._model_meshes(rel)
+    def model_geometry(self, rel: str) -> bytes:
+        """Géométrie complète pour la vue WebGL, avec albédos non ambigus."""
+        from . import model_view
+
+        meshes, _meta, stamp = self._model_mesh_entry(rel)
+        bindings = {material: {"path": asset.rel, "index": index}
+                    for material, asset, index, _version in self._albedo_bindings(rel)}
         try:
-            planned = vram.plan(self.settings, meshes, width, height, face_limit)
+            result = model_view.encode(meshes, bindings)
+        except HookyError as exc:
+            raise ProjectError(str(exc)) from exc
+        if self._version(rel) != stamp:
+            raise ProjectError("Le modèle a changé pendant le chargement ; réessaie.")
+        return result
+
+    def model_skin(self, rel: str) -> bytes:
+        """Skin expérimental associé exactement à la géométrie WebGL courante."""
+        from . import model_skin
+
+        meshes, meta, stamp = self._model_mesh_entry(rel)
+        source, current = self._current_version(rel)
+        if current != stamp:
+            raise ProjectError("Le modèle a changé pendant le chargement ; réessaie.")
+        data = self._read_asset_path(source)
+        result = model_skin.encode(data, meshes, structured=meta.get("structured", False))
+        if self._current_version(rel) != (source, stamp):
+            raise ProjectError("Le modèle a changé pendant le chargement ; réessaie.")
+        return result
+
+    def _preview_plan(self, meshes, width: int, height: int, face_limit: int | None):
+        # 0 signifie « toutes les faces », y compris si un ancien réglage
+        # manuel ou la dégradation automatique impose autrement un plafond.
+        requested = self.settings.preview_faces if face_limit is None else face_limit
+        try:
+            return vram.plan(self.settings, meshes, width, height,
+                             None if requested == 0 else requested,
+                             preserve_faces=requested == 0)
         except vram.BudgetError as error:
             raise ProjectError(str(error)) from None
-        return planned.as_json()
+
+    def preview_plan(self, rel: str, width: int = 640, height: int = 480,
+                     face_limit: int | None = None) -> dict:
+        """Chiffre exactement le même choix que le rendu PNG."""
+        meshes = self._model_meshes(rel)
+        return self._preview_plan(meshes, width, height, face_limit).as_json()
 
     def model_preview(self, rel: str, width: int = 640, height: int = 480,
                       yaw: float = 0.7, pitch: float = -0.35,
@@ -1510,22 +1660,7 @@ class Project:
                               yaw: float, pitch: float, views: int,
                               face_limit: int | None, textured: bool) -> bytes:
         meshes, _meta, model_stamp = self._model_mesh_entry(rel)
-        limit = face_limit
-        if limit is None:
-            # Un plafond fixe troue les modèles denses (20 000 faces sur 165 000
-            # laissent des trous) : on suit la densité du modèle, sans jamais
-            # dépasser le plafond de l'aperçu détaillé.
-            total = sum(len(mesh.faces) for mesh in meshes)
-            thumb = self.settings.thumb_faces or 20_000
-            limit = min(total, max(thumb, total // 2))
-            if self.settings.preview_faces:
-                limit = min(limit, self.settings.preview_faces)
-            if width >= 480 and limit < total and self.settings.preview_faces:
-                limit = min(total, max(limit, self.settings.preview_faces))
-        try:
-            planned = vram.plan(self.settings, meshes, width, height, limit)
-        except vram.BudgetError as error:
-            raise ProjectError(str(error)) from None
+        planned = self._preview_plan(meshes, width, height, face_limit)
         data = self._flatten(rel, meshes, textured=textured, model_stamp=model_stamp)
         options = dict(zoom=1.0, cull=self.settings.cull,
                        frustum=self.settings.frustum,

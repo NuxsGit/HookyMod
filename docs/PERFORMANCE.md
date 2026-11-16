@@ -55,6 +55,49 @@ ou du dossier de travail.
 - Au démarrage, la première réponse d'inventaire ne parcourt plus les caches de
   vignettes pour produire leurs statistiques ; ces chiffres arrivent en arrière-plan.
   Les grandes réponses JSON sont compressées rapidement sur la boucle locale.
+- La vue WebGL2 interactive envoie la géométrie décodée complète à la carte
+  graphique. Elle est chargée à l'ouverture de la fiche et libérée à sa fermeture ;
+  elle est bornée séparément du budget des PNG CPU. Les vignettes sans réduction
+  de faces peuvent être plus lentes qu'auparavant. Le FSR 1 expérimental réduit la
+  résolution de rendu, pas le nombre de triangles ni le temps de décodage BFRES.
+
+Sur trois modèles réels fournis séparément (2 148, 39 679 et 43 160 triangles),
+les indices LOD 0 des exports glTF/OBJ ont été comparés aux maillages décodés.
+Les pièces rigides reconnues ont été replacées pour deux modèles sans changer
+ces indices. Un parcours Chromium Linux en WebGL2 **émulé par SwiftShader** a
+exercé la rotation, le zoom, le fil de fer, les deux passes FSR et les replis ;
+une fixture synthétique a aussi vérifié des albédos par matériau et l'orientation
+V. Cela ne mesure pas une carte physique ou la fenêtre Tauri, ne vérifie pas de
+textures réelles et ne prouve pas la fidélité en jeu.
+
+## Smoke test WebGL synthétique
+
+Sur Linux x86-64 avec Node.js ≥ 22.17 et les bibliothèques système Chromium
+(notamment `libnss3` et `libnspr4`), les dépendances isolées et verrouillées dans
+`tools/webgl/` permettent d'exercer la géométrie complète, les albédos, les UV,
+les passes EASU/RCAS, le fil de fer et le repli après erreur de shader. Un second
+parcours démarre le véritable backend sur un projet temporaire synthétique :
+langues et thèmes persistés, animation reliée à un modèle avec mouvement visible
+des pixels, lecture et téléchargements audio/vidéo, remplacements avec
+confirmation et vérification des originaux :
+
+```bash
+python -m pip install -r requirements.txt
+npm ci --prefix tools/webgl --ignore-scripts --no-audit --no-fund
+CHROMIUM=$(node --input-type=module -e "import c from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await c.executablePath())")
+HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_webgl.js
+HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
+# Facultatif : refaire le parcours média avec un sidecar Linux déjà construit.
+HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-x86_64-unknown-linux-gnu" \
+  HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
+```
+
+Le parcours avec sidecar teste aussi la connexion par jeton, le cookie HttpOnly
+et la politique de sécurité HTTP ; il utilise toujours Chromium, pas une fenêtre
+Tauri. Ces tests utilisent SwiftShader, pas une carte physique. Avec un autre navigateur
+Chromium compatible et `playwright-core`, `HOOKY_CHROMIUM` et `HOOKY_PLAYWRIGHT`
+peuvent désigner leurs chemins respectifs. Le parcours Tauri natif est distinct
+et décrit dans [DESKTOP.md](DESKTOP.md).
 
 ## Mesurer chez soi
 

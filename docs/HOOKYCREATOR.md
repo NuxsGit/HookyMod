@@ -19,21 +19,29 @@ Le scan repère jusqu'à 200 000 fichiers reconnus par défaut. S'il est tronqu�
 
 ## Les espaces
 
-- **Modification** : modèles, ensembles, textures, sons et import de modèle.
+- **Modification** : modèles, ensembles, animations, textures, sons, vidéos WebM et import de modèle.
 - **Création de mod** : copies modifiées, fiches préparatoires et assemblage.
-- **Réglages** : budget des aperçus, vignettes, couleurs d'interface, cache et moteur.
+- **Réglages** : budget des aperçus, vignettes, thèmes clair/sombre/NewGenOldTendo, langue FR/EN/RU/ZH, cache et moteur. Certains diagnostics du backend et messages de la fenêtre native restent en français.
 
 Les grilles et boutons peuvent être utilisés à la souris ou au clavier. Les flèches déplacent le focus entre tuiles, Entrée ouvre l'élément et Échap ferme les panneaux. `Ctrl+K` ouvre la palette de commandes, `Ctrl+J` le journal et `Ctrl+F` la recherche.
 
 ## Exporter un modèle
 
-1. Ouvre **Modification → Modèles**, puis la fiche du modèle. L'aperçu peut être simplifié selon le budget et ne remplace pas un contrôle dans un logiciel 3D. La fiche affiche les remarques de décodage et les textures candidates ou référencées.
+1. Ouvre **Modification → Modèles**, puis la fiche du modèle. La vue 3D affiche tous les triangles décodés ou signale un refus ; elle ne remplace pas un contrôle dans un logiciel 3D. La fiche affiche les remarques de décodage et les textures candidates ou référencées.
 2. Clique sur **Exporter en glTF / OBJ**. Un dossier d'export est préparé et le résultat donne son chemin absolu ainsi qu'un lien de téléchargement ZIP. Le ZIP contient uniquement les fichiers produits par cette opération. Un nouvel export du même modèle **remplace les fichiers de même nom** dans son dossier : sauvegarde ailleurs tes modifications avant de le relancer. Les autres fichiers préexistants restent en place et sont signalés, mais ne sont pas ajoutés au ZIP.
 3. Ouvre le `.gltf` avec son `.bin` et ses PNG dans ton logiciel 3D, ou l'OBJ avec son MTL. Lis `RAPPORT_MODELE.txt` pour les limites géométriques et `TEXTURES.md` pour les cartes. Le panneau d'export garde également les remarques visibles après la disparition des notifications.
 
 Un marqueur local `.hookycreator-source.json` associe le dossier à sa source, y compris après un nouveau scan ou la réouverture du projet. Il contient le chemin du projet et ne fait pas partie du ZIP. Un dossier préexistant sans marqueur reconnu est laissé intact et un autre nom est choisi ; si le marqueur est supprimé ou le dossier renommé, un nouveau dossier est également réservé.
 
 Les maillages reconnus sont exportés avec positions, UV et normales lorsque ces attributs sont décodés. Les normales absentes ne sont pas présentées comme des données d'origine ; les logiciels de rendu peuvent en calculer. Les UV internes et glTF utilisent V = 0 en haut ; l'OBJ utilise V = 0 en bas. **Vérifier les UV** trace les triangles sur une texture et permet de comparer les deux orientations, sans promettre un rendu identique au jeu.
+
+### Examiner le modèle en 3D
+
+La fiche lit les modèles reconnus directement dans l'atelier. Dans la vue WebGL2, glisse pour tourner, utilise la molette pour zoomer ou les flèches et `+` / `−` au clavier ; **Recentrer**, **Plein écran**, **Faces plates**, **Fil de fer** et **Texturé** servent à inspecter la géométrie. En plein écran, `Échap` revient à la fiche et `Home` recentre. La planche PNG reste accessible, ainsi que le retour à la vue 3D. La vue affiche le nombre de triangles effectivement transmis ; aucun sous-échantillonnage ne s'active pendant la rotation. Elle ne change ni l'export ni le BFRES. Elle montre le LOD décodé, pas nécessairement tous les LOD ou toutes les structures du fichier : lis les remarques.
+
+Par sécurité, la vue interactive refuse plus de 2 millions de sommets, 4 millions de triangles ou 128 Mio de géométrie, au lieu d'en retirer une partie. Le fil de fer est refusé si ses indices dépassent 64 Mio. Les images sont plafonnées à 1 600 pixels par côté et à une densité d'écran ×2. Si WebGL2 ou la mémoire graphique est indisponible, un message propose le PNG fixe. Ce dernier et les vignettes utilisent toutes les faces décodées ou sont refusés au-delà de 4 millions de faces / du budget. L'anticrénelage PNG peut être réduit si l'option correspondante est activée ; les réglages de culling ne concernent que le PNG. Un gros modèle peut donc prendre plus de temps à afficher. L'API conserve la possibilité d'un plafond explicite pour les anciens appelants, indépendamment de la vue 3D.
+
+Le sélecteur **FSR 1 expérimental** active les passes EASU et RCAS sur une image rendue à environ 67 % de la résolution, sans changer les triangles. Il peut améliorer les contours ou au contraire être plus lent et moins net selon le matériel ; teste aussi la résolution native. Un échec de compilation ou d'allocation revient au mode natif avec une explication. FSR n'est ni DLSS ni une réparation de géométrie : DLSS n'est pas intégré au moteur WebGL. Les albédos non ambigus sont limités à 16 images de 1 024 pixels pour la vue ; matériaux complexes, transparences et shaders du jeu ne sont pas reproduits. Les exports de textures ne sont pas limités par ces réglages d'affichage.
 
 ### Matériaux et textures
 
@@ -53,7 +61,7 @@ Une carte absente peut être réellement absente, non reconnue ou illisible. Le 
 
 ### Limites de lecture BFRES
 
-Le lecteur 10.x structuré suit les tables reconnues pour les formes, indices, matériaux et le LOD 0 ; si cette structure n'est pas disponible, certains fichiers peuvent passer par une extraction heuristique explicitement signalée. D'autres fichiers sont refusés. Squelette, pose, animation, morphing, tangentes, shaders et autres LOD ne sont pas reproduits. Une géométrie statique peut donc différer de la pose en jeu même quand l'export aboutit. Les tests avec des fixtures synthétiques et quelques modèles réels ne couvrent pas toutes les variantes ni les textures réelles.
+Le lecteur 10.x structuré suit les tables reconnues pour les formes, indices, matériaux et le LOD 0 ; si cette structure n'est pas disponible, certains fichiers peuvent passer par une extraction heuristique explicitement signalée. D'autres fichiers sont refusés. Pour les formes rigides à zéro ou une influence dont le squelette FSKL est reconnu (os à échelle unitaire, sans billboard et sans poids explicites), positions et normales sont replacées avec les transformations de repos ; les matrices inverses présentes servent à contrôler la hiérarchie. Une variante non comprise reste non replacée et est signalée. Le squelette exportable, la pose complète, l'animation, le morphing, les tangentes, les shaders et les autres LOD ne sont pas reproduits. Une géométrie statique peut donc différer de la pose en jeu même quand l'export aboutit. Les tests avec des fixtures synthétiques et quelques modèles réels ne couvrent pas toutes les variantes ni les textures réelles.
 
 ## Importer OBJ, glTF ou GLB
 
@@ -70,7 +78,17 @@ Le fichier source du projet n'est pas modifié par l'injection. Les changements 
 
 La fiche d'une texture permet d'inspecter les images d'un BNTX et de choisir leur index. L'aperçu, l'export PNG et le remplacement utilisent cet index ; l'original reste inchangé. L'export PNG va dans `export_textures/<conteneur>/` du dossier de travail, avec l'index dans le nom ; réexporter le même index remplace son PNG. Les dossiers préexistants sans marqueur reconnu sont évités. Les formats encodables comprennent notamment BC1/BC3/BC4/BC5 et plusieurs formats non compressés. ASTC et BC7 ne sont pas encodables. Les formats de lecture BC6/BC7/ASTC nécessitent `texture2ddecoder`.
 
-La vue Sons est expérimentale et en lecture seule : elle convertit certains BWAV Opus mono complets à 48 kHz en Ogg Opus, sans réencodage. Les banques BARS, autres codecs, canaux multiples et l'injection audio ne sont pas pris en charge. Les points de boucle éventuels restent expérimentaux et peuvent être ignorés par les lecteurs.
+La vue Sons est expérimentale : elle lit des BWAV complets PCM16 ou DSP-ADPCM mono/stéréo et certains Opus mono 48 kHz. L'export propose WAV, FLAC, MP3 et Ogg Vorbis, ainsi qu'un remultiplexage Ogg Opus sans réencodage pour les Opus reconnus. Les conversions ne conservent pas les marqueurs de boucle. Le remplacement nécessite la même fréquence et le même nombre de canaux, et écrit une copie BWAV PCM16 dans le dossier de travail (même si la source était Opus ou DSP). Les banques BARS, sons préchargés, autres dispositions/codecs, événements et RESTBL ne sont pas modifiés. **La copie de remplacement n'est pas validée en jeu.**
+
+## Prévisualiser des animations
+
+La vue Animations répertorie les BFRES `.anim.bfres` et `.anim.bfres.zs`. Choisis un clip FSKA Euler et un modèle, ou sélectionne une animation liée depuis la fiche modèle. Les os sont associés par nom et la lecture utilise 30 images/s par convention. La vue 3D transporte jusqu'à huit influences de skin ; elle refuse les variantes de squelette ou de courbe non vérifiées. Les courbes peuvent être exportées en JSON. La vue est expérimentale : matériaux, physique, morphs et fidélité en jeu ne sont pas garantis, et l'export glTF/OBJ reste **statique**, sans rig ni animation.
+
+## Vidéos WebM
+
+La vue **Vidéos** repère les fichiers `.webm`. La lecture et le déplacement dans la vidéo dépendent des codecs disponibles dans le navigateur ou la WebView ; le téléchargement fournit le fichier courant. Un remplacement copie les octets du WebM choisi dans le dossier de travail, sans transcodage et sans modifier l'original. La lecture est limitée à 1 Gio et le fichier de remplacement à 32 Mio.
+
+Le contrôle est **limité à l'en-tête EBML, au DocType WebM et aux bornes du Segment** : il ne valide ni les pistes, ni les codecs, ni la durée, ni les dimensions, ni le fonctionnement en jeu. Un fichier accepté peut donc rester illisible ou incompatible. Les données NDVE n'ont pas été identifiées comme conteneur vidéo standard et ne sont ni lues ni modifiées ; audio séparé et RESTBL ne sont pas mis à jour non plus.
 
 ## Exporter une sélection ou tout un projet
 

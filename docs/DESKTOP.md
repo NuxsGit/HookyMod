@@ -20,7 +20,7 @@ préparer ces exports ou analyser un import.
    courant est enregistrée avant le changement. Un scan volumineux peut prendre
    du temps ; **Projet → Annuler l'ouverture** permet de l'annuler.
 3. L'export d'un modèle indique le chemin absolu du dossier et démarre un ZIP.
-   Dans la fenêtre native, les ZIP et sons sont enregistrés avec des noms uniques
+   Dans la fenêtre native, les ZIP, sons, vidéos et courbes JSON sont enregistrés avec des noms uniques
    dans le dossier système **Téléchargements/HookyCreator/** (à défaut sous
    `~/Downloads/HookyCreator/`). L'application affiche le chemin après le
    transfert. Si nécessaire, utilise le lien de secours de l'export. Le mode
@@ -38,10 +38,12 @@ séparés. Une fermeture normale attend la confirmation de sauvegarde ; si elle
 sans garantie. Détails, limites et mesures : [`PERFORMANCE.md`](PERFORMANCE.md).
 
 Les formats non vérifiés ou non pris en charge ne sont pas montrés comme
-utilisables. Les sons sont expérimentaux et en lecture seule : voir
-[`HOOKYCREATOR.md`](HOOKYCREATOR.md) pour les formats exacts et les limites.
-L'assemblage d'un mod peut remplacer sans sauvegarde `mods/<nom>` ; l'interface
-demande confirmation et ne rend pas un mob automatiquement jouable.
+utilisables. Le remplacement des sons et des vidéos est expérimental et écrit
+uniquement une copie de travail : aucun résultat n'est validé en jeu. Voir
+[`HOOKYCREATOR.md`](HOOKYCREATOR.md) pour les formats et limites, notamment
+BARS, NDVE et RESTBL non modifiés. L'assemblage d'un mod peut remplacer sans
+sauvegarde `mods/<nom>` ; l'interface demande confirmation et ne rend pas un
+mob automatiquement jouable.
 
 ## Construction Windows / Linux
 
@@ -101,8 +103,10 @@ permission Tauri pour ouvrir arbitrairement des dossiers ou exécuter des comman
 
 Le workflow `.github/workflows/desktop.yml` construit le sidecar et la fenêtre
 sur Linux et Windows, puis exécute un parcours WebDriver avec des données
-synthétiques (session, fichiers masqués, export ZIP, sélection, son, fermeture
-et reprise du projet). Elle extrait le `.deb` ou installe silencieusement le NSIS, vérifie la présence des
+synthétiques (session, fichiers masqués, export ZIP, sélection, audio converti,
+vidéo, courbes d'animation, fermeture et reprise du projet). La disponibilité
+des codecs vidéo dépend de la WebView ; un refus explicite reste acceptable.
+Elle extrait le `.deb` ou installe silencieusement le NSIS, vérifie la présence des
 exécutables et reteste le backend livré. Les installateurs de test sont conservés
 comme artefacts de CI lorsque le workflow réussit. Le dialogue de choix lui-même
 n'est pas automatisé : le mode debug

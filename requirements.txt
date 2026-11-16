@@ -7,6 +7,12 @@ zstandard>=0.23
 # explicite ; tout le reste de l'application continue de fonctionner.
 texture2ddecoder>=1.0.5
 
+# Conversion BWAV vers WAV, FLAC, MP3 et Ogg, et import audio standard.
+# NumPy est déclaré explicitement car le décodeur et l'encodeur l'utilisent directement.
+# Les wheels officielles incluent libsndfile et ses codecs sur les plateformes prises en charge.
+numpy>=1.23.5,<3
+soundfile>=0.13.1,<0.14
+
 # Optionnel : accélère l'encodage PNG des aperçus (repli intégré sinon).
 # Pillow>=10.0
 

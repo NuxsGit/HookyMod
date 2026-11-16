@@ -110,22 +110,23 @@ class MeshData:
                         faces=faces, uvs=uvs, normals=normals, colors=colors)
 
 
-def triangulated(mesh: "MeshData") -> list[tuple[int, int, int]]:
-    """Triangles d'un maillage, polygones éventuels découpés en éventail.
+def iter_triangles(mesh: "MeshData"):
+    """Triangles, avec éventuel découpage en éventail, sans perte silencieuse.
 
-    Les triangles qui référencent un sommet inexistant sont **écartés** : mieux
-    vaut un trou dans ce qu'on voit qu'un sommet faux dans un export.
+    Un triangle dégénéré reste présent dans les fichiers exportés, même si un
+    logiciel peut l'ignorer à l'import. Une face invalide refuse tout l'export.
     """
     count = len(mesh.positions)
-    out: list[tuple[int, int, int]] = []
     for face in mesh.faces:
-        if len(face) < 3 or any(not (0 <= i < count) for i in face):
-            continue
+        if len(face) < 3 or any(not isinstance(i, int) or not 0 <= i < count for i in face):
+            raise HookyError(f"Face invalide dans {mesh.name} : export refusé sans retirer de faces.")
         for i in range(1, len(face) - 1):
-            triangle = (face[0], face[i], face[i + 1])
-            if len(set(triangle)) == 3:      # pas de triangle dégénéré
-                out.append(triangle)
-    return out
+            yield (face[0], face[i], face[i + 1])
+
+
+def triangulated(mesh: "MeshData") -> list[tuple[int, int, int]]:
+    """Construit la liste des triangles vérifiés d'un maillage."""
+    return list(iter_triangles(mesh))
 
 
 def merge_meshes(meshes: list[MeshData], name: str = "model") -> MeshData:
@@ -178,6 +179,8 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
 
     for index, mesh in enumerate(meshes):
         if not mesh.positions:
+            if mesh.faces:
+                raise HookyError(f"Maillage {mesh.name} sans sommets : export refusé.")
             continue
         name = (mesh.name or f"mesh_{index}").replace(" ", "_")
         chunks.append(f"g {name}")
@@ -225,30 +228,28 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
         vbase = vertex_offset + 1
         ubase = uv_offset + 1
         nbase = normal_offset + 1
+        triangles = iter_triangles(mesh)
         if has_uv and has_n:
-            for face in mesh.faces:
-                f0, f1, f2 = face
+            for f0, f1, f2 in triangles:
                 chunks.append(
                     "f %d/%d/%d %d/%d/%d %d/%d/%d" % (
                         f0 + vbase, f0 + ubase, f0 + nbase,
                         f1 + vbase, f1 + ubase, f1 + nbase,
                         f2 + vbase, f2 + ubase, f2 + nbase))
         elif has_uv:
-            for face in mesh.faces:
-                f0, f1, f2 = face
+            for f0, f1, f2 in triangles:
                 chunks.append("f %d/%d %d/%d %d/%d" % (
                     f0 + vbase, f0 + ubase, f1 + vbase, f1 + ubase,
                     f2 + vbase, f2 + ubase))
         elif has_n:
-            for face in mesh.faces:
-                f0, f1, f2 = face
+            for f0, f1, f2 in triangles:
                 chunks.append("f %d//%d %d//%d %d//%d" % (
                     f0 + vbase, f0 + nbase, f1 + vbase, f1 + nbase,
                     f2 + vbase, f2 + nbase))
         else:
-            for face in mesh.faces:
-                chunks.append("f %d %d %d" % (face[0] + vbase, face[1] + vbase,
-                                              face[2] + vbase))
+            for f0, f1, f2 in triangles:
+                chunks.append("f %d %d %d" % (f0 + vbase, f1 + vbase,
+                                              f2 + vbase))
         chunks.append("")
         vertex_offset += len(mesh.positions)
         uv_offset += len(mesh.uvs) if has_uv else 0

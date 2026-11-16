@@ -3,7 +3,8 @@
 Contrairement au balayage de secours, cette voie suit les pointeurs déclarés :
 une forme correspond à son propre tampon d'indices LOD 0 et à son matériau.
 Une table présente mais invalide est refusée intégralement, jamais devinée.
-Les animations, poids et shaders ne sont pas reconstruits.
+Les formes rigides reconnues peuvent être placées en pose de référence ; les
+animations, poids et shaders ne sont pas reconstruits.
 """
 from __future__ import annotations
 
@@ -141,6 +142,34 @@ def _uv(data, start, stride, count, fmt, offset):
     return None
 
 
+def _place_rigid(data, start, stride, positions, normals, attributes, skeleton, skin_count, bone_index):
+    """Replace toute une forme, ou échoue sans modifier partiellement ses données."""
+    from .bfres_v10_skeleton import SkeletonError, transform
+
+    if skin_count == 0:
+        if "_i0" in attributes or "_w0" in attributes:
+            raise SkeletonError("attribut de skin inattendu pour une forme sans influence")
+        matrices = [skeleton.bone_matrix(bone_index)] * len(positions)
+    elif skin_count == 1:
+        if "_w0" in attributes:
+            raise SkeletonError("poids explicites pour une influence non pris en charge")
+        attribute = attributes.get("_i0")
+        # Formats observés : 1, 2 ou 4 indices uint8. Une seule influence est
+        # déclarée ; les autres composantes ne participent pas à la pose.
+        sizes = {0x0203: 1, 0x0903: 2, 0x0B03: 4}
+        if not attribute or attribute[0] not in sizes or attribute[1] + sizes[attribute[0]] > stride:
+            raise SkeletonError("indices rigides de format inconnu")
+        offset = attribute[1]
+        matrices = [skeleton.rigid_matrix(data[start + i * stride + offset])
+                    for i in range(len(positions))]
+    else:
+        raise SkeletonError("forme non rigide")
+    placed = [transform(matrix, position) for matrix, position in zip(matrices, positions)]
+    rotated = ([transform(matrix, normal, normal=True) for matrix, normal in zip(matrices, normals)]
+               if normals is not None else None)
+    return placed, rotated
+
+
 def read(data: bytes, model: int, base: int, report):
     """Retourne les maillages et remplit le rapport, ou lève InvalidStructure."""
     _region(data, model, 0x78)
@@ -158,7 +187,18 @@ def read(data: bytes, model: int, base: int, report):
     meshes = []
     total_vertices = total_indices = total_submeshes = 0
     missing_normals = missing_uv = missing_submeshes = morphing = False
-    skinning = bool(_u64(data, model + 0x18))
+    skeleton_offset = _u64(data, model + 0x18)
+    skinning = bool(skeleton_offset)
+    skeleton = None
+    skeleton_error = ""
+    rigid_placed = 0
+    rigid_unplaced: list[str] = []
+    if skeleton_offset:
+        from . import bfres_v10_skeleton
+        try:
+            skeleton = bfres_v10_skeleton.read(data, skeleton_offset)
+        except (bfres_v10_skeleton.SkeletonError, struct.error, ValueError, OverflowError) as exc:
+            skeleton_error = str(exc)
     for index in range(shape_count):
         shape = shape_table + index * 0x60
         if data[shape:shape + 4] != b"FSHP":
@@ -248,6 +288,20 @@ def read(data: bytes, model: int, base: int, report):
         uvs = _uv(data, start, stride, needed, *attributes["_u0"]) if "_u0" in attributes else None
         missing_normals |= normals is None
         missing_uv |= uvs is None
+        skin_count = data[shape + 0x5A]
+        bone_index = _u16(data, shape + 0x54)
+        if skin_count <= 1 and (skeleton_offset or skin_count or bone_index):
+            from .bfres_v10_skeleton import SkeletonError
+            try:
+                if skeleton is None:
+                    raise SkeletonError(skeleton_error or "squelette absent")
+                if data[vertex + 0x54] != skin_count:
+                    raise SkeletonError("nombre d'influences incohérent")
+                positions, normals = _place_rigid(data, start, stride, positions, normals,
+                                                   attributes, skeleton, skin_count, bone_index)
+                rigid_placed += 1
+            except (SkeletonError, IndexError, struct.error, ValueError, OverflowError) as exc:
+                rigid_unplaced.append(f"{name} ({exc})")
         faces = [(values[i] + first, values[i + 1] + first, values[i + 2] + first)
                  for start_index, end_index in ranges for i in range(start_index, end_index, 3)]
         meshes.append(MeshData(name=name, positions=positions, faces=faces,
@@ -262,6 +316,17 @@ def read(data: bytes, model: int, base: int, report):
     report.index_count = total_indices
     report.uv = any(mesh.uvs is not None for mesh in meshes)
     report.warnings.append("Tables de formes et indices LOD 0 lus directement ; autres LOD non exportés.")
+    if rigid_placed:
+        report.warnings.append(
+            f"{rigid_placed} forme(s) rigide(s) replacée(s) en pose de référence FSKL ; "
+            "les triangles sont conservés.")
+    if rigid_unplaced:
+        report.warnings.append(
+            f"{len(rigid_unplaced)} forme(s) rigide(s) non replacée(s), géométrie potentiellement "
+            f"déplacée : {', '.join(rigid_unplaced[:4])}." +
+            (" Autres formes omises du détail." if len(rigid_unplaced) > 4 else ""))
+    elif skeleton_error:
+        report.warnings.append(f"Squelette FSKL non interprété : {skeleton_error}.")
     if skinning:
         report.warnings.append("Squelette et animation non exportés : géométrie en pose statique non garantie.")
     if morphing:

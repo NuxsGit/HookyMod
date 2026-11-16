@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         import PyInstaller  # noqa: F401
         import texture2ddecoder  # noqa: F401
         import zstandard  # noqa: F401
+        import soundfile  # noqa: F401
     except ImportError as exc:
         raise RuntimeError("Installer requirements-desktop-build.txt avec ce Python.") from exc
 
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
             "--specpath", str(temp),
             "--collect-submodules", "hookycreator", "--collect-submodules", "hookymod",
             "--hidden-import", "texture2ddecoder", "--hidden-import", "zstandard",
+            "--hidden-import", "soundfile", "--collect-all", "_soundfile_data",
             "--add-data", f"{ROOT / 'hookycreator' / 'web'}{os.pathsep}hookycreator/web",
             "--add-binary", f"{native}{os.pathsep}hookymod/_native_lib",
             str(ROOT / "tools" / "desktop_server.py"),

@@ -34,6 +34,9 @@ previews/
 *.opus
 *.ogg
 *.wav
+*.mp3
+*.flac
+*.webm
 # Téléchargements temporaires du Drive de l'utilisateur : jamais versionnés.
 /google_drive/
 # HookyCreator (démo locale, dossier de travail)
@@ -48,3 +51,4 @@ hookycreator_work/
 /src-tauri/binaries/
 /src-tauri/gen/
 /node_modules/
+/tools/webgl/node_modules/

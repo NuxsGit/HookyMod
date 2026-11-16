@@ -1,6 +1,7 @@
 """Protection et durée de vie du backend local de la fenêtre Tauri."""
 from __future__ import annotations
 
+import base64
 import json
 import secrets
 import subprocess
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from test_ensembles_blend import _make_project  # noqa: E402
+from synth_video import make_webm  # noqa: E402
 from hookycreator.server import HookyCreatorServer  # noqa: E402
 
 
@@ -113,6 +115,49 @@ class DesktopBackendTests(unittest.TestCase):
                           headers={**post, "Origin": self.origin}, body=b"{}")[0], 200)
         self.assertEqual(self.request("/api/unknown", method="POST",
                           headers={**post, "Origin": self.origin}, body=b"{}")[0], 405)
+
+    def test_interactive_geometry_and_fsr_assets_require_the_desktop_session(self) -> None:
+        route = "/api/model/geometry?path=Model%2FHeros.bfres"
+        self.assertEqual(self.request(route)[0], 403)
+        cookie, _ = self.login()
+        status, headers, body = self.request(route, headers={"Cookie": cookie})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/octet-stream")
+        self.assertTrue(body.startswith(b"H3D1"))
+        self.assertEqual(self.request(route, headers={"Cookie": cookie, "Sec-Fetch-Site": "cross-site"})[0], 403)
+        for name in ("model_viewer.js", "shaders/common.glsl", "shaders/easu.frag.glsl",
+                     "shaders/rcas.frag.glsl", "shaders/fullscreen.vert.glsl"):
+            status, _, content = self.request("/static/" + name, headers={"Cookie": cookie})
+            self.assertEqual(status, 200, name)
+            self.assertGreater(len(content), 100)
+
+    def test_video_stream_and_import_require_the_desktop_session(self) -> None:
+        original = make_webm()
+        source = self.project.root / "intro.webm"
+        source.write_bytes(original)
+        stream = "/api/video/stream?path=intro.webm"
+        info = "/api/video/info?path=intro.webm"
+        self.assertEqual(self.request(stream)[0], 403)
+        self.assertEqual(self.request(info)[0], 403)
+        self.assertEqual(self.request("/api/video/import", method="POST", body=b"{}")[0], 403)
+        cookie, _ = self.login()
+        auth = {"Cookie": cookie}
+        status, headers, data = self.request(stream, headers={**auth, "Range": "bytes=2-10"})
+        self.assertEqual(status, 206)
+        self.assertEqual(headers["Content-Range"], f"bytes 2-10/{len(original)}")
+        self.assertEqual(data, original[2:11])
+        self.assertEqual(self.request(stream, headers={**auth, "Sec-Fetch-Site": "cross-site"})[0], 403)
+        replacement = original + b"test trailer"
+        body = json.dumps({"path": "intro.webm", "video": base64.b64encode(replacement).decode()}).encode()
+        post = {**auth, "Content-Type": "application/json"}
+        self.assertEqual(self.request("/api/video/import", method="POST", headers=post, body=body)[0], 403)
+        status, _, data = self.request("/api/video/import", method="POST",
+                                       headers={**post, "Origin": self.origin}, body=body)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual((self.project.work / "assets" / "intro.webm").read_bytes(), replacement)
+        self.assertTrue(json.loads(self.request(info, headers=auth)[2])["edited"])
+        self.assertEqual(self.request(stream, headers=auth)[2], replacement)
 
     def test_login_page_is_static_and_export_post_still_works(self) -> None:
         status, headers, html = self.request("/desktop-login")

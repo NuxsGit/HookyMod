@@ -1,87 +1,97 @@
 # HookyMod · HookyCreator
 
-HookyMod est une boîte à outils locale d'inspection et de modification de ressources. HookyCreator est son atelier visuel : il explore des modèles et textures fournis par l'utilisateur, prépare des exports standards et assemble des copies modifiées. L'explorateur historique Python/Tk et la ligne de commande restent disponibles.
+HookyMod is a local toolkit for inspecting and modifying game resources. HookyCreator is its visual workspace: it explores user-supplied models, textures, sounds, animations and WebM videos, prepares standard exports, and assembles working copies. The original Python/Tk explorer and command-line tools are still available.
 
-**Apporte tes propres fichiers obtenus légalement.** Aucun dump ni asset propriétaire n'est nécessaire à la suite de tests. La lecture des formats est partielle et un fichier exporté ou réinjecté n'est pas une garantie de fidélité ni de fonctionnement en jeu.
+**Bring your own legally obtained files.** No game dump or proprietary asset is required to run the test suite. Format support is partial: successful export or replacement does not guarantee visual accuracy or compatibility in game.
 
-## Démarrage rapide
+## Quick start
 
-Python 3.10 ou plus récent est requis. Installer les dépendances depuis le dépôt :
+Python 3.10 or newer is required. Install the dependencies from the repository:
 
 ```bash
 python -m pip install -r requirements.txt
-python -m hookycreator /chemin/vers/romfs --host 127.0.0.1 --open
+python -m hookycreator /path/to/romfs --host 127.0.0.1 --open
 ```
 
-L'atelier s'ouvre à `http://127.0.0.1:8765/`. `--host 127.0.0.1` limite l'écoute à la machine locale ; n'expose pas le serveur navigateur à un réseau non fiable. Le projet peut aussi être un dossier de ressources extraites. Pour changer l'emplacement des copies et caches, ajouter `--work /chemin/de/travail`.
+The workspace opens at `http://127.0.0.1:8765/`. `--host 127.0.0.1` restricts the browser server to the local machine; do not expose it to an untrusted network. The project may also be a folder of extracted assets. Add `--work /path/to/work` to change where working copies and caches are stored.
 
-Pour l'explorateur historique, installer Tkinter puis lancer `python AssetViewer.py`. La fenêtre native Tauri avec sidecar autonome est décrite dans [docs/DESKTOP.md](docs/DESKTOP.md).
+For the original explorer, install Tkinter and run `python AssetViewer.py`. The native Tauri window and standalone backend are described in [docs/DESKTOP.md](docs/DESKTOP.md).
 
-## Modèles : export et retour
+## Models: export and return
 
-1. Dans **Modification → Modèles**, ouvre une fiche puis **Exporter en glTF / OBJ**. L'export contient un glTF 2.0 (`.gltf` + `.bin`), un OBJ et son MTL, les PNG décodables disponibles, une notice et un rapport. Le panneau indique le dossier absolu et propose un ZIP qui ne contient que les fichiers de cet export. Relancer l'export remplace les fichiers de même nom dans le dossier associé : sauvegarde tes modifications ailleurs.
-2. Les références de textures explicites reconnues dans les matériaux sont résolues par matériau. Si elles manquent, l'association par nom est seulement heuristique et signalée ; les doublons et références absentes ne sont pas raccordés arbitrairement. `TEXTURES.md` et `RAPPORT_MODELE.txt` détaillent les limites. Squelette, pose, animations, morphs, shaders et autres LOD ne sont pas reconstruits. Vérifie aussi les UV et le rendu dans ton logiciel 3D.
-3. Après édition, utilise **Importer un modèle** : sélectionne un OBJ triangulé, un GLB ou un glTF 2.0 avec ses éventuels `.bin`, analyse-le et choisis explicitement une cible compatible. L'import porte sur la **géométrie seulement** : les matériaux et textures de la cible sont conservés, pas ceux de la source.
-4. L'injection réécrit une copie dans `hookycreator_work/assets/`, jamais le fichier du projet d'origine. Une seule forme et un seul LOD sont actuellement acceptés dans certaines structures BFRES 9.x ; les tampons sont de capacité fixe. Les cibles 10.x, les squelettes, morphs, bornes à réécrire, attributs non gérés et autres structures non vérifiées sont refusés. Il est normal de ne trouver aucune cible compatible. Les contrôles et la relecture ne prouvent pas la sûreté en jeu.
+1. In **Edit → Models**, open a model to inspect it in the interactive 3D view (WebGL2, with a static PNG fallback). Decoded triangles are not reduced for display; oversized models may be refused by safety limits. Drag to orbit, use the wheel to zoom, and optionally enable wireframe or experimental FSR 1. Click **Export glTF / OBJ** to produce glTF 2.0 (`.gltf` + `.bin`), OBJ and MTL, available decodable PNGs, a notice and a report. The panel shows the absolute folder and offers a ZIP containing only that export. Exporting again replaces files with the same names in that folder: save your edits elsewhere.
+2. Recognized explicit material texture references are resolved per material. When references are missing, name matching is heuristic and identified as such; missing or ambiguous references are not connected arbitrarily. `TEXTURES.md` and `RAPPORT_MODELE.txt` describe the limitations. Some BFRES 10.x rigid pieces are placed in their rest pose; unsupported variants are reported. The exported model does not reconstruct a rig, complete game pose, animations, morphs, shaders or other LODs. Check UVs and rendering in your 3D software.
+3. After editing, use **Import a model**: select a triangulated OBJ, GLB or glTF 2.0 with any external `.bin` files, analyze it, and explicitly choose a compatible target. Only **geometry** is imported; target materials and textures are retained rather than those of the source.
+4. Injection writes a copy under `hookycreator_work/assets/`, never the original project file. Only one shape and one LOD are accepted in certain BFRES 9.x structures, and existing buffers have fixed capacity. BFRES 10.x targets, skeletons, morphs, bounds requiring rewriting, unsupported attributes and other unverified structures are refused. It is normal to find no compatible target. Checks and rereading do not prove in-game safety.
 
-Les UV et normales fournies doivent pouvoir être conservées par la cible. Les normales absentes ne sont pas inventées dans l'export ; un aperçu peut néanmoins calculer ses propres normales de face. Les polygones OBJ doivent être triangulés avant injection. Les extensions glTF obligatoires, les tampons comprimés, les déformations, les accessors sparse et les accès réseau ne sont pas pris en charge.
+Provided UVs and normals must be representable by the target. Missing normals are not invented in exports, although a preview may compute its own face normals. OBJ polygons must be triangulated before injection. Required glTF extensions, compressed buffers, deformations, sparse accessors and network access are not supported.
 
-Voir le [guide de l'atelier](docs/HOOKYCREATOR.md) pour le détail des limites, des cartes PNG et des opérations de lots.
+See the [workspace guide](docs/HOOKYCREATOR.md) for details on limitations, PNG maps and batch operations.
 
-## Autres fonctions
+## Animations and sounds
 
-- Textures BNTX : aperçu, export PNG, remplacement dans une copie pour les formats encodables. ASTC/BC7 ne sont pas encodables ; certains formats de lecture nécessitent `texture2ddecoder`.
-- Archives SARC et `.zs` : inspection, extraction et reconstruction, avec recherche des dictionnaires zstd fournis par l'utilisateur. Des données incomplètes ou un dictionnaire manquant sont signalés.
-- Sons : conversion expérimentale en lecture seule de certains BWAV Opus mono vers Ogg Opus.
-- Session : navigation, filtres, sélection, inspecteur et brouillons sont enregistrés par projet. Les copies modifiées et les réglages sont distincts de la session. Une fermeture brutale ne garantit pas la dernière sauvegarde ; voir [performances et reprise](docs/PERFORMANCE.md).
-- Création de mod : assemblage des copies modifiées et fiches préparatoires. **Assembler supprime et recrée `mods/<nom>` sans sauvegarde** ; la fiche ne crée pas d'acteur jouable et l'atelier ne met pas automatiquement à jour RESTBL.
+- **Animations:** the experimental viewer reads supported BFRES 10.x FSKA Euler skeletal clips and matches bones by name to a compatible structured model. Select a clip and model in **Animations**, or choose a linked animation in the model inspector. Playback uses 30 frames per second by convention, not a rate verified from the file. The viewer retains up to eight skin influences; unsupported skeletons and curve types are refused. Curves can be exported as JSON, but animation and rig are **not** included in glTF/OBJ exports or injected into a game. Physics, materials and full game fidelity are not reproduced.
+- **Sounds:** the experimental BWAV reader supports complete PCM16 or DSP-ADPCM mono/stereo and the existing mono Opus variant. It can export WAV, FLAC, MP3 and Ogg Vorbis, or remux supported Opus without re-encoding. Loop markers are not retained by the converted exports. A replacement must match the original sample rate and channel count; it creates an experimental PCM16 BWAV working copy even when the original was Opus or DSP. BARS banks, prefetch audio, other layouts and codecs, events and RESTBL are not rewritten. **In-game compatibility has not been validated.**
 
-## Ligne de commande
+## Video (experimental)
+
+The **Videos** view lists WebM files, streams them with seeking when the browser supports their codecs, and downloads the current file. Replacement copies a supplied WebM verbatim into the work folder, without transcoding or changing the original. The check covers only the EBML header, WebM DocType and Segment bounds; it does **not** validate tracks, codecs, duration, resolution or game compatibility. Streaming is limited to 1 GiB and replacement input to 32 MiB. NDVE data, separate audio and RESTBL are neither interpreted nor updated, so a valid WebM is not necessarily a usable game replacement.
+
+## Other features
+
+- Interface: light, dark and NewGenOldTendo themes, with French, English, Russian and Chinese UI translations in Settings. Some backend diagnostics and native-window messages may remain in French.
+
+- BNTX textures: preview, export PNG and replace an image in a working copy for encodable formats. ASTC/BC7 encoding is not supported; some decoders require `texture2ddecoder`.
+- SARC archives and `.zs`: inspect, extract and rebuild, using user-supplied zstd dictionaries. Missing dictionaries and incomplete data are reported.
+- Session: navigation, filters, selection, inspector and drafts are saved per project. Modified copies and settings are separate from the session. An abrupt shutdown may lose the last save; see [performance and session recovery](docs/PERFORMANCE.md).
+- Mod creation: assemble working copies and preparatory mob records. **Building deletes and recreates `mods/<name>` without a backup**; a mob record does not create a playable actor, and RESTBL is not updated automatically.
+
+## Command line
 
 ```bash
-# Diagnostic et inspection
-python -m hookymod.cli doctor /chemin/vers/romfs
-python -m hookymod.cli scan /chemin/vers/romfs
+# Diagnostics and inspection
+python -m hookymod.cli doctor /path/to/romfs
+python -m hookymod.cli scan /path/to/romfs
 python -m hookymod.cli list archive.pack.zs --recursive
 
-# Export standard ; --formats gltf ou --formats obj pour un seul format
-python -m hookymod.cli export-model modele.bfres -o modele_export
-python -m hookymod.cli export-model modele.bfres -o modele_export --no-textures
+# Standard export; use --formats gltf or --formats obj for one format
+python -m hookymod.cli export-model model.bfres -o model_export
+python -m hookymod.cli export-model model.bfres -o model_export --no-textures
 
-# Projet éditable PNG / OBJ et reconstruction prudente
-python -m hookymod.cli translate unpack --romfs /chemin/vers/romfs -p projet
-python -m hookymod.cli translate status -p projet
-python -m hookymod.cli translate pack -p projet -o mods --mod-name MonMod
+# Editable PNG / OBJ project and conservative rebuilding
+python -m hookymod.cli translate unpack --romfs /path/to/romfs -p project
+python -m hookymod.cli translate status -p project
+python -m hookymod.cli translate pack -p project -o mods --mod-name MyMod
 
-# Export par lots, avec rapport d'erreurs et de limites
-python -m hookycreator export-all /chemin/vers/romfs -o export_all
+# Batch export with a report of errors and limitations
+python -m hookycreator export-all /path/to/romfs -o export_all
 ```
 
-La CLI `export-model` recherche les textures voisines par nom et ne relie qu'un albédo unique à un matériau unique ; l'association reste heuristique. Les BNTX multi-images et les noms de sortie ambigus sont ignorés et signalés. Pour un OBJ en entrée, elle conserve les indices UV et normales par coin, mais ne lit pas les bibliothèques MTL ni les textures de l'OBJ source. Pour les BFRES 10.x préconstruits, une demande de LOD autre que 0 est refusée. Choisis un dossier de sortie dédié : la CLI peut remplacer ses fichiers homonymes. Dans l'explorateur Tk, l'export glTF/OBJ ne relie pas automatiquement les textures. Le traducteur n'écrit que les géométries compatibles et rapporte les refus. Les noms de commandes et options disponibles peuvent être vérifiés avec `--help`.
+The `export-model` CLI searches neighboring textures by name and links only an unambiguous single albedo to a single material; the association remains heuristic. Multi-image BNTX files and ambiguous output names are skipped and reported. For OBJ input it retains per-corner UV and normal indices, but does not read source MTL libraries or textures. Nonzero LOD requests for prebuilt BFRES 10.x are refused. Choose a dedicated output folder: the CLI may replace files with the same names. In the Tk explorer, glTF/OBJ export does not automatically link textures. The translator writes only supported geometry and reports refusals. Check `--help` for available commands and options.
 
-Le scan est limité par défaut à 200 000 fichiers reconnus. Un scan incomplet ou des entrées illisibles sont signalés ; `--scan-limit 0` retire ce plafond, au prix d'une consommation mémoire potentiellement supérieure.
+The default scan limit is 200,000 recognized files. Incomplete scans and unreadable entries are reported; `--scan-limit 0` removes the limit but may use more memory.
 
-## Tests et construction
+## Tests and builds
 
 ```bash
 python -m pip install -r requirements.txt pytest pytest-subtests pillow
 python -m pytest -q
-# Tests d'interface JavaScript, sans dépendance npm supplémentaire
+# JavaScript UI tests, without additional npm dependencies
 for f in tests/*_test.js; do node "$f" || break; done
 ```
 
-Les tests de formats utilisent des fixtures synthétiques. L'interopérabilité avec Blender est testée en option quand il est installé, uniquement comme consommateur de glTF/OBJ. Des tests natifs supplémentaires et les prérequis Windows/Linux sont décrits dans [docs/DESKTOP.md](docs/DESKTOP.md). Le noyau Rust accélère certains traitements, mais ne remplace pas encore l'application Python ; voir [docs/RUST.md](docs/RUST.md).
+Format tests use synthetic fixtures. A synthetic software-browser WebGL2 / FSR smoke test is described in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Blender interoperability is tested optionally when Blender is installed, solely as a glTF/OBJ consumer. Additional native tests and Windows/Linux prerequisites are documented in [docs/DESKTOP.md](docs/DESKTOP.md). The Rust core accelerates some operations but does not yet replace the Python application; see [docs/RUST.md](docs/RUST.md).
 
-## Documentation et provenance
+## Documentation and provenance
 
-- [Atelier, formats et limites](docs/HOOKYCREATOR.md)
-- [Fenêtre native et construction](docs/DESKTOP.md)
-- [Reprise et performances](docs/PERFORMANCE.md)
-- [Inspection des ressources et dictionnaires](docs/OUVRIR_LES_ASSETS.md)
-- [Provenance, références et dépendances tierces](docs/PROVENANCE.md)
+- [Workspace, formats and limitations](docs/HOOKYCREATOR.md)
+- [Native window and build](docs/DESKTOP.md)
+- [Session recovery and performance](docs/PERFORMANCE.md)
+- [Asset inspection and dictionaries](docs/OUVRIR_LES_ASSETS.md)
+- [Provenance, references and third-party dependencies](docs/PROVENANCE.md)
 
-Le dépôt ne fournit ni jeu, ni clés, ni ressources propriétaires. Il appartient à chaque utilisateur de vérifier ses droits et les licences applicables. Les composants tiers conservent leurs attributions et leurs licences respectives.
+The repository provides no game, keys or proprietary assets. Each user is responsible for checking their rights and applicable licenses. Third-party components retain their own attributions and licenses.
 
-## Soutenir le projet
+## Support the project
 
-Adresse Solana : `y8eeEqNTo7pANwRVvwsrNDu9gpPTFYW5FrP2oMUtfhZ`.
+Solana address: `y8eeEqNTo7pANwRVvwsrNDu9gpPTFYW5FrP2oMUtfhZ`.

@@ -385,37 +385,29 @@ fn on_download(
                 notify_download(&webview, "error", "", "Origine de téléchargement refusée.");
                 return false;
             }
-            let (stem, extension) = match url.path() {
-                "/api/export/download" => {
-                    let selection = url
-                        .query_pairs()
-                        .any(|(k, v)| k == "kind" && v == "selection");
-                    (
-                        if selection {
-                            "hookycreator-selection".into()
-                        } else {
-                            "hookycreator-modele".into()
-                        },
-                        "zip",
-                    )
-                }
-                "/api/sound/ogg" => {
-                    let path = url
-                        .query_pairs()
-                        .find(|(k, _)| k == "path")
-                        .map(|(_, v)| v.into_owned())
-                        .unwrap_or_default();
-                    (downloads::safe_stem(&path), "opus")
-                }
-                _ => {
-                    notify_download(
-                        &webview,
-                        "error",
-                        "",
-                        "Ce téléchargement n'est pas pris en charge.",
-                    );
-                    return false;
-                }
+            let source = url
+                .query_pairs()
+                .find(|(k, _)| k == "path")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            let format = url
+                .query_pairs()
+                .find(|(k, _)| k == "format")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            let selection = url
+                .query_pairs()
+                .any(|(k, v)| k == "kind" && v == "selection");
+            let Some((stem, extension)) =
+                downloads::download_target(url.path(), &source, &format, selection)
+            else {
+                notify_download(
+                    &webview,
+                    "error",
+                    "",
+                    "Ce téléchargement n'est pas pris en charge.",
+                );
+                return false;
             };
             let dir = match download_directory(app) {
                 Ok(path) => path,

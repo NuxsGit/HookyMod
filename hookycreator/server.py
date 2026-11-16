@@ -12,6 +12,7 @@ retouche d'image sont déjà.
 from __future__ import annotations
 
 import base64
+import binascii
 import gzip
 import hashlib
 import hmac
@@ -26,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from hookymod import bntx, native, restbl, sarc, zs
+from hookymod import audio_codec, bntx, native, restbl, sarc, video, zs
 from hookymod.util import HookyError
 
 from . import model_import as model_import_mod
@@ -43,14 +44,15 @@ IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png")
 # accidentellement accessible comme image ou lien depuis un autre site.
 DESKTOP_READ_ROUTES = frozenset({
     "/api/state", "/api/settings", "/api/model/plan", "/api/textures", "/api/models",
-    "/api/asset/check", "/api/sound/info", "/api/sound/ogg", "/api/texture/info",
+    "/api/asset/check", "/api/sound/info", "/api/sound/ogg", "/api/sound/convert", "/api/texture/info",
+    "/api/animation/list", "/api/animation/clip", "/api/video/info", "/api/video/stream",
     "/api/texture/png", "/api/ensembles", "/api/model/info",
-    "/api/model/preview", "/api/model/uv", "/api/model/uv/info", "/api/mobs",
+    "/api/model/preview", "/api/model/geometry", "/api/model/skin", "/api/model/uv", "/api/model/uv/info", "/api/mobs",
     "/api/bulk/status",
     "/api/system", "/api/thumbs/status", "/api/export/download", "/api/ui-state",
 })
 DESKTOP_WRITE_ROUTES = frozenset({
-    "/api/settings", "/api/texture/import", "/api/texture/export",
+    "/api/settings", "/api/texture/import", "/api/texture/export", "/api/sound/import", "/api/video/import",
     "/api/model/export", "/api/model/import", "/api/model/inspect", "/api/mobs", "/api/bulk/start",
     "/api/mod/build", "/api/thumbs/warm",
     "/api/thumbs/stop", "/api/cache/clear", "/api/scan", "/api/export/selection",
@@ -203,11 +205,50 @@ class HookyCreatorServer:
             return _json(project.check_asset(query.get("path", [""])[0],
                                              query.get("kind", [""])[0]))
 
+        if route == "/api/animation/list" and method == "GET":
+            return _json(project.animation_list(query.get("path", [""])[0]))
+
+        if route == "/api/animation/clip" and method == "GET":
+            try:
+                index = int(query.get("index", ["0"])[0])
+            except (TypeError, ValueError) as exc:
+                raise ProjectError("Index de clip invalide.") from exc
+            return _json(project.animation_clip(query.get("path", [""])[0], index))
+
+        if route == "/api/video/info" and method == "GET":
+            return _json(project.video_info(query.get("path", [""])[0]))
+
+        if route == "/api/video/import" and method == "POST":
+            encoded = body.get("video") if isinstance(body, dict) else None
+            if not isinstance(encoded, str) or len(encoded) > ((video.MAX_IMPORT + 2) // 3) * 4:
+                raise ProjectError("Fichier vidéo invalide ou trop volumineux.")
+            try:
+                content = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ProjectError("Données vidéo invalides.") from exc
+            return _json(project.import_video(str(body.get("path", "")), content))
+
         if route == "/api/sound/info":
             return _json(project.sound_info(query.get("path", [""])[0]))
 
         if route == "/api/sound/ogg":
             return project.sound_ogg(query.get("path", [""])[0]), "audio/ogg"
+
+        if route == "/api/sound/convert" and method == "GET":
+            content, mime, _ = project.sound_convert(query.get("path", [""])[0],
+                                                      query.get("format", ["wav"])[0])
+            return content, mime
+
+        if route == "/api/sound/import" and method == "POST":
+            encoded = body.get("audio") if isinstance(body, dict) else None
+            # Limit before decoding, including for callers of api() in-process.
+            if not isinstance(encoded, str) or len(encoded) > ((audio_codec.MAX_IMPORT_BYTES + 2) // 3) * 4:
+                raise ProjectError("Fichier audio invalide ou trop volumineux.")
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ProjectError("Données audio invalides.") from exc
+            return _json(project.import_sound(str(body.get("path", "")), data))
 
         if route == "/api/texture/info":
             return _json(project.texture_info(query["path"][0]))
@@ -235,6 +276,16 @@ class HookyCreatorServer:
 
         if route == "/api/model/info":
             return _json(project.model_info(query["path"][0]))
+
+        if route == "/api/model/geometry":
+            if "path" not in query:
+                raise ProjectError("Paramètre « path » manquant.")
+            return project.model_geometry(query["path"][0]), "application/octet-stream"
+
+        if route == "/api/model/skin" and method == "GET":
+            if "path" not in query:
+                raise ProjectError("Paramètre « path » manquant.")
+            return project.model_skin(query["path"][0]), "application/octet-stream"
 
         if route == "/api/model/preview":
             width = _size(query, "w", 640)
@@ -526,6 +577,51 @@ def _make_handler(server: HookyCreatorServer):
                 return
             if parsed.path == "/desktop-login" and server.desktop_token is not None:
                 parsed = parsed._replace(path="/static/desktop-login.html")
+            if parsed.path == "/api/video/stream":
+                try:
+                    query = parse_qs(parsed.query)
+                    path = server.project.video_file(query.get("path", [""])[0])
+                    with path.open("rb") as source:
+                        import os
+                        size = os.fstat(source.fileno()).st_size
+                        video.check_header(source.read(video.MAX_HEADER), size)
+                        start, end, partial = 0, size - 1, False
+                        requested = self.headers.get("Range")
+                        if requested:
+                            match = re.fullmatch(r"bytes=(\d{0,20})-(\d{0,20})", requested.strip())
+                            if not match or not (match[1] or match[2]):
+                                self.send_response(416); self.send_header("Content-Range", f"bytes */{size}")
+                                self.send_header("Content-Length", "0"); self.end_headers(); return
+                            if match[1]:
+                                start = int(match[1]); end = min(int(match[2]), size - 1) if match[2] else size - 1
+                            else:
+                                suffix = int(match[2]); start = max(0, size - suffix)
+                            if start >= size or start > end:
+                                self.send_response(416); self.send_header("Content-Range", f"bytes */{size}")
+                                self.send_header("Content-Length", "0"); self.end_headers(); return
+                            partial = True
+                        source.seek(start)
+                        self.send_response(206 if partial else 200)
+                        self.send_header("Content-Type", "video/webm")
+                        self.send_header("Accept-Ranges", "bytes")
+                        self.send_header("Content-Length", str(end - start + 1))
+                        self.send_header("Cache-Control", "no-store")
+                        if partial:
+                            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                        if query.get("download") == ["1"]:
+                            self.send_header("Content-Disposition", 'attachment; filename="hookycreator-video.webm"')
+                        self.end_headers()
+                        remaining = end - start + 1
+                        while remaining:
+                            chunk = source.read(min(1024 * 1024, remaining))
+                            if not chunk:
+                                self.close_connection = True; break
+                            self.wfile.write(chunk); remaining -= len(chunk)
+                except (ProjectError, HookyError) as exc:
+                    return self._error(str(exc))
+                except OSError:
+                    self.close_connection = True
+                return
             if parsed.path == "/api/export/download":
                 import shutil
 
@@ -579,7 +675,9 @@ def _make_handler(server: HookyCreatorServer):
                             # avant qu'un préchauffage facultatif ne reprenne.
                             server.thumbnail_activity.note()
                             server.thumbnail_slot.release()
-                    elif rendered:
+                    elif rendered or parsed.path in ("/api/model/geometry", "/api/model/skin"):
+                        # La sérialisation de gros maillages est elle aussi bornée
+                        # en concurrence ; ce n'est pas une vignette à mettre en cache HTTP.
                         with server.render_slots:
                             body, kind = server.api("GET", parsed.path, query, {})
                     else:
@@ -597,12 +695,15 @@ def _make_handler(server: HookyCreatorServer):
                     return self._send(body, kind, headers={
                         "ETag": etag,
                         "Cache-Control": "public, max-age=0, must-revalidate"})
-                if parsed.path == "/api/sound/ogg" and query.get("download") == ["1"]:
+                if parsed.path == "/api/animation/clip" and query.get("download") == ["1"]:
+                    return self._send(body, kind, headers={"Content-Disposition":
+                                      'attachment; filename="hookycreator-animation.json"'})
+                if parsed.path in ("/api/sound/ogg", "/api/sound/convert") and query.get("download") == ["1"]:
                     source = Path(query.get("path", ["son"])[0]).name
-                    name = re.sub(r"\.bwav(?:\.zs)?$", "", source, flags=re.IGNORECASE) + ".opus"
-                    # filename* n'embarque jamais directement de caractères de
-                    # contrôle ou de guillemets dans l'en-tête HTTP.
-                    disposition = "attachment; filename=\"hookycreator-son.opus\"; filename*=UTF-8''" + quote(name, safe="")
+                    fmt = "opus" if parsed.path.endswith("/ogg") else query.get("format", ["wav"])[0].lower()
+                    # The converter validates fmt before this point.
+                    name = re.sub(r"\.bwav(?:\.zs)?$", "", source, flags=re.IGNORECASE) + "." + fmt
+                    disposition = f'attachment; filename="hookycreator-sound.{fmt}"; filename*=UTF-8\'\'' + quote(name, safe="")
                     return self._send(body, kind, headers={"Content-Disposition": disposition})
                 return self._send(body, kind)
             found = server.static(parsed.path)
@@ -630,6 +731,8 @@ def _make_handler(server: HookyCreatorServer):
                 return self._error("Longueur de requête invalide.")
             if (length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024)
                     or (parsed.path == "/api/ui-state" and length > session_mod.MAX_BYTES)
+                    or (parsed.path == "/api/sound/import" and length > ((audio_codec.MAX_IMPORT_BYTES + 2) // 3) * 4 + 4096)
+                    or (parsed.path == "/api/video/import" and length > ((video.MAX_IMPORT + 2) // 3) * 4 + 4096)
                     or (parsed.path in ("/api/model/import", "/api/model/inspect") and length > model_import_mod.MAX_REQUEST)):
                 self.close_connection = True
                 return self._error("Requête trop volumineuse.", 413)
@@ -647,7 +750,7 @@ def _make_handler(server: HookyCreatorServer):
                     return self._error("Session invalide.", 403)
                 cookie = f"hooky_session_{server.port}={token}; Path=/; HttpOnly; SameSite=Strict"
                 return self._send(*_json({"ok": True}), headers={"Set-Cookie": cookie})
-            if parsed.path in ("/api/model/import", "/api/model/inspect"):
+            if parsed.path in ("/api/model/import", "/api/model/inspect", "/api/video/import", "/api/sound/import"):
                 if not server.model_import_slot.acquire(blocking=False):
                     self.close_connection = True
                     return self._send(*_json({"error": "Un import est déjà en cours. Réessaie après sa fin."}),
