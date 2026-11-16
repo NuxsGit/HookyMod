@@ -92,6 +92,17 @@ class Driver:
         identity = element["element-6066-11e4-a52e-4f735466cecf"]
         self.call("POST", f"/session/{self.session}/element/{identity}/click", {})
 
+    def click_scrolled(self, selector: str) -> None:
+        # Les commandes Studio vivent dans #views, un conteneur défilant.
+        # WebKitWebDriver ne le fait pas toujours défiler avant son clic natif.
+        # Le clic reste un vrai clic WebDriver, pas un element.click() simulé.
+        self.script("""
+            const element = document.querySelector(arguments[0]);
+            if (!element) throw new Error('Élément absent : ' + arguments[0]);
+            element.scrollIntoView({block: 'center', inline: 'nearest'});
+        """, selector)
+        self.click(selector)
+
     def wait(self, description: str, script: str, timeout=45):
         return wait_for(description, lambda: self.script(script), timeout)
 
@@ -325,15 +336,18 @@ def run(application: Path) -> None:
                     name.value = 'Création synthétique';
                     document.querySelector('#studio-create-form').requestSubmit();
                 """)
-                driver.wait("projet HookyMod's", "return !document.querySelector('#studio-workspace').hidden")
-                driver.click('[data-studio-kind="item"]')
+                driver.wait("projet HookyMod's prêt", """
+                    return !document.querySelector('#studio-workspace').hidden
+                      && !document.querySelector('#studio-controls').disabled;
+                """)
+                driver.click_scrolled('[data-studio-kind="item"]')
                 driver.script("""
                     const name = document.querySelector('#studio-element-name');
                     name.value = 'Objet synthétique';
                     name.dispatchEvent(new Event('input', { bubbles: true }));
                 """)
-                driver.click('[data-studio-block="when_use"]')
-                driver.click('[data-studio-block="give_item"]')
+                driver.click_scrolled('[data-studio-block="when_use"]')
+                driver.click_scrolled('[data-studio-block="give_item"]')
                 driver.script("""
                     const value = document.querySelector('[data-block-value="1"]');
                     value.value = 'Clé imaginaire';
@@ -342,13 +356,13 @@ def run(application: Path) -> None:
                     event.value = 'when_use';
                     event.dispatchEvent(new Event('change', { bubbles: true }));
                 """)
-                driver.click('#studio-simulate')
+                driver.click_scrolled('#studio-simulate')
                 driver.wait("simulation hors jeu", """
                     const result = document.querySelector('#studio-simulation-result');
                     return result && !result.hidden && result.textContent.includes('Action simulée')
                       && result.textContent.includes('Clé imaginaire');
                 """)
-                driver.click('#studio-export')
+                driver.click_scrolled('#studio-export')
                 design = completed_download(driver, str(clip))
                 downloads.append(design)
                 assert design.name.startswith('hookymods--') and design.suffix == '.hooky'
@@ -464,6 +478,14 @@ def run(application: Path) -> None:
                               exportFolder: text('export-result-folder'),
                               nativeVisible: !!node('native-download-result') && !node('native-download-result').hidden,
                               nativeTitle: text('native-download-title'), nativePath: text('native-download-path'),
+                              studioDisabled: !!node('studio-controls')?.disabled,
+                              studioItem: (() => {
+                                const el = document.querySelector('[data-studio-kind="item"]');
+                                if (!el) return null;
+                                const r = el.getBoundingClientRect();
+                                return {x: r.x, y: r.y, width: r.width, height: r.height,
+                                        hit: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 200)};
+                              })(),
                               toasts: text('toasts'), log: text('console-log').slice(-3000),
                             };
                         """)

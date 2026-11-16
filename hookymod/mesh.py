@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .util import HookyError, write_atomic
+from .util import HookyError, safe_filename_stem, write_atomic
 
 Vec3 = tuple[float, float, float]
 Vec2 = tuple[float, float]
@@ -176,36 +176,60 @@ def export_obj(meshes: list[MeshData], path, mtl: bool = True,
     palette = [(0.82, 0.82, 0.85), (0.85, 0.72, 0.45), (0.55, 0.75, 0.55),
                (0.72, 0.55, 0.75), (0.55, 0.7, 0.85), (0.9, 0.6, 0.55)]
     z_up = up_axis == "z"
+    material_names: dict[str, str] = {}
+    used_materials: set[str] = set()
+    used_groups: set[str] = set()
+
+    def unique_token(value: str, fallback: str, used: set[str]) -> str:
+        # Les noms BFRES ne sont pas des instructions OBJ : espaces, « # » et
+        # retours à la ligne ne doivent ni casser la liaison MTL ni injecter de
+        # nouvelles directives. Garder les collisions distinctes.
+        base = safe_filename_stem(value, fallback=fallback)
+        token, number = base, 2
+        while token.casefold() in used:
+            token, number = f"{base}_{number}", number + 1
+        used.add(token.casefold())
+        return token
 
     for index, mesh in enumerate(meshes):
         if not mesh.positions:
             if mesh.faces:
                 raise HookyError(f"Maillage {mesh.name} sans sommets : export refusé.")
             continue
-        name = (mesh.name or f"mesh_{index}").replace(" ", "_")
+        name = unique_token(mesh.name or f"mesh_{index}", f"mesh_{index}", used_groups)
         chunks.append(f"g {name}")
         material = mesh.material or mesh.name or f"mat_{index}"
         color = palette[index % len(palette)]
         if use_mtl:
-            chunks.append(f"usemtl {material}")
-            albedo_file = ((albedo_map or {}).get(material, "") if strict_materials
-                           else _albedo_for(material, albedo_map or {}))
-            # Kd multiplie map_Kd : garder le blanc, sans teinter l'image.
-            if albedo_file:
-                color = (1., 1., 1.)
-            mtl_lines += [f"newmtl {material}",
-                          f"Kd {color[0]:.3f} {color[1]:.3f} {color[2]:.3f}",
-                          "Ka 0.1 0.1 0.1", "Ks 0.0 0.0 0.0", "d 1.0",
-                          "illum 2"]
-            if albedo_file:
-                mtl_lines.append(f"map_Kd {albedo_file}")
-            normal_file = normal_map.get(material, "") if isinstance(normal_map, dict) else normal_map
-            if normal_file:
-                # Blender ignore « norm » ; il relie map_Bump à Normal Map.
-                # D'autres lecteurs peuvent y voir un relief : documenté dans
-                # la notice, à vérifier dans le logiciel cible.
-                mtl_lines.append(f"map_Bump {normal_file}")
-            mtl_lines.append("")
+            # Plusieurs formes peuvent partager le même matériau. Une seule
+            # définition newmtl évite qu'un importeur remplace la première par
+            # une couleur ou une texture différente au fil du fichier.
+            token = material_names.get(material)
+            first_use = token is None
+            if first_use:
+                token = unique_token(material, f"mat_{index}", used_materials)
+                material_names[material] = token
+            chunks.append(f"usemtl {token}")
+            if first_use:
+                albedo_file = ((albedo_map or {}).get(material, "") if strict_materials
+                               else _albedo_for(material, albedo_map or {}))
+                normal_file = normal_map.get(material, "") if isinstance(normal_map, dict) else normal_map
+                for filename in (albedo_file, normal_file):
+                    if filename and any(ch in filename for ch in "\r\n\x00#"):
+                        raise HookyError("Nom de texture MTL non représentable.")
+                # Kd multiplie map_Kd : garder le blanc, sans teinter l'image.
+                if albedo_file:
+                    color = (1., 1., 1.)
+                mtl_lines += [f"newmtl {token}",
+                              f"Kd {color[0]:.3f} {color[1]:.3f} {color[2]:.3f}",
+                              "Ka 0.1 0.1 0.1", "Ks 0.0 0.0 0.0", "d 1.0",
+                              "illum 2"]
+                if albedo_file:
+                    mtl_lines.append(f"map_Kd {albedo_file}")
+                if normal_file:
+                    # Certains lecteurs interprètent map_Bump comme relief.
+                    mtl_lines.append(f"map_Bump {normal_file}")
+                mtl_lines.append("")
 
         if z_up:
             for x, y, z in mesh.positions:

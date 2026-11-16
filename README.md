@@ -36,9 +36,9 @@ HookyMod 11.26.1 is a beta. Format support is partial; a successful export, repl
 | --- | --- |
 | Local workspace | Browse and filter assets, maintain a per-project session, and work on copies. Some diagnostics and native-window messages remain in French. |
 | HookyMod's and `.hooky` | Create visual design projects and simulate simple blocks locally. A separate experimental source tool packages existing `romfs` mod files; no generator from blocks or direct launcher integration is implemented or validated. |
-| Models | Inspect and export OBJ / glTF with available textures. Geometry import is restricted to some BFRES 9.x targets; BFRES 10.x injection, rigs and morphs are not supported. |
+| Models | Inspect and export GLB / glTF / OBJ with available textures. Geometry injection is restricted to some BFRES 9.x targets; BFRES 10.x injection, rig injection and morphs are not supported. |
 | Textures | Preview, export PNG and replace supported BNTX images. ASTC and BC7 encoding is not available. |
-| Animations | Preview supported BFRES 10.x FSKA Euler clips and export curves as JSON. Rigs and animations are not exported to glTF or injected. |
+| Animations | Preview supported BFRES 10.x FSKA Euler clips, export curves as JSON, or experimentally export one selected clip and its skin in an individual GLB/glTF export. OBJ/MTL and batch exports are static; animation injection is not supported. |
 | Audio and video | Experimental BWAV conversion and replacement, plus WebM preview and replacement. Game compatibility is not validated. |
 | Mod assembly | Collect working copies and preparatory mob records. It does not create playable actors or update RESTBL automatically. Building deletes and recreates `mods/<name>` without a backup. |
 | Desktop | CI targets Tauri and a standalone backend on Windows, Linux and macOS. Packages are experimental; the macOS window has not been tested interactively. |
@@ -74,8 +74,8 @@ Create a workspace from the **HookyMod's** tab, add descriptive elements and com
 ### Models: export and return
 
 1. In **Edit → Models**, open a model in the interactive 3D view. Decoded triangles are not reduced for display; oversized models may be refused by safety limits. Drag to orbit, use the wheel to zoom, and optionally enable wireframe or experimental FSR 1.
-2. Choose **Export glTF / OBJ** to generate glTF 2.0 (`.gltf` + `.bin`), OBJ and MTL, available PNGs, a notice and a report. The panel offers a ZIP containing that export. Re-exporting replaces files with the same names in the export folder: save edits elsewhere.
-3. Recognized explicit material references are resolved per material. Missing references use reported name-matching heuristics; ambiguous references are not linked arbitrarily. Some BFRES 10.x rigid pieces use their rest pose. Exports do not reconstruct a rig, complete pose, animation, morphs, shaders or other LODs.
+2. Optionally select an animation file and clip in the model card, then choose **Export GLB / glTF / OBJ**. The ZIP contains a self-contained `.glb`, glTF 2.0 (`.gltf` + `.bin`), OBJ/MTL, available PNGs, a notice and a report. An accepted clip and skin go into GLB/glTF only; OBJ/MTL cannot store animations. Without a clip, and in selection or batch exports, all formats are static. Re-exporting replaces same-named files: save edits elsewhere.
+3. In Blender use **File → Import → glTF 2.0** for the standalone GLB or the glTF with its adjacent `.bin` and PNGs. For Wavefront import the OBJ with its MTL and PNGs beside it. Recognized material references are resolved per material; missing or ambiguous references are reported, and textures are not linked in glTF without UVs. Some BFRES 10.x rigid pieces use their rest pose. Skin and animation export are experimental, limited to supported skeletons and Euler curves at a conventional 30 fps; unsupported variants are refused. Only synthetic animations have been verified in Blender. Morphs, shaders and other LODs are not reconstructed.
 4. After editing, choose **Import a model** and analyze a triangulated OBJ, GLB or glTF 2.0 with its external `.bin` files. Only geometry is imported; the target's materials and textures are retained.
 5. Injection writes a copy under `hookycreator_work/assets/`, not the original. It accepts only one shape and one LOD in certain BFRES 9.x structures, within existing buffer capacity. BFRES 10.x targets, skeletons, morphs, bounds requiring rewriting and unverified structures are refused. A successful re-read does not prove in-game safety.
 
@@ -102,7 +102,7 @@ python -m hookymod.cli doctor /path/to/romfs
 python -m hookymod.cli scan /path/to/romfs
 python -m hookymod.cli list archive.pack.zs --recursive
 
-# Standard model export; --formats gltf or --formats obj selects one format
+# Static model export; --formats glb, --formats gltf or --formats obj selects one format
 python -m hookymod.cli export-model model.bfres -o model_export
 python -m hookymod.cli export-model model.bfres -o model_export --no-textures
 

@@ -214,6 +214,8 @@ class ExportTests(unittest.TestCase):
         png = self.out / "Weapon_Sword_Example_Alb.png"
         self.out.mkdir(parents=True, exist_ok=True)
         png.write_bytes(b"\x89PNG\r\n\x1a\n")
+        for mesh in self.meshes:
+            mesh.uvs = [(0., 0.), (1., 0.), (0., 1.)]
         written = blender.export_bundle(
             self.meshes, self.out, "epee",
             textures={"Mt_Blade": str(png)})

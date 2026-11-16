@@ -132,8 +132,9 @@ exécutables, les notices et le backend livré. Les installateurs de test sont
 conservés comme artefacts de CI lorsque le workflow réussit. Le dialogue de choix lui-même
 n'est pas automatisé : le mode debug
 accepte une racine de fixture par variable d'environnement pour ce test, option
-absente des builds release. Un autre job teste les formats standards et ouvre
-les exports glTF/OBJ avec Blender comme logiciel consommateur sous Linux.
+absente des builds release. Un autre job valide des GLB/glTF statiques et
+animés avec le validateur Khronos, puis ouvre des exports GLB/glTF/OBJ dans
+Blender sous Linux, y compris une animation et des poids synthétiques.
 
 Un push dont le message contient `[prepare-beta]` prépare un **brouillon non
 publié**, uniquement si ces jobs réussissent. Il regroupe les quatre

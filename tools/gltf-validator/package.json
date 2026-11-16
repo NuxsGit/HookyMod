@@ -1,0 +1,9 @@
+{
+  "name": "hookymod-gltf-validation-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Test-only Khronos glTF validator",
+  "devDependencies": {
+    "gltf-validator": "2.0.0-dev.3.10"
+  }
+}

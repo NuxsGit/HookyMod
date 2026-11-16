@@ -1539,6 +1539,12 @@ class Project:
         cached = geo_mod.read(path) if path.is_file() else None
         if cached is not None:
             meshes, meta = cached
+            # Les caches GEO antérieurs contenaient un avertissement devenu
+            # faux lorsque l'export reconstruit explicitement un clip compatible.
+            legacy = "Squelette et animation non exportés : géométrie en pose statique non garantie."
+            current = "Décodage géométrique seul : pose statique non garantie ; squelette et animation à associer séparément."
+            if legacy in meta.get("warnings", []):
+                meta = {**meta, "warnings": [current if note == legacy else note for note in meta["warnings"]]}
             with self._cache_lock:
                 self.geo_hits += 1
             self._store_mesh(key, meshes, meta)
@@ -2241,15 +2247,45 @@ class Project:
             self._export_cache[key] = (files, copy.deepcopy(found), zipped, actual)
             self._export_cache_bytes += actual
 
-    def export_model(self, rel: str, textures: bool = True, *, archive: bool = False) -> dict:
-        """Exporte la géométrie et les cartes ; le ZIP optionnel ne contient que cet export."""
-        return self._export_model_bundle(rel, textures, archive=archive)
+    def export_model(self, rel: str, textures: bool = True, *, archive: bool = False,
+                     animation_rel: str | None = None, animation_index: int | None = None) -> dict:
+        """GLB/glTF et OBJ ; un clip explicitement choisi anime seulement GLB/glTF."""
+        if ((animation_rel is None) != (animation_index is None)
+                or (animation_rel is not None and (not isinstance(animation_rel, str) or not animation_rel
+                                                   or type(animation_index) is not int or animation_index < 0))):
+            raise ProjectError("Choisis un fichier d'animation et un index de clip valides, ou aucun des deux.")
+        return self._export_model_bundle(rel, textures, archive=archive,
+                                         animation_rel=animation_rel, animation_index=animation_index)
 
-    def _export_model_bundle(self, rel: str, textures: bool, *, archive: bool) -> dict:
+    def _export_model_bundle(self, rel: str, textures: bool, *, archive: bool,
+                             animation_rel: str | None, animation_index: int | None) -> dict:
         import tempfile
         import zipfile
 
         meshes, meta, stamp = self._model_mesh_entry(rel)
+        binding = None
+        animation_stamp = None
+        animation_info = None
+        animation_notes = ["Aucun clip sélectionné : GLB, glTF et OBJ sont statiques."]
+        if animation_rel is not None:
+            from . import model_skin
+            from hookymod import gltf_animation
+
+            animation_stamp = self._version(animation_rel)
+            clip = self.animation_clip(animation_rel, animation_index)
+            skin = model_skin.decode(self.model_skin(rel), meshes)
+            if self._version(rel) != stamp or self._version(animation_rel) != animation_stamp:
+                raise ProjectError("Le modèle ou l'animation a changé pendant l'export ; recommence.")
+            binding = gltf_animation.bind(skin, clip)
+            animation_info = {"path": animation_rel, "index": animation_index, "name": clip["name"],
+                              "frames": clip["frames"], "fps": clip["fps"],
+                              "matched": binding["matched"], "missing": len(binding["missing"])}
+            animation_notes = [
+                f"Clip « {clip['name']} » : {binding['matched']} os associés par nom ; "
+                "30 images/s par convention, courbes et rotations échantillonnées, résultat expérimental.",
+                "OBJ/MTL restent statiques ; l'animation est dans GLB et glTF."]
+            if binding["missing"]:
+                animation_notes.append(f"{len(binding['missing'])} piste(s) absente(s) du squelette : non exportées.")
         source = self.asset(rel).relative_to(self.root).as_posix()
         folder = self._model_export_folder(rel)
         # Un autre export du même dossier ne peut pas mélanger ses fichiers avec
@@ -2259,7 +2295,10 @@ class Project:
                 with tempfile.TemporaryDirectory(prefix="model-export-", dir=self.work / "cache") as tmp:
                     stage = Path(tmp) / folder.name
                     stage.mkdir()
-                    key = self._export_signature(rel, textures, stamp, folder.name, archive)
+                    # Un clip dépend d'une deuxième source : ne jamais réutiliser
+                    # le cache statique pour une autre animation ou version.
+                    key = (self._export_signature(rel, textures, stamp, folder.name, archive)
+                           if binding is None else None)
                     cached = self._cached_export(key)
                     if cached is not None:
                         files, found, cached_zip = cached
@@ -2274,15 +2313,20 @@ class Project:
                                      "warnings": ["Export des textures désactivé."]}
                             self._write_textures_note(stage, folder.name, rel, [], found["warnings"])
                         blender.export_bundle(meshes, stage, folder.name,
+                                              formats=("gltf", "glb", "obj"),
                                               material_maps=found.get("material_maps", {}),
-                                              warnings=meta.get("warnings", []) + found["warnings"])
+                                              warnings=animation_notes + meta.get("warnings", []) + found["warnings"],
+                                              animation=binding)
 
                     # Lister les fichiers physiques, dont MTL et PNG, et non
-                    # seulement ceux renvoyés par le générateur glTF/OBJ.
+                    # seulement ceux renvoyés par le générateur de formats.
                     produced = sorted(path for path in stage.iterdir() if path.is_file())
-                    if not produced or not (stage / f"{folder.name}.gltf").is_file() \
-                            or not (stage / f"{folder.name}.bin").is_file():
-                        raise ProjectError("Export incomplet : le glTF ou son fichier .bin manque.")
+                    required = (".gltf", ".bin", ".glb", ".obj", ".mtl")
+                    if any(not (stage / f"{folder.name}{suffix}").is_file() for suffix in required):
+                        raise ProjectError("Export incomplet : GLB, glTF, BIN, OBJ ou MTL manquant.")
+                    if animation_rel is not None and (self._version(rel) != stamp
+                                                      or self._version(animation_rel) != animation_stamp):
+                        raise ProjectError("Le modèle ou l'animation a changé pendant l'export ; recommence.")
                     archive_id = uuid.uuid4().hex if archive else ""
                     staged_zip = Path(tmp) / "result.zip"
                     if archive and cached_zip is not None:
@@ -2328,7 +2372,9 @@ class Project:
                     "textures": found["textures"], "maps": found["files"],
                     "faces": sum(len(mesh.faces) for mesh in meshes),
                     "submeshes": len(meshes), "stale_files": stale_files,
-                    "warnings": meta.get("warnings", []) + found["warnings"]
+                    "animation": animation_info,
+                    "warnings": animation_notes + meta.get("warnings", []) + found["warnings"]
+                    + ([blender.NO_UV_WARNING] if found["textures"] and any(not mesh.uvs for mesh in meshes) else [])
                     + (["Le dossier contient aussi des fichiers plus anciens ; "
                         "le ZIP ne contient que cet export."] if stale_files else [])}
         if archive_id:
@@ -2502,7 +2548,7 @@ class Project:
 
     # ------------------------------------------------------------------ export
     def export_selection(self, items: list[dict]) -> bytes:
-        """ZIP de la sélection : OBJ + glTF pour les modèles, PNG pour les textures."""
+        """ZIP de la sélection : GLB/glTF et OBJ statiques, PNG pour les textures."""
         import io
         import tempfile
         import zipfile
@@ -2551,8 +2597,10 @@ class Project:
                 meshes, meta, _ = self._model_mesh_entry(rel)
                 maps = self.export_maps_for(rel, target)
                 written = blender.export_bundle(
-                    meshes, target, stem, material_maps=maps.get("material_maps", {}),
-                    warnings=meta.get("warnings", []) + maps["warnings"])
+                    meshes, target, stem, formats=("gltf", "glb", "obj"),
+                    material_maps=maps.get("material_maps", {}),
+                    warnings=["Export de sélection statique : aucun clip n'a été sélectionné."]
+                    + meta.get("warnings", []) + maps["warnings"])
                 # tout ce que l'export a produit : le .bin du glTF et les PNG
                 # compris (sans le .bin, Blender refuse le glTF)
                 for produced in sorted(target.rglob("*")):

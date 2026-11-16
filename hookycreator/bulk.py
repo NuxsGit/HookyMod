@@ -263,9 +263,11 @@ def export_all(project, out_dir, kinds: tuple[str, ...] = ("texture", "model"),
                             "exporte-les séparément et vérifie les matériaux."]}
                     else:
                         maps = project.export_maps_for(item.label, stage)
-                    notes = list(file.warnings) + maps["warnings"]
+                    notes = ["Export en masse statique : aucun clip sélectionné."] + list(file.warnings) + maps["warnings"]
+                    if maps["files"] and any(not mesh.uvs for mesh in meshes):
+                        notes.append(blender.NO_UV_WARNING)
                     written = blender.export_bundle(meshes, stage, folder.name,
-                                                    formats=("gltf", "obj"),
+                                                    formats=("gltf", "glb", "obj"),
                                                     material_maps=maps.get("material_maps", {}),
                                                     warnings=notes)
                     produced = {p.name for p in written.values()}

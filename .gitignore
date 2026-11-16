@@ -89,3 +89,4 @@ hookymods/
 /src-tauri/gen/
 /node_modules/
 /tools/webgl/node_modules/
+/tools/gltf-validator/node_modules/

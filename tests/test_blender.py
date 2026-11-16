@@ -315,7 +315,9 @@ class CliTests(unittest.TestCase):
             with self.subTest(names=names), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 source, output = root / "forme.obj", root / "sortie"
-                source.write_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Surface\nf 1 2 3\n")
+                # Une texture glTF ne peut être liée qu'à une géométrie avec UV.
+                source.write_bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                                   b"vt 0 0\nvt 1 0\nvt 0 1\nusemtl Surface\nf 1/1 2/2 3/3\n")
                 for index, name in enumerate(names):
                     (root / name).write_bytes(util.png_bytes(1, 1, bytes((index, 0, 0, 255))))
                 with contextlib.redirect_stdout(io.StringIO()):
@@ -396,7 +398,7 @@ class CliTests(unittest.TestCase):
             folder = Path(tmp)
             source = folder / "forme.obj"
             source.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
-            for fmt in ("gltf", "obj"):
+            for fmt in ("gltf", "glb", "obj"):
                 output = folder / fmt
                 with self.subTest(fmt=fmt), contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(cli.main(["export-model", str(source), "-o", str(output),

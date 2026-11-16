@@ -372,9 +372,17 @@ class HookyCreatorServer:
             return _json(project.uv_info(query["path"][0]))
 
         if route == "/api/model/export":
+            selected = body.get("animation")
+            if selected is not None and (not isinstance(selected, dict)
+                                         or set(selected) != {"path", "index"}
+                                         or not isinstance(selected["path"], str) or not selected["path"]
+                                         or type(selected["index"]) is not int or selected["index"] < 0):
+                raise ProjectError("Sélection d'animation invalide : indique le fichier et l'index du clip.")
             return _json(project.export_model(body["path"],
                                               textures=bool(body.get("textures", True)),
-                                              archive=True))
+                                              archive=True,
+                                              animation_rel=selected["path"] if selected else None,
+                                              animation_index=selected["index"] if selected else None))
 
         if route == "/api/model/inspect" and method == "POST":
             return _json(model_import_mod.inspect_model(body))

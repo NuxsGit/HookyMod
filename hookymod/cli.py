@@ -508,8 +508,8 @@ def cmd_blender(args) -> int:
     stem = _bundle_stem(path)
     out = Path(args.output) if args.output else path.parent / f"{stem}_export"
     formats = tuple(part.strip().lower() for part in args.formats.split(",") if part.strip())
-    if not formats or not set(formats) <= {"gltf", "obj"}:
-        raise HookyError("Formats d'export attendus : gltf, obj ou gltf,obj.")
+    if not formats or not set(formats) <= {"gltf", "glb", "obj"}:
+        raise HookyError("Formats d'export attendus : gltf, glb et/ou obj.")
     if not math.isfinite(args.scale) or args.scale <= 0 or args.model < 0 or args.lod < 0:
         raise HookyError("L'échelle doit être positive et finie ; modèle et LOD doivent être positifs ou nuls.")
     if (path.suffix.lower() == ".obj" and "obj" in formats
@@ -575,7 +575,7 @@ def cmd_blender(args) -> int:
     )
     triangles = sum(len(m.faces) for m in meshes)
     print(f"Modèle : {stem} — {len(meshes)} maillage(s), {triangles:,} face(s)")
-    for key in ("gltf", "obj", "note", "report"):
+    for key in ("glb", "gltf", "obj", "mtl", "note", "report"):
         if key in written:
             print(f"  • {written[key]}")
     if textures:
@@ -960,7 +960,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_obj)
 
     p = sub.add_parser("export-model", aliases=["blender"], parents=[common],
-                       help="exporte la géométrie en glTF / OBJ et les PNG candidats")
+                       help="exporte la géométrie en GLB / glTF / OBJ et les PNG candidats")
     p.add_argument("path")
     p.add_argument("--entry", "-e")
     p.add_argument("--output", "-o", help="dossier de sortie (défaut : <nom>_export)")
@@ -968,7 +968,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lod", type=int, default=0)
     p.add_argument("--scale", type=float, default=1.0)
     p.add_argument("--formats", default="gltf,obj",
-                   help="formats à écrire (gltf,obj — défaut les deux)")
+                   help="formats statiques à écrire (glb,gltf,obj — défaut gltf,obj)")
     p.add_argument("--textures", action="store_true", default=True,
                    help="prépare les PNG voisins ; albédo unique relié de façon heuristique (défaut)")
     p.add_argument("--no-textures", dest="textures", action="store_false")

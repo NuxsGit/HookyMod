@@ -328,7 +328,7 @@ def read(data: bytes, model: int, base: int, report):
     elif skeleton_error:
         report.warnings.append(f"Squelette FSKL non interprété : {skeleton_error}.")
     if skinning:
-        report.warnings.append("Squelette et animation non exportés : géométrie en pose statique non garantie.")
+        report.warnings.append("Décodage géométrique seul : pose statique non garantie ; squelette et animation à associer séparément.")
     if morphing:
         report.warnings.append("Formes de déformation non exportées : seule la géométrie de base est lue.")
     if missing_submeshes:
