@@ -125,7 +125,7 @@ def test_one_glb_shared_skin_each_clip_once_embedded_textures_and_snapshots(tmp_
         channel = next(c for c in clip["channels"] if c["target"]["path"] == "translation")
         sampler = clip["samplers"][channel["sampler"]]
         assert accessor(doc, blob, sampler["output"])[-1][0] == pytest.approx(expected)
-    report = (Path(result["absolute_folder"]) / "RAPPORT_ANIMATIONS.txt").read_text()
+    report = (Path(result["absolute_folder"]) / "RAPPORT_ANIMATIONS.txt").read_text(encoding="utf-8")
     assert "Occurrences identiques regroupées" in report and "saut" in report
     assert source_before == {p.name: p.read_bytes() for p in project.root.iterdir()}
     # A later export must not mutate the already issued direct download.
@@ -194,7 +194,7 @@ def test_partial_export_reports_every_incompatible_clip_file_and_missing_track(t
     assert "Aucun os animé" in group["skipped"][2]["reason"]
     assert group["exported"][1]["missing"] == ["Ghost"]
     assert any("Export partiel" in warning for warning in result["warnings"])
-    report = (Path(result["absolute_folder"]) / "RAPPORT_ANIMATIONS.txt").read_text()
+    report = (Path(result["absolute_folder"]) / "RAPPORT_ANIMATIONS.txt").read_text(encoding="utf-8")
     for item in group["skipped"]:
         assert item["path"] in report and item["reason"] in report
     assert "Ghost" in report and "PARTIEL" in report
@@ -417,7 +417,7 @@ def test_khronos_validates_multi_clip_glb_and_gltf(tmp_path):
                                     animations=iter((gltf_animation.bind(skin, first),
                                                      gltf_animation.bind(skin, second))))
     glb_doc, _ = glb_parts(written["glb"].read_bytes())
-    assert glb_doc["animations"] == json.loads(written["gltf"].read_text())["animations"]
+    assert glb_doc["animations"] == json.loads(written["gltf"].read_text(encoding="utf-8"))["animations"]
     mesh, _, bindings = independent_bindings()
     isolated = blender.export_bundle([mesh], tmp_path, "independent", formats=("glb",), animations=bindings)
     script = Path(__file__).resolve().parents[1] / "tools" / "validate_gltf.js"
