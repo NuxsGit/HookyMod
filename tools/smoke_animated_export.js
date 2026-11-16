@@ -13,13 +13,16 @@ const readline = require("node:readline");
 const { chromium } = require(process.env.HOOKY_PLAYWRIGHT || "playwright-core");
 const ROOT = path.resolve(__dirname, "..");
 const PYTHON_SERVER = String.raw`
-import json, os, subprocess, sys
+import json, os, struct, subprocess, sys
 from pathlib import Path
-from tests.synth_animation import named_rigid_model, fska_with_jump
+from tests.synth_animation import named_rigid_model, fska_fixture, fska_two_clips_with_jump
 from hookycreator.server import HookyCreatorServer
 root = Path(sys.argv[1]) / 'source'; root.mkdir()
 (root / 'Rigid.bfres').write_bytes(named_rigid_model())
-(root / 'Walk.anim.bfres').write_bytes(fska_with_jump())
+(root / 'Walk.anim.bfres').write_bytes(fska_two_clips_with_jump())
+dash = bytearray(fska_fixture()); struct.pack_into('<H', dash, 0x280, 4); dash[0x282:0x286] = b'Dash'
+(root / 'Rigid_A.anim.bfres').write_bytes(bytes(dash))
+(root / 'Rigid_B.anim.bfres').write_bytes(b'broken BFRES')
 backend = os.environ.get('HOOKY_DESKTOP_BACKEND')
 if backend:
     env = dict(os.environ); env.pop('PYTHONPATH', None); env.pop('LD_LIBRARY_PATH', None)
@@ -84,7 +87,7 @@ async function main() {
     // view. It must remain the selected clip when opening the model.
     await page.locator('[data-view="animations"]').click();
     await page.waitForSelector('#animation-grid .tile:not([hidden])');
-    await page.locator('#animation-grid .tile:not([hidden])').first().click();
+    await page.locator('#animation-grid .tile[data-rel="Walk.anim.bfres"]:not([hidden])').click();
     await page.waitForSelector('#animation-open-model:not([disabled])');
     await page.locator('#animation-model').selectOption('Rigid.bfres');
     await page.locator('#animation-open-model').click();
@@ -123,6 +126,42 @@ async function main() {
     const warnings = await page.locator('#export-result-warnings').innerText();
     assert.match(warnings, /OBJ\/MTL restent statiques/);
     assert.match(warnings, /saut.*approché/);
+    await page.locator('#export-dismiss').click();
+
+    // Group all detected files plus the manually opened one. The invalid file
+    // is named in the visible partial-result panel, never silently ignored.
+    const multiDownload = page.waitForEvent('download');
+    const multiResponse = page.waitForResponse((response) => response.url().includes('/api/model/export'));
+    await page.locator('#btn-export-animations').click();
+    const multi = await (await multiResponse).json();
+    const direct = await multiDownload;
+    assert.equal(bodies[1].all_animations, true);
+    assert.equal(bodies[1].animation_file, 'Walk.anim.bfres');
+    assert.equal(bodies[1].animation, undefined);
+    assert.equal(multi.animations.partial, true);
+    assert.equal(multi.animations.exported.length, 3);
+    assert.equal(multi.animations.skipped[0].path, 'Rigid_B.anim.bfres');
+    assert.match(await page.locator('#export-result-title').innerText(), /partiel/);
+    assert.match(await page.locator('#export-result-warnings').innerText(), /Rigid_B\.anim\.bfres.*BFRES/);
+    assert.equal(await page.locator('#export-download').innerText(), 'Télécharger le GLB');
+    await page.evaluate(() => window.HookyI18n.setLanguage('en'));
+    assert.equal(await page.locator('#btn-export-animations').innerText(), 'Download 1 GLB · all detected animations');
+    assert.equal(await page.locator('#export-result-title').innerText(), 'GLB ready · partial export');
+    assert.equal(await page.locator('#export-download').innerText(), 'Download GLB');
+    assert.match(await page.locator('#inspector-body .anims summary').innerText(), /suggested animation file/);
+    await page.evaluate(() => window.HookyI18n.setLanguage('fr'));
+    assert.equal(await page.locator('#export-result-title').innerText(), 'GLB prêt · export partiel');
+    assert.ok(direct.suggestedFilename().endsWith('.glb'));
+    const glb = fs.readFileSync(await direct.path());
+    assert.equal(glb.subarray(0, 4).toString(), 'glTF');
+    const document = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString());
+    assert.deepEqual(document.animations.map((item) => item.name), ['Dash', 'Walk', 'Run']);
+    assert.equal(document.skins.length, 1);
+    const retryDownload = page.waitForEvent('download');
+    await page.locator('#export-download').click();
+    const retry = await retryDownload;
+    assert.deepEqual(fs.readFileSync(await retry.path()), glb);
+    await page.locator('#export-dismiss').click();
 
     await page.locator('#model-animation-file').selectOption('');
     const staticDownload = page.waitForEvent('download');
@@ -130,10 +169,29 @@ async function main() {
     await page.locator('#btn-export-model').click();
     const plain = await (await staticResponse).json();
     await staticDownload;
-    assert.equal(bodies[1].animation, undefined);
+    assert.equal(bodies[2].animation, undefined);
     assert.equal(plain.animation, null);
+    await page.locator('#export-dismiss').click();
+
+    // If every candidate becomes unreadable, keep the full diagnostics visible
+    // and do not leave the old GLB download looking like a new success.
+    await page.locator('#model-animation-file').selectOption('Walk.anim.bfres');
+    await page.waitForFunction(() => document.querySelector('#model-animation-clip')?.value === '0');
+    for (const name of ['Walk.anim.bfres', 'Rigid_A.anim.bfres', 'Rigid_B.anim.bfres']) {
+      fs.writeFileSync(path.join(temp, 'source', name), 'broken BFRES');
+    }
+    const refusedResponse = page.waitForResponse((response) => response.url().includes('/api/model/export'));
+    await page.locator('#btn-export-animations').click();
+    assert.equal((await refusedResponse).status(), 400);
+    await page.waitForFunction(() => document.querySelector('#export-result-title')?.textContent.includes('refusé'));
+    assert.equal(await page.locator('#export-download').isHidden(), true);
+    const refusal = await page.locator('#export-result-warnings').innerText();
+    assert.match(refusal, /Aucun clip compatible/);
+    assert.match(refusal, /Rigid_A\.anim\.bfres/);
+    assert.match(refusal, /Rigid_B\.anim\.bfres/);
+    assert.match(refusal, /Walk\.anim\.bfres/);
     assert.deepEqual(errors, []);
-    console.log(`Animated export UI (${info.token ? 'desktop sidecar' : 'source backend'}): OK — delayed selection, jump keys, one clip, GLB/MTL and static fallback`);
+    console.log(`Animated export UI (${info.token ? 'desktop sidecar' : 'source backend'}): OK — selection, multi-clip GLB, omissions and refusal, static ZIP`);
   } catch (error) { failed = true; throw error; }
   finally {
     if (browser) await browser.close();

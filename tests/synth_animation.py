@@ -58,11 +58,24 @@ def fska_with_jump() -> bytes:
 
 
 def fska_two_clips_with_jump() -> bytes:
-    """Two named clips sharing the same synthetic track; neither is repeated."""
+    """Two named clips with opposite synthetic movement and one jump each."""
     data = bytearray(fska_with_jump())
     data[0x150:0x1a0] = data[0x100:0x150]
     struct.pack_into("<I", data, 0x94, 2)
     struct.pack_into("<Q", data, 0x158, 0x2a0)
     struct.pack_into("<H", data, 0x2a0, 3)
     data[0x2a2:0x2a5] = b"Run"
+    # The second clip has independent track data, so a consumer test can
+    # actually distinguish the two actions rather than just their names.
+    struct.pack_into("<Q", data, 0x178, 0x600)
+    data[0x600:0x638] = data[0x300:0x338]
+    struct.pack_into("<QQQ", data, 0x600, 0x290, 0x680, 0x640)
+    data[0x640:0x668] = data[0x360:0x388]
+    data[0x680:0x6e0] = data[0x400:0x460]
+    struct.pack_into("<QQ", data, 0x680, 0x700, 0x720)
+    data[0x700:0x710] = data[0x500:0x510]
+    struct.pack_into("<8f", data, 0x720, 0., -.2, -1., -.2, -3., -.2, -4., -.2)
+    struct.pack_into("<QQ", data, 0x6b0, 0x750, 0x760)
+    data[0x750:0x752] = data[0x540:0x542]
+    data[0x760:0x770] = data[0x550:0x560]
     return bytes(data)

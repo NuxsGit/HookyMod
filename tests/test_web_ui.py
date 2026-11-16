@@ -19,7 +19,7 @@ WEB = ROOT / "hookycreator" / "web"
 #: éléments fabriqués à la volée par le script (panneau de détail), donc absents
 #: du HTML livré : ils sont créés par showInspector() et ses appelants.
 DYNAMIC_IDS = {
-    "btn-export-model", "btn-export-png", "btn-import", "btn-uv", "texture-index",
+    "btn-export-model", "btn-export-animations", "btn-export-png", "btn-import", "btn-uv", "texture-index",
     "btn-translate-model", "btn-turntable", "copy-command", "file-import",
     "model-budget", "model-budget-note", "model-quality", "model-shot", "model-canvas",
     "model-view-status", "model-reset", "model-fullscreen", "model-flat", "model-wire", "model-tex", "model-upscale",

@@ -1,4 +1,4 @@
-"""Export d'un skin BFRES validé et d'un clip Euler vers glTF 2.0.
+"""Export d'un skin BFRES validé et de clips Euler vers glTF 2.0.
 
 Les positions reçues sont déjà en espace modèle dans la pose de repos. Les
 joints, matrices inverses et poids décrivent donc la même déformation que
@@ -12,6 +12,7 @@ par une animation statique silencieuse. Ce module n'écrit aucun fichier du jeu.
 from __future__ import annotations
 
 import bisect
+import itertools
 import math
 import struct
 import sys
@@ -23,6 +24,9 @@ from .util import HookyError
 # Limites indépendantes de la taille du fichier source : la conversion des
 # rotations ne doit pas développer indéfiniment une courbe très oscillante.
 MAX_SAMPLES = 1_000_000
+# Un grand nombre de canaux d'une seule clé coûte beaucoup de JSON/accessors,
+# même lorsque le budget des échantillons est respecté.
+MAX_CHANNELS = 100_000
 MAX_SUBDIVISION = 20
 ROTATION_ERROR = 0.0001  # radians, contrôlé à 1/4, 1/2 et 3/4 de chaque intervalle
 VECTOR_ERROR = 0.00001  # erreur relative (au moins 1 unité), mêmes points de contrôle
@@ -406,8 +410,23 @@ def _rotation_channel(doc, binary, curves, base, frames, fps, remaining):
 
 
 def add_to_gltf(doc: dict, binary, meshes, binding: dict, scale: float = 1.0) -> None:
-    """Ajoute un squelette, les huit influences et le clip au document en mémoire."""
-    skin, clip, tracks = binding["skin"], binding["clip"], binding["tracks"]
+    """Ajoute un squelette et un clip, pour les appelants historiques."""
+    add_animations_to_gltf(doc, binary, meshes, (binding,), scale)
+
+
+def add_animations_to_gltf(doc: dict, binary, meshes, bindings, scale: float = 1.0) -> None:
+    """Ajoute les clips d'un itérable à un seul skin, avec un budget commun.
+
+    Les bindings sont consommés un par un : même un grand conteneur FSKA ne
+    nécessite pas de garder tous ses clips décodés en mémoire. Une erreur de
+    conversion interrompt l'export avant toute écriture du document final.
+    """
+    iterator = iter(bindings)
+    try:
+        first = next(iterator)
+    except StopIteration:
+        raise ExportAnimationError("Aucun clip compatible à exporter.") from None
+    skin = first["skin"]
     bones = skin["bones"]
     if len(meshes) != len(skin["meshes"]) or len(doc["meshes"]) != len(meshes):
         raise ExportAnimationError("La géométrie exportée ne correspond pas au skin.")
@@ -483,18 +502,78 @@ def add_to_gltf(doc: dict, binary, meshes, binding: dict, scale: float = 1.0) ->
                 doc, binary, weight_sets[group], 5126, "VEC4", count, target=34962)
         doc["nodes"][index]["skin"] = 0
 
+    budget, channel_budget = MAX_SAMPLES, MAX_CHANNELS
+    animations = []
+    for binding in itertools.chain((first,), iterator):
+        if binding["skin"] is not skin:
+            raise ExportAnimationError("Les clips ne partagent pas le même squelette.")
+        clip = binding["clip"]
+        try:
+            item, budget, channel_budget = _add_clip(
+                doc, binary, bones, first_node, binding, scale, budget, channel_budget)
+        except ExportAnimationError as exc:
+            source = f" dans {clip['rel']} (index {clip['index']})" if "rel" in clip and "index" in clip else ""
+            raise ExportAnimationError(f"Clip « {clip.get('name', 'Animation')} »{source} : {exc}") from exc
+        animations.append(item)
+    _isolate_animations(doc, binary, animations, budget, channel_budget)
+    doc["animations"] = animations
+
+
+def _isolate_animations(doc, binary, animations, budget, channel_budget):
+    """Rétablit la pose de repos des canaux absents d'une action groupée.
+
+    Certains lecteurs, notamment Blender lors d'un changement d'action,
+    conservent les derniers canaux évalués plutôt que de revenir aux valeurs
+    des nœuds glTF. Chaque clip doit donc aussi fixer au repos les canaux
+    animés par un autre clip, sans dupliquer les animations ni leur cycle.
+    Les accesseurs constants sont partagés, et les canaux supplémentaires
+    consomment les mêmes budgets globaux que les autres.
+    """
+    if len(animations) < 2:
+        return
+    targets = [{(channel["target"]["node"], channel["target"]["path"])
+                for channel in item["channels"]} for item in animations]
+    union = set().union(*targets)
+    missing = sum(len(union) - len(current) for current in targets)
+    if missing > channel_budget:
+        raise ExportAnimationError("Trop de canaux pour isoler les poses des animations glTF.")
+    if missing > budget:
+        raise ExportAnimationError("Trop d'images-clés pour isoler les poses des animations glTF.")
+    if not missing:
+        return
+    time = _times(doc, binary, [0.0], 1.0)
+    rest = {}
+    for item, current in zip(animations, targets):
+        for node, path in sorted(union - current):
+            key = (node, path)
+            if key not in rest:
+                try:
+                    values = array("f", doc["nodes"][node][path])
+                except (OverflowError, ValueError) as exc:
+                    raise ExportAnimationError("Pose de repos trop grande pour glTF.") from exc
+                rest[key] = _add_accessor(doc, binary, values, 5126,
+                                          "VEC4" if path == "rotation" else "VEC3", 1)
+            item["samplers"].append({"input": time, "output": rest[key], "interpolation": "LINEAR"})
+            item["channels"].append({"sampler": len(item["samplers"]) - 1,
+                                     "target": {"node": node, "path": path}})
+
+
+def _add_clip(doc, binary, bones, first_node, binding, scale, budget, channel_budget):
+    clip, tracks = binding["clip"], binding["tracks"]
     samplers, channels = [], []
-    budget = MAX_SAMPLES
     for i, track in enumerate(tracks):
         if track is None:
             continue
         for path in ("translation", "rotation", "scale"):
-            if budget <= 0:
-                raise ExportAnimationError("Trop d'images-clés pour l'animation glTF.")
             curves = {"xyz".index(c["target"][-1]): c for c in track["curves"]
                       if c["target"].startswith(path + ".")}
             if not curves and path not in track["base"]:
                 continue
+            if budget <= 0:
+                raise ExportAnimationError("Trop d'images-clés pour l'ensemble des animations glTF.")
+            if channel_budget <= 0:
+                raise ExportAnimationError("Trop de canaux pour l'ensemble des animations glTF.")
+            channel_budget -= 1
             base = track["base"].get(path, bones[i][path])
             if path == "rotation":
                 inp, out, interpolation, used = _rotation_channel(
@@ -505,9 +584,12 @@ def add_to_gltf(doc: dict, binary, meshes, binding: dict, scale: float = 1.0) ->
                     scale if path == "translation" else 1.0, budget)
             budget -= used
             if budget < 0:
-                raise ExportAnimationError("Trop d'images-clés pour l'animation glTF.")
+                raise ExportAnimationError("Trop d'images-clés pour l'ensemble des animations glTF.")
             samplers.append({"input": inp, "output": out, "interpolation": interpolation})
             channels.append({"sampler": len(samplers) - 1, "target": {"node": first_node + i, "path": path}})
-    doc["animations"] = [{"name": clip.get("name", "Animation"), "samplers": samplers,
-                          "channels": channels,
-                          "extras": {"sourceFPSConvention": clip["fps"], "sourceLoop": bool(clip.get("loop"))}}]
+    extras = {"sourceFPSConvention": clip["fps"], "sourceLoop": bool(clip.get("loop"))}
+    if "rel" in clip and "index" in clip:
+        extras.update({"sourceFile": clip["rel"], "sourceClipIndex": clip["index"],
+                       "sourceClipName": clip.get("name", "Animation")})
+    return ({"name": binding.get("export_name", clip.get("name", "Animation")),
+             "samplers": samplers, "channels": channels, "extras": extras}, budget, channel_budget)

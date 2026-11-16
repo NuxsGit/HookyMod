@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -22,8 +23,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from desktop_fixture import make_desktop_fixture  # noqa: E402
+from synth_animation import fska_two_clips_with_jump, named_rigid_model  # noqa: E402
 
 
 def free_port() -> int:
@@ -338,7 +341,31 @@ def run(application: Path) -> None:
                 downloads.append(clip)
                 assert clip.name.startswith('Heros--') and clip.suffix == '.json'
                 assert json.loads(clip.read_text(encoding='utf-8'))['name'] == 'Walk'
-                print("Webview native : session, filtres, ZIP, sélection, audio, vidéo et JSON d'animation OK")
+
+                # Ajouter un modèle skinné sans changer les comptes du scan testé
+                # ci-dessus. Le fichier sélectionné explicitement fait partie de
+                # l'export groupé même s'il n'est pas dans l'index par nom.
+                (root / 'Model' / 'Rigid.bfres').write_bytes(named_rigid_model())
+                (root / 'Model' / 'Rigid.anim.bfres').write_bytes(fska_two_clips_with_jump())
+                close_panels(driver)
+                driver.script("void openModel('Model/Rigid.bfres', {animationRel: 'Model/Rigid.anim.bfres', animationIndex: 0})")
+                driver.wait("modèle animé ouvert", """
+                    return !!document.querySelector('#btn-export-animations')
+                      && document.querySelector('#model-animation-file')?.value === 'Model/Rigid.anim.bfres';
+                """, timeout=60)
+                driver.click_scrolled('#btn-export-animations')
+                grouped = completed_download(driver, str(clip))
+                downloads.append(grouped)
+                assert grouped.name.startswith('hookycreator-animations--') and grouped.suffix == '.glb'
+                data = grouped.read_bytes()
+                magic, version, total = struct.unpack_from('<4sII', data)
+                assert (magic, version, total) == (b'glTF', 2, len(data))
+                size, kind = struct.unpack_from('<I4s', data, 12)
+                assert kind == b'JSON'
+                document = json.loads(data[20:20 + size])
+                assert [item['name'] for item in document['animations']] == ['Walk', 'Run']
+                assert len(document['skins']) == 1
+                print("Webview native : session, ZIP, audio, vidéo, JSON et GLB multi-clips OK")
 
                 # L'archive .hooky utilise le véritable gestionnaire de
                 # téléchargement Tauri, pas seulement le backend HTTP.

@@ -395,11 +395,13 @@ fn on_download(
                 .find(|(k, _)| k == "format")
                 .map(|(_, v)| v.into_owned())
                 .unwrap_or_default();
-            let selection = url
+            let kind = url
                 .query_pairs()
-                .any(|(k, v)| k == "kind" && v == "selection");
+                .find(|(k, _)| k == "kind")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
             let Some((stem, extension)) =
-                downloads::download_target(url.path(), &source, &format, selection)
+                downloads::download_target(url.path(), &source, &format, &kind)
             else {
                 notify_download(
                     &webview,

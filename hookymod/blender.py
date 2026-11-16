@@ -497,7 +497,8 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
                   maps: dict[str, str] | None = None,
                   material_maps: dict[str, dict[str, str]] | None = None,
                   warnings: list[str] | None = None,
-                  animation: dict | None = None) -> dict[str, Path]:
+                  animation: dict | None = None,
+                  animations=None) -> dict[str, Path]:
     """Écrit un dossier prêt pour Blender et renvoie les fichiers créés.
 
     :param meshes: maillages à exporter (positions, faces, UV, normales).
@@ -505,21 +506,29 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
     :param scale: facteur appliqué à la géométrie (1.0 = unités du jeu).
     :param maps: ``{rôle: nom du PNG}`` pour les autres cartes (normale,
         metallicRoughness, occlusion, émission) — branchées sur les matériaux.
+    :param animations: itérable de bindings partageant le même skin ; exclusif
+        avec ``animation``. Les clips sont consommés un par un.
     """
     meshes = _finish_meshes(list(meshes))
     folder = Path(directory)
     folder.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
 
-    if animation is not None and not ({"gltf", "glb"} & set(formats)):
+    if animation is not None and animations is not None:
+        raise HookyError("Choisis un clip ou un ensemble de clips, pas les deux.")
+    animated = animation is not None or animations is not None
+    if animated and not ({"gltf", "glb"} & set(formats)):
         raise HookyError("Un clip animé nécessite un export glTF ou GLB ; OBJ reste statique.")
     if {"gltf", "glb"} & set(formats):
         gltf = folder / f"{name}.gltf"
         document, binary = _build_gltf(meshes, gltf, textures, scale,
                                        maps=maps, material_maps=material_maps)
-        if animation is not None:
+        if animated:
             from . import gltf_animation
-            gltf_animation.add_to_gltf(document, binary, meshes, animation, scale)
+            if animations is not None:
+                gltf_animation.add_animations_to_gltf(document, binary, meshes, animations, scale)
+            else:
+                gltf_animation.add_to_gltf(document, binary, meshes, animation, scale)
         if "glb" in formats:
             written["glb"] = folder / f"{name}.glb"
             _write_glb(document, binary, written["glb"])
@@ -548,11 +557,12 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
 
     written["note"] = folder / "IMPORT_BLENDER.txt"
     animation_note = (
-        "Le clip sélectionné et le squelette sont présents dans GLB/glTF. "
-        "Conversion expérimentale à 30 images/s par convention : courbes cubiques "
+        ("Les clips exportés et leur squelette commun sont présents dans GLB/glTF. "
+         if animations is not None else "Le clip sélectionné et le squelette sont présents dans GLB/glTF. ")
+        + "Conversion expérimentale à 30 images/s par convention : courbes cubiques "
         "échantillonnées et rotations Euler converties en quaternions ; vérifier le mouvement dans l'outil cible. "
         "La boucle se règle dans le logiciel de lecture."
-        if animation is not None else
+        if animated else
         "Aucun clip n'a été demandé : GLB et glTF sont statiques pour cet export.")
     if animation is not None and animation.get("repeated_keys"):
         animation_note += (" Des images-clés partagent un même instant ; un saut éventuel "

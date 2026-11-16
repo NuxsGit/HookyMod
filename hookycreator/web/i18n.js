@@ -249,6 +249,12 @@ const HookyI18n = (() => {
     ["⚠ Scan incomplet", "⚠ Incomplete scan", "⚠ Неполное сканирование", "⚠ 扫描不完整"],
     ["Export prêt", "Export ready", "Экспорт готов", "导出已就绪"], ["Le dossier sur cet ordinateur :", "Folder on this computer:", "Папка на этом компьютере:", "此计算机上的文件夹："],
     ["Télécharger le ZIP", "Download ZIP", "Скачать ZIP", "下载 ZIP"],
+    ["Télécharger le GLB", "Download GLB", "Скачать GLB", "下载 GLB"],
+    ["Export en cours…", "Exporting…", "Экспорт…", "正在导出…"],
+    ["GLB prêt · export partiel", "GLB ready · partial export", "GLB готов · частичный экспорт", "GLB 已就绪 · 部分导出"],
+    ["Export animé refusé", "Animated export refused", "Экспорт анимации отклонён", "动画导出被拒绝"],
+    ["Aucun nouveau GLB n'a été téléchargé.", "No new GLB was downloaded.", "Новый GLB не был загружен.", "未下载新的 GLB。"],
+    ["Un seul GLB est téléchargé. Le détail des clips et des omissions se trouve aussi dans RAPPORT_ANIMATIONS.txt du dossier.", "One GLB is downloaded. Clip details and omissions are also in RAPPORT_ANIMATIONS.txt in the folder.", "Загружается один GLB. Сведения о клипах и пропусках также находятся в RAPPORT_ANIMATIONS.txt в папке.", "将下载一个 GLB。片段详情和遗漏内容也记录在该文件夹的 RAPPORT_ANIMATIONS.txt 中。"],
     ["Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.", "If the download does not start, use the button or open this folder.", "Если загрузка не началась, воспользуйтесь кнопкой или откройте эту папку.", "如果下载没有开始，请使用按钮或打开此文件夹。"],
     ["Quitter l'atelier (arrête le serveur)", "Quit workshop (stops the server)", "Выйти из мастерской (остановить сервер)", "退出工作区（停止服务器）"],
     ["Réduire l'interface (mode compact, sans rail)", "Reduce interface (compact mode, no sidebar)", "Свернуть интерфейс (компактный режим без панели)", "缩小界面（紧凑模式，隐藏侧栏）"],
@@ -289,6 +295,10 @@ const HookyI18n = (() => {
     ["Maillages", "Meshes", "Сетки", "网格"], ["Faces", "Faces", "Грани", "面"], ["Sommets", "Vertices", "Вершины", "顶点"],
     ["Dimensions", "Dimensions", "Размеры", "尺寸"], ["Matériaux", "Materials", "Материалы", "材质"], ["Budget", "Budget", "Бюджет", "预算"],
     ["Vérifier les UV", "Check UVs", "Проверить UV", "检查 UV"], ["Exporter en GLB / glTF / OBJ", "Export GLB / glTF / OBJ", "Экспорт GLB / glTF / OBJ", "导出 GLB / glTF / OBJ"],
+    ["Télécharger 1 GLB · toutes les animations détectées", "Download 1 GLB · all detected animations", "Скачать 1 GLB · все найденные анимации", "下载 1 个 GLB · 所有检测到的动画"],
+    ["Le GLB groupé inclut les clips des fichiers suggérés par nom et le fichier d'aperçu sélectionné. L'association est indicative : d'autres fichiers peuvent manquer ; les clips incompatibles sont signalés.", "The combined GLB includes clips from files suggested by name and the selected preview file. Matching is heuristic: other files may be missing; incompatible clips are reported.", "Общий GLB включает клипы из файлов, предложенных по имени, и выбранного файла предпросмотра. Сопоставление приблизительное: другие файлы могут отсутствовать; несовместимые клипы указываются.", "合并的 GLB 包含按名称推荐的文件及所选预览文件中的片段。匹配仅供参考：其他文件可能遗漏；不兼容的片段会被报告。"],
+    ["Aucune animation suggérée : ouvre un fichier depuis Animations et choisis ce modèle.", "No suggested animation: open a file from Animations and choose this model.", "Нет предложенных анимаций: откройте файл в разделе «Анимации» и выберите эту модель.", "没有推荐的动画：请从“动画”中打开文件并选择此模型。"],
+    ["Association par nom proposée à titre indicatif. Ouvre un modèle : le bouton de GLB groupé inclura tous les clips de ce fichier et ceux suggérés pour le modèle. OBJ/MTL restent statiques et les fichiers du jeu ne sont pas modifiés.", "Name matching is indicative. Open a model: the combined GLB button includes all clips from this file and those suggested for the model. OBJ/MTL remain static; game files are not modified.", "Сопоставление по имени приблизительное. Откройте модель: кнопка общего GLB добавит все клипы этого файла и предложенных для модели файлов. OBJ/MTL статичны; файлы игры не изменяются.", "按名称匹配仅供参考。打开模型后，合并 GLB 按钮将包含此文件及推荐文件中的所有片段。OBJ/MTL 保持静态，游戏文件不会被修改。"],
     ["Le clip sélectionné est exporté dans GLB/glTF si son squelette est compatible. Sans clip, l'export est statique. OBJ/MTL restent toujours statiques.", "The selected clip is exported to GLB/glTF if its skeleton is compatible. Without a clip the export is static. OBJ/MTL are always static.", "Выбранный клип экспортируется в GLB/glTF при совместимом скелете. Без клипа экспорт статичен. OBJ/MTL всегда статичны.", "如果骨架兼容，所选片段将导出到 GLB/glTF。未选择片段时导出为静态模型。OBJ/MTL 始终为静态。"],
     ["Les fichiers d'animation du jeu restent inchangés.", "Game animation files remain unchanged.", "Файлы анимации игры не изменяются.", "游戏动画文件保持不变。"],
     ["Choisis un clip compatible ou reviens à la pose statique.", "Choose a compatible clip or return to the static pose.", "Выберите совместимый клип или вернитесь к статичной позе.", "请选择兼容的片段或返回静态姿势。"],
@@ -480,6 +490,16 @@ const HookyI18n = (() => {
     if (m) return { en: `${m[1]} decoding note(s)`, ru: `Примечаний декодирования: ${m[1]}`, zh: `${m[1]} 条解码说明` }[language];
     m = normalize(source).match(/^(\d+) animation\(s\) liée\(s\)$/);
     if (m) return { en: `${m[1]} linked animation(s)`, ru: `Связанных анимаций: ${m[1]}`, zh: `${m[1]} 个关联动画` }[language];
+    m = normalize(source).match(/^(\d+) fichier\(s\) suggéré\(s\) par nom$/);
+    if (m) return { en: `${m[1]} file(s) suggested by name`, ru: `Файлов, предложенных по имени: ${m[1]}`, zh: `按名称推荐 ${m[1]} 个文件` }[language];
+    m = normalize(source).match(/^(\d+) fichier\(s\) d'animation suggéré\(s\)(?: · (\d+) affichés)?$/);
+    if (m) return { en: `${m[1]} suggested animation file(s)${m[2] ? ` · ${m[2]} shown` : ""}`, ru: `Предложено файлов анимации: ${m[1]}${m[2] ? ` · показано ${m[2]}` : ""}`, zh: `推荐 ${m[1]} 个动画文件${m[2] ? ` · 显示 ${m[2]} 个` : ""}` }[language];
+    m = normalize(source).match(/^GLB prêt · (\d+) clip\(s\)$/);
+    if (m) return { en: `GLB ready · ${m[1]} clip(s)`, ru: `GLB готов · клипов: ${m[1]}`, zh: `GLB 已就绪 · ${m[1]} 个片段` }[language];
+    m = normalize(source).match(/^GLB partiel : (\d+) clip\(s\) exporté\(s\)\. Consulte les omissions ci-dessous\.$/);
+    if (m) return { en: `Partial GLB: ${m[1]} clip(s) exported. See omissions below.`, ru: `Частичный GLB: экспортировано клипов: ${m[1]}. Пропуски указаны ниже.`, zh: `部分 GLB：已导出 ${m[1]} 个片段。请查看下方遗漏内容。` }[language];
+    m = normalize(source).match(/^Un GLB prêt : (\d+) clip\(s\), un cycle chacun\.$/);
+    if (m) return { en: `One GLB ready: ${m[1]} clip(s), one cycle each.`, ru: `Один GLB готов: клипов ${m[1]}, по одному циклу.`, zh: `一个 GLB 已就绪：${m[1]} 个片段，每个一个周期。` }[language];
     m = source.trim().match(/^Texture référencée ([\s\S]+) : absente ou illisible, non reliée\.$/);
     if (m) return { en: `Referenced texture ${m[1]}: missing or unreadable, not linked.`, ru: `Текстура ${m[1]} отсутствует или нечитаема; не связана.`, zh: `引用的纹理 ${m[1]}：缺失或无法读取，未关联。` }[language];
     m = normalize(source).match(/^(\d+) forme\(s\) rigide\(s\) replacée\(s\) en pose de référence FSKL ; les triangles sont conservés\.$/);

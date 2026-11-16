@@ -373,6 +373,13 @@ class HookyCreatorServer:
 
         if route == "/api/model/export":
             selected = body.get("animation")
+            all_animations = body.get("all_animations", False)
+            extra = body.get("animation_file")
+            if (type(all_animations) is not bool
+                    or (extra is not None and (not isinstance(extra, str) or not extra))
+                    or (not all_animations and "animation_file" in body)
+                    or (all_animations and selected is not None)):
+                raise ProjectError("Mode d'export d'animations invalide.")
             if selected is not None and (not isinstance(selected, dict)
                                          or set(selected) != {"path", "index"}
                                          or not isinstance(selected["path"], str) or not selected["path"]
@@ -380,8 +387,8 @@ class HookyCreatorServer:
                 raise ProjectError("Sélection d'animation invalide : indique le fichier et l'index du clip.")
             return _json(project.export_model(body["path"],
                                               textures=bool(body.get("textures", True)),
-                                              archive=True,
-                                              animation_rel=selected["path"] if selected else None,
+                                              archive=True, all_animations=all_animations,
+                                              animation_rel=extra if all_animations else selected["path"] if selected else None,
                                               animation_index=selected["index"] if selected else None))
 
         if route == "/api/model/inspect" and method == "POST":
@@ -691,15 +698,21 @@ def _make_handler(server: HookyCreatorServer):
                 import shutil
 
                 try:
-                    parameters = parse_qs(parsed.query)
-                    token = parameters.get("id", [""])[0]
-                    path = server.project.export_download(token)
-                    name = ("hookycreator-selection.zip" if parameters.get("kind") == ["selection"]
-                            else "hookycreator-modele.zip")
+                    parameters = parse_qs(parsed.query, keep_blank_values=True)
+                    ids = parameters.get("id", [])
+                    kind = parameters.get("kind", [])
+                    if len(ids) != 1 or kind not in ([], [""], ["selection"], ["glb"]):
+                        raise ProjectError("Téléchargement introuvable.")
+                    token = ids[0]
+                    is_glb = kind == ["glb"]
+                    path = server.project.export_download(token, "glb" if is_glb else "zip")
+                    name = ("hookycreator-animations.glb" if is_glb else
+                            "hookycreator-selection.zip" if kind == ["selection"] else
+                            "hookycreator-modele.zip")
                     with path.open("rb") as source:
                         size = path.stat().st_size
                         self.send_response(200)
-                        self.send_header("Content-Type", "application/zip")
+                        self.send_header("Content-Type", "model/gltf-binary" if is_glb else "application/zip")
                         self.send_header("Content-Disposition", f'attachment; filename="{name}"')
                         self.send_header("Content-Length", str(size))
                         self.send_header("Cache-Control", "no-store")

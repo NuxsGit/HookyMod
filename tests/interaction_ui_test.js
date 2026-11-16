@@ -370,8 +370,24 @@ function exportWarningsRemainVisible() {
   assert.equal($("#export-result-warnings").hidden, false);
   assert.match($("#export-result-warnings").textContent, /Squelette non exporté/);
   assert.match($("#export-result-warnings").textContent, /Texture introuvable <nom>/);
-  ctx.result.warnings = [];
+  ctx.result = { download_url: "/api/export/download?id=456&kind=glb", download_format: "glb",
+    download_name: "model-animations.glb", warnings: ["Export partiel"],
+    animations: { skipped: Array.from({ length: 15 }, (_, i) => ({
+      path: `file-${i}.anim.bfres`, name: `<clip-${i}>`, index: i, reason: "rotation inconnue",
+    })), exported: [{ path: "ok.anim.bfres", name: "Walk", index: 0, missing: ["Ghost"] }] } };
+  vm.runInContext('showExportResult(result, "GLB partiel")', ctx);
+  assert.equal($("#export-download").textContent, "Télécharger le GLB");
+  assert.match($("#export-result-note").textContent, /un seul glb/i);
+  assert.match($("#export-result-warnings").textContent, /file-14\.anim\.bfres · <clip-14>.*rotation inconnue/);
+  assert.match($("#export-result-warnings").textContent, /Walk.*Ghost/);
+  vm.runInContext('showAnimationExportError("Aucun clip\\n- fichier : refusé")', ctx);
+  assert.equal($("#export-download").hidden, true);
+  assert.match($("#export-result-title").textContent, /refusé/);
+  assert.match($("#export-result-warnings").textContent, /fichier : refusé/);
+  ctx.result = { download_url: "/api/export/download?id=789", warnings: [] };
   vm.runInContext('showExportResult(result, "Export suivant")', ctx);
+  assert.equal($("#export-download").hidden, false);
+  assert.equal($("#export-download").textContent, "Télécharger le ZIP");
   assert.equal($("#export-result-warnings").hidden, true);
   assert.equal($("#export-result-warnings").textContent, "");
 }

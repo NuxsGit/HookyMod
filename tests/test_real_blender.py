@@ -6,6 +6,7 @@ produit ni ne lit de fichier de projet Blender.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ from tests import synth
 from tests.test_bfres_v10 import DataDrivenTests, make_v10
 from tests.test_bfres_v10_struct import structured_model
 from tests.test_ensembles_blend import _make_project
-from tests.synth_animation import fska_fixture, named_rigid_model
+from tests.synth_animation import fska_fixture, fska_two_clips_with_jump, named_rigid_model
 
 BLENDER = os.environ.get("HOOKY_TEST_BLENDER") or shutil.which("blender")
 
@@ -243,6 +244,119 @@ print("HOOKY_ANIMATION=" + json.dumps({"bones": sorted(b.name for b in armature.
                 expected = (frame * .2 - 2 * math.sin(angle), -.125, 2 * math.cos(angle))
                 for value, want in zip(actual, expected):
                     self.assertAlmostEqual(value, want, delta=.001)
+
+    def test_blender_imports_one_glb_with_two_distinct_actions_on_one_skin(self) -> None:
+        from hookymod import animation
+        from urllib.parse import parse_qs, urlparse
+        with tempfile.TemporaryDirectory(prefix="hooky-multi-consumer-") as tmp:
+            root = Path(tmp) / "source"
+            root.mkdir()
+            source = fska_two_clips_with_jump()
+            (root / "Rigid.bfres").write_bytes(named_rigid_model())
+            (root / "Rigid.anim.bfres").write_bytes(source)
+            project = Project(root, Path(tmp) / "work")
+            project.scan()
+            result = project.export_model("Rigid.bfres", textures=False, all_animations=True, archive=True)
+            params = parse_qs(urlparse(result["download_url"]).query)
+            glb = Path(tmp) / "alone.glb"
+            glb.write_bytes(project.export_download(params["id"][0], "glb").read_bytes())
+            script = Path(tmp) / "inspect_multi.py"
+            script.write_text("""
+import bpy, json, math, sys
+path = sys.argv[sys.argv.index('--') + 1]
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.gltf(filepath=path)
+armatures = [o for o in bpy.data.objects if o.type == 'ARMATURE']
+assert len(armatures) == 1
+arm = armatures[0]
+obj = next(o for o in bpy.data.objects if o.name == 'Forme_A' and o.type == 'MESH')
+assert any(m.type == 'ARMATURE' and m.object == arm for m in obj.modifiers)
+assert arm.animation_data and len(bpy.data.actions) == 2
+for track in arm.animation_data.nla_tracks:
+    track.mute = True
+fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+samples = {}
+for action in bpy.data.actions:
+    arm.animation_data.action = action
+    points = []
+    for source_frame in (0., 2.5, 4.9, 5.1, 7., 10.):
+        frame = source_frame * fps / 30
+        bpy.context.scene.frame_set(math.floor(frame), subframe=frame-math.floor(frame))
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        mesh = evaluated.to_mesh()
+        point = evaluated.matrix_world @ mesh.vertices[0].co
+        points.append([float(point.x), float(point.y), float(point.z)])
+        evaluated.to_mesh_clear()
+    samples[action.name] = {'range': list(action.frame_range), 'points': points}
+print('HOOKY_MULTI=' + json.dumps({'bones': sorted(b.name for b in arm.data.bones),
+                                   'fps': fps, 'samples': samples}))
+""", encoding="utf-8")
+            completed = subprocess.run(
+                [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
+                 "--python", str(script), "--", str(glb)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_MULTI=")), "")
+            self.assertTrue(line, completed.stdout + completed.stderr)
+            verified = json.loads(line.partition("=")[2])
+            self.assertEqual(verified["bones"], ["Child", "Root"])
+            self.assertEqual(len(verified["samples"]), 2)
+            for index, name in enumerate(("Walk", "Run")):
+                action = next((value for key, value in verified["samples"].items() if key.startswith(name)), None)
+                self.assertIsNotNone(action)
+                self.assertAlmostEqual(action["range"][0], 0., delta=.001)
+                self.assertAlmostEqual(action["range"][1], 10 * verified["fps"] / 30, delta=.001)
+                curve = animation.read_clip(source, index)["bones"][0]["curves"][0]
+                for frame, point in zip((0., 2.5, 4.9, 5.1, 7., 10.), action["points"]):
+                    angle = (frame / 10) ** 2
+                    expected = (animation.evaluate(curve, frame) - 2 * math.sin(angle),
+                                -.125, 2 * math.cos(angle))
+                    for value, want in zip(point, expected):
+                        self.assertAlmostEqual(value, want, delta=.002)
+
+    def test_switching_grouped_actions_restores_the_other_bones_and_channels(self) -> None:
+        from tests.test_multi_animation_export import independent_bindings
+        with tempfile.TemporaryDirectory(prefix="hooky-action-switch-") as tmp:
+            mesh, _skin, bindings = independent_bindings()
+            glb = blender.export_bundle([mesh], tmp, "independent", formats=("glb",),
+                                        animations=bindings)["glb"]
+            script = Path(tmp) / "switch_actions.py"
+            script.write_text("""
+import bpy, json, math, sys
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.gltf(filepath=sys.argv[sys.argv.index('--') + 1])
+arm = next(o for o in bpy.data.objects if o.type == 'ARMATURE')
+for track in arm.animation_data.nla_tracks:
+    track.mute = True
+fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+samples = []
+for name in ('Move', 'Spin', 'Bounce', 'Spin', 'Move', 'Bounce'):
+    arm.animation_data.action = next(a for a in bpy.data.actions if a.name.startswith(name))
+    frame = 10 * fps / 30
+    bpy.context.scene.frame_set(math.floor(frame), subframe=frame-math.floor(frame))
+    b0, b1 = arm.pose.bones['Bone0'], arm.pose.bones['Bone1']
+    samples.append({'name': name, 'location0': list(b0.location),
+                    'rotation0': list(b0.rotation_quaternion), 'location1': list(b1.location)})
+print('HOOKY_SWITCH=' + json.dumps(samples))
+""", encoding="utf-8")
+            completed = subprocess.run(
+                [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
+                 "--python", str(script), "--", str(glb)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_SWITCH=")), "")
+            self.assertTrue(line, completed.stdout + completed.stderr)
+            expected = {
+                "Move": ([3., 0., 0.], [1., 0., 0., 0.], [0., 0., 0.]),
+                "Spin": ([0., 0., 0.], [math.cos(.5), 0., 0., math.sin(.5)], [0., 0., 0.]),
+                "Bounce": ([0., 0., 0.], [1., 0., 0., 0.], [0., 2., 0.]),
+            }
+            for item in json.loads(line.partition("=")[2]):
+                for key, values in zip(("location0", "rotation0", "location1"), expected[item["name"]]):
+                    for actual, want in zip(item[key], values):
+                        self.assertAlmostEqual(actual, want, delta=.001)
 
     def test_blender_imports_one_clip_with_duplicate_time_jumps(self) -> None:
         from hookymod import animation, gltf_animation

@@ -34,6 +34,22 @@ class AnimationError(HookyError):
     """Truncated, unsupported or excessive animation data."""
 
 
+class AnimationBudgetExceeded(AnimationError):
+    """An aggregate limit was exceeded, including work on rejected clips."""
+
+
+class KeyBudget:
+    """Optional shared key-decoding budget for a sequence of clips."""
+
+    def __init__(self, limit: int) -> None:
+        self.remaining = limit
+
+    def consume(self, count: int) -> None:
+        self.remaining -= count
+        if self.remaining < 0:
+            raise AnimationBudgetExceeded("Trop d'images-clés source pour un seul GLB.")
+
+
 def _region(data: bytes, offset: int, size: int) -> None:
     if offset <= 0 or size < 0 or offset + size > len(data):
         raise AnimationError("Table d'animation absente ou hors limites.")
@@ -93,10 +109,14 @@ def _finite(values) -> bool:
     return all(math.isfinite(float(value)) for value in values)
 
 
-def _read_curve(data: bytes, offset: int) -> tuple[dict[str, Any], int]:
+def _read_curve(data: bytes, offset: int, budget: KeyBudget | None = None) -> tuple[dict[str, Any], int]:
     _region(data, offset, 0x30)
     frame_ptr, key_ptr = struct.unpack_from("<QQ", data, offset)
     flags, count, target = struct.unpack_from("<HHI", data, offset + 0x10)
+    # Charge avant le décodage : même une courbe ou un clip ensuite refusé
+    # consomme du temps et ne doit pas contourner le plafond partagé.
+    if budget is not None:
+        budget.consume(count)
     start, end, frame_scale, value_scale, value_offset = struct.unpack_from("<5f", data, offset + 0x18)
     frame_type, key_type, curve_type = flags & 3, (flags >> 2) & 3, (flags >> 4) & 7
     if (not count or target not in _TARGETS or flags & 0x80
@@ -134,7 +154,7 @@ def _read_curve(data: bytes, offset: int) -> tuple[dict[str, Any], int]:
             "frames": frames, "values": values, "slopes": slopes}, count
 
 
-def read_clip(data: bytes, index: int) -> dict[str, Any]:
+def read_clip(data: bytes, index: int, *, budget: KeyBudget | None = None) -> dict[str, Any]:
     table, count = _table(data)
     if type(index) is not int or not 0 <= index < count:
         raise AnimationError("Index de clip d'animation hors limites.")
@@ -175,7 +195,7 @@ def read_clip(data: bytes, index: int) -> dict[str, Any]:
         curves = []
         targets = set()
         for j in range(ncurve):
-            curve, keys = _read_curve(data, curve_ptr + j * 0x30)
+            curve, keys = _read_curve(data, curve_ptr + j * 0x30, budget)
             total_keys += keys
             if total_keys > MAX_KEYS:
                 raise AnimationError("Trop d'images-clés pour un clip.")
