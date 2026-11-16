@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,9 +58,40 @@ def macos_bundle_paths(volume: Path) -> tuple[Path, Path, Path]:
             contents / "Resources" / "licenses")
 
 
-def detach_dmg(mount: Path) -> None:
-    """Allow transient OS activity to release the image, but require a real detach."""
+def _dmg_attached(device: str, package: Path) -> bool:
+    """Check hdiutil's image inventory and refuse to touch a different image."""
+    result = subprocess.run(["hdiutil", "info", "-plist"], check=True, timeout=60, capture_output=True)
+    try:
+        info = plistlib.loads(result.stdout)
+        images = info["images"]
+        if not isinstance(images, list):
+            raise ValueError("images is not a list")
+        attached = False
+        for image in images:
+            if (not isinstance(image, dict) or not isinstance(image.get("system-entities"), list)
+                    or any(not isinstance(entity, dict) for entity in image["system-entities"])):
+                raise ValueError("invalid image entry")
+            devices = [entity.get("dev-entry", "") for entity in image["system-entities"]]
+            if not all(isinstance(entry, str) for entry in devices):
+                raise ValueError("invalid device entry")
+            has_device = any(entry == device or re.fullmatch(re.escape(device) + r"(?:s\d+)+", entry)
+                             for entry in devices)
+            path = image.get("image-path")
+            is_image = isinstance(path, str) and Path(path).resolve() == package.resolve()
+            if has_device and not is_image:
+                raise RuntimeError(f"Le périphérique {device} appartient à une autre image.")
+            if is_image and not has_device:
+                raise RuntimeError("L'image est encore attachée à un périphérique inattendu.")
+            attached = attached or is_image
+    except (KeyError, TypeError, ValueError, plistlib.InvalidFileException) as exc:
+        raise RuntimeError("Impossible de vérifier l'état de l'image disque.") from exc
+    return attached
+
+
+def detach_dmg(mount: Path, package: Path) -> None:
+    """Retry busy images without forcing, and verify any already-detached state."""
     command = ["hdiutil", "detach", str(mount)]
+    device = None
     for attempt in range(4):
         try:
             subprocess.run(command, check=True, timeout=60, text=True, capture_output=True)
@@ -68,9 +100,25 @@ def detach_dmg(mount: Path) -> None:
             output = "\n".join(part for part in (error.stdout, error.stderr) if part)
             if output:
                 print(output, file=sys.stderr, flush=True)
-            # Do not force an unmount or ignore errors: the smoke test must fail
-            # if the volume remains busy or hdiutil reports another problem.
-            if attempt == 3 or "resource busy" not in output.lower():
+            lower = output.lower()
+            if device and "no such file or directory" in lower and not _dmg_attached(device, package):
+                # A prior detach may have finished between the inventory and retry.
+                return
+            if "resource busy" not in lower:
+                raise
+            match = re.search(r'(?<![A-Za-z0-9_])(?:/dev/)?(disk\d+)(?:s\d+)*\b', output)
+            if match:
+                reported = f"/dev/{match.group(1)}"
+                if device is not None and device != reported:
+                    raise RuntimeError("Le périphérique de l'image a changé pendant le démontage.") from error
+                device = reported
+                # hdiutil may unmount the volume before it can eject the disk;
+                # the mountpoint then disappears and cannot be used for a retry.
+                # Only address the disk after checking it is still this image.
+                if not _dmg_attached(device, package):
+                    return
+                command = ["hdiutil", "detach", device]
+            if attempt == 3:
                 raise
             delay = 2 * (attempt + 1)
             print(f"Image disque occupée : nouvelle tentative dans {delay} s.",
@@ -90,7 +138,7 @@ def mounted_dmg(package: Path, mount: Path):
     try:
         yield mount
     finally:
-        detach_dmg(mount)
+        detach_dmg(mount, package)
 
 
 def verify_contents(app: Path, backend: Path, license_dir: Path, *, executable: bool) -> None:
