@@ -1,0 +1,19 @@
+# Manifest minimal pour un build hors ligne. Voir ../README.md.
+[package]
+name = "ruzstd"
+version = "0.9.1"
+edition = "2018"
+rust-version = "1.87"
+license = "MIT"
+
+[dependencies]
+twox-hash = { path = "../twox-hash", default-features = false, features = ["xxhash64"], optional = true }
+
+[features]
+default = ["std", "hash"]
+std = []
+hash = ["dep:twox-hash"]
+# Déclarées pour les cfg du code upstream, non activées par HookyMod.
+dict_builder = []
+fuzz_exports = []
+rustc-dep-of-std = []

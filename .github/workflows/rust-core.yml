@@ -1,0 +1,60 @@
+name: Rust core and compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.11'
+          - os: windows-latest
+            python: '3.14'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+          components: rustfmt, clippy
+      - name: Install Python test dependencies
+        run: python -m pip install -r requirements.txt pytest pillow
+      - name: Rust formatting and lint
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --check
+          cargo clippy --manifest-path rust/Cargo.toml --offline --locked --all-targets -- -D warnings
+      - name: Rust unit tests (library and CLI)
+        run: cargo test --manifest-path rust/Cargo.toml --offline --locked --all-targets
+      - name: Build and verify native library
+        id: build_native
+        run: |
+          python tools/build_rust.py
+          python -c "from hookymod import native; assert native.available(), native.status()"
+          python -c "from tests.test_rust_cli import EXE; import zstandard; assert EXE.is_file(), EXE"
+      - name: Python suite with Rust (including parity tests)
+        run: python -m pytest -q tests/ --junitxml=pytest-rust.xml
+      - name: Report native suite failures
+        if: ${{ failure() }}
+        run: python .github/scripts/report_pytest_failures.py pytest-rust.xml
+      - name: Python suite without Rust (fallback)
+        if: ${{ !cancelled() && steps.build_native.outcome == 'success' }}
+        env:
+          HOOKYMOD_DISABLE_RUST: '1'
+        run: python -m pytest -q tests/ --junitxml=pytest-fallback.xml
+      - name: Report fallback suite failures
+        if: ${{ failure() }}
+        run: python .github/scripts/report_pytest_failures.py pytest-fallback.xml

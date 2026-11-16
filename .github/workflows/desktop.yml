@@ -1,0 +1,149 @@
+name: HookyCreator desktop
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Tauri v2 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            extension: ''
+            bundle: deb
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            extension: .exe
+            bundle: nsis
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust
+            src-tauri
+      - name: System libraries and WebKit WebDriver
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev patchelf webkit2gtk-driver xvfb gstreamer1.0-plugins-base gstreamer1.0-plugins-good libnss3 libnspr4
+      - name: Microsoft Edge WebDriver matching WebView2
+        if: runner.os == 'Windows'
+        run: python .github/scripts/run_ci_command.py -- pwsh -NoProfile -File .github/scripts/setup_webview_driver.ps1
+      - name: Python and Tauri build dependencies
+        run: |
+          python -m pip install -r requirements-desktop-build.txt
+          npm ci
+      - name: JavaScript UI tests
+        run: |
+          node --check hookycreator/web/app.js
+          node --check hookycreator/web/i18n.js
+          python -c "import glob,subprocess; [subprocess.run(['node', path], check=True) for path in glob.glob('tests/*_test.js')]"
+      - name: Build standalone sidecar including Rust core
+        run: python .github/scripts/run_ci_command.py -- python tools/build_desktop_backend.py
+      - name: Smoke test the standalone sidecar
+        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-${{ matrix.target }}${{ matrix.extension }}
+      - name: Install isolated Chromium dependencies for the sidecar
+        if: runner.os == 'Linux'
+        run: npm ci --prefix tools/webgl --ignore-scripts --no-audit --no-fund
+      - name: Exercise the authenticated sidecar in Chromium
+        if: runner.os == 'Linux'
+        run: |
+          CHROMIUM=$(node --input-type=module -e "import c from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await c.executablePath())")
+          HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}" HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
+      - name: Format and test Tauri Rust
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          python .github/scripts/run_ci_command.py -- cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build real app for WebDriver
+        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --debug --no-bundle -- --locked
+      - name: Install tauri-driver
+        run: python .github/scripts/run_ci_command.py -- cargo install tauri-driver --locked
+      - name: Exercise WebKitGTK window and downloads
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_webview.py
+      - name: Exercise WebView2 window and downloads
+        if: runner.os == 'Windows'
+        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_webview.py
+      - name: Build native installer
+        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --bundles ${{ matrix.bundle }} -- --locked
+      - name: Verify packaged backend and executable
+        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_package.py
+      - name: Keep test installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookyCreator-${{ matrix.os }}
+          path: src-tauri/target/release/bundle/${{ matrix.bundle }}/
+          if-no-files-found: error
+          retention-days: 14
+
+  webgl:
+    name: Vue WebGL2 et FSR 1 / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install backend dependencies for browser integration
+        run: python -m pip install -r requirements.txt
+      - name: Browser libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnss3 libnspr4
+      - name: Install isolated, locked browser test dependencies
+        run: npm ci --prefix tools/webgl --ignore-scripts --no-audit --no-fund
+      - name: Exercise synthetic WebGL, animation and media workflows
+        run: |
+          CHROMIUM=$(node --input-type=module -e "import chromium from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await chromium.executablePath())")
+          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_webgl.js
+          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
+
+  model-formats:
+    name: Formats OBJ / glTF et interopérabilité / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install format test dependencies and Blender consumer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blender python3-numpy
+          python -m pip install -r requirements.txt pytest pytest-subtests pillow
+          blender --background --factory-startup --python-exit-code 7 --python-expr "import bpy, numpy; print(bpy.app.version_string, numpy.__version__)"
+      - name: Check bounded parsing, material associations and working-copy injection
+        run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_modelio.py tests/test_model_import.py tests/test_bfres_v10_struct.py tests/test_bfres_v10_rigid.py tests/test_model_view.py tests/test_vram_budget.py tests/test_material_bindings.py tests/test_translate.py tests/test_benchmark_workflow.py
+      - name: Open the standard exports in Blender
+        run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_real_blender.py

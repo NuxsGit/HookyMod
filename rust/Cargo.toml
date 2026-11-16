@@ -1,0 +1,27 @@
+[package]
+name = "hookymod-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "Noyaux et outils autonomes Rust de HookyMod"
+license = "MIT"
+
+[dependencies]
+# Sources et licences incluses dans vendor/ : compilation possible sans réseau.
+ruzstd = { path = "vendor/ruzstd" }
+hmac-sha256 = { path = "vendor/hmac-sha256" }
+
+[dev-dependencies]
+# Expose les tables d'entropie uniquement aux tests des garde-fous locaux.
+ruzstd = { path = "vendor/ruzstd", features = ["fuzz_exports"] }
+
+[lib]
+name = "hookymod_core"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "hookymod-rs"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3

@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="light" data-accent="azur" data-density="confort">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HookyCreator</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" type="image/png" href="/static/HookyMod.png">
+</head>
+<body>
+<div class="app">
+
+  <!-- ============================================================ barre de titre -->
+  <header class="titlebar">
+    <div class="win-dots">
+      <button class="dot close" id="win-close" title="Quitter l'atelier (arrête le serveur)"></button>
+      <button class="dot min" id="win-min" title="Réduire l'interface (mode compact, sans rail)"></button>
+      <button class="dot max" id="win-max" title="Plein écran"></button>
+    </div>
+    <div class="brand"><img class="brand-mark" src="/static/HookyMod.png" alt="">HookyCreator</div>
+
+    <nav class="menubar" id="menubar">
+      <button class="menu-btn" data-menu="fichier">Fichier</button>
+      <button class="menu-btn" data-menu="edition">Édition</button>
+      <button class="menu-btn" data-menu="modele">Modèle</button>
+      <button class="menu-btn" data-menu="texture">Texture</button>
+      <button class="menu-btn" data-menu="import">Importer</button>
+      <button class="menu-btn" data-menu="affichage">Affichage</button>
+      <button class="menu-btn" data-menu="aide">Aide</button>
+    </nav>
+
+    <div class="titlebar-right">
+      <button class="palette-btn" id="palette-btn" title="Palette de commandes (Ctrl+K)">
+        <span>⌘K</span> commandes
+      </button>
+      <span class="project-name" id="project-name" title="Projet ouvert">—</span>
+    </div>
+  </header>
+  <div class="menus" id="menus" hidden></div>
+
+  <!-- ============================================================ sélection -->
+  <div class="selection-bar" id="selection-bar" hidden>
+    <span id="selection-count">0 sélectionné</span>
+    <button class="btn primary tiny" id="selection-export">Exporter en ZIP</button>
+    <button class="btn ghost tiny" id="selection-all">Tout</button>
+    <button class="btn ghost tiny" id="selection-invert">Inverser</button>
+    <button class="btn ghost tiny" id="selection-clear">Vider</button>
+  </div>
+
+  <!-- ============================================================ espace de travail -->
+  <div class="workspace">
+    <nav class="rail" id="rail">
+      <button class="rail-btn" data-view="home" title="Accueil (Ctrl+1)">
+        <svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>
+        <span>Accueil</span>
+      </button>
+      <span class="rail-label">Modifier</span>
+      <button class="rail-btn" data-view="edit" title="Espace modification">
+        <svg viewBox="0 0 24 24"><path d="m4 16 11-11 4 4L8 20H4zM13 7l4 4"/></svg>
+        <span>Atelier</span>
+      </button>
+      <button class="rail-btn" data-view="models" title="Modèles (Ctrl+2)">
+        <svg viewBox="0 0 24 24"><path d="M12 3 21 8v8l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
+        <span>Modèles</span>
+      </button>
+      <button class="rail-btn" data-view="ensembles" title="Ensembles : modèle + textures + animations">
+        <svg viewBox="0 0 24 24"><path d="M12 3 21 8l-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg>
+        <span>Ensembles</span>
+      </button>
+      <button class="rail-btn" data-view="animations" title="Animations squelettiques (expérimental)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="4" r="2"/><path d="M12 6v7m-5-3 5-2 5 2m-5 3-4 7m4-7 4 7"/></svg>
+        <span>Animations</span>
+      </button>
+      <button class="rail-btn" data-view="textures" title="Textures (Ctrl+3)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-4 4 3 4-4 5 5"/></svg>
+        <span>Textures</span>
+      </button>
+      <button class="rail-btn" data-view="sounds" title="Sons BWAV (expérimental)">
+        <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
+        <span>Sons</span>
+      </button>
+      <button class="rail-btn" data-view="videos" title="Vidéos WebM (expérimental)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
+        <span>Vidéos</span>
+      </button>
+      <button class="rail-btn" data-view="import" title="Importer un modèle (Ctrl+5)">
+        <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 12 21 6"/></svg>
+        <span>Importer</span>
+      </button>
+      <span class="rail-label">Créer</span>
+      <button class="rail-btn" data-view="create" title="Espace création de mod">
+        <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM12 12v5M9.5 14.5h5"/></svg>
+        <span>Mon mod</span>
+      </button>
+      <button class="rail-btn" data-view="mobs" title="Fiches de mobs (Ctrl+4)">
+        <svg viewBox="0 0 24 24"><path d="M5 20v-6a7 7 0 0 1 14 0v6"/><circle cx="9.5" cy="10" r="1.3"/><circle cx="14.5" cy="10" r="1.3"/><path d="M10 14h4"/></svg>
+        <span>Mobs</span>
+      </button>
+      <span class="rail-label">Outils</span>
+      <button class="rail-btn" data-view="settings" title="Réglages (Ctrl+6)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+        <span>Réglages</span>
+      </button>
+      <div class="rail-gap"></div>
+      <button class="rail-btn" id="rail-console" title="Journal (Ctrl+J)">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+        <span>Journal</span>
+      </button>
+    </nav>
+
+    <main class="editor">
+      <div class="tabs" id="tabs"></div>
+
+      <div class="views" id="views">
+
+        <!-- ---------------------------------------------------------- accueil -->
+        <section class="view" id="view-home">
+          <div class="view-head">
+            <div>
+              <h2>Atelier</h2>
+              <p class="muted" id="home-sub">Chargement du projet…</p>
+              <p class="warn" id="scan-notice" role="status" hidden></p>
+            </div>
+            <div class="chips" id="stats"></div>
+          </div>
+
+          <div class="section-title"><h3>Choisis ton espace</h3><span>Deux étapes, un même projet</span></div>
+          <div class="spaces">
+            <button class="space-card space-edit" type="button" data-goto="edit">
+              <span class="space-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m4 16 11-11 4 4L8 20H4zM13 7l4 4"/></svg>
+              </span>
+              <span class="space-copy"><small>01 / ATELIER</small><b>Modifier l'existant</b>
+                <span>Explorer les modèles, retoucher les textures et travailler avec Blender.</span>
+                <em>Ouvrir la modification <span aria-hidden="true">→</span></em></span>
+            </button>
+            <button class="space-card space-create" type="button" data-goto="create">
+              <span class="space-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM12 12v5M9.5 14.5h5"/></svg>
+              </span>
+              <span class="space-copy"><small>02 / PROJET DE MOD</small><b>Créer un mod</b>
+                <span>Préparer des fiches et assembler les fichiers modifiés dans un dossier de mod.</span>
+                <em>Ouvrir la création <span aria-hidden="true">→</span></em></span>
+            </button>
+          </div>
+
+          <div class="split">
+            <section class="panel">
+              <header class="panel-head"><h3>Projet</h3></header>
+              <ul class="kv-list" id="activity"></ul>
+            </section>
+            <section class="panel">
+              <header class="panel-head">
+                <h3>Export complet</h3>
+                <label class="check" title="Ces fichiers seront signalés comme ignorés dans le rapport">
+                  <input type="checkbox" id="bulk-anim"> BFRES auxiliaires (rapport)</label>
+              </header>
+              <div class="panel-body">
+                <p class="hint">Exporte les textures reconnues en PNG et les modèles en glTF et OBJ,
+                  y compris dans les packs. Les BFRES auxiliaires ne sont pas encore exportés.</p>
+                <button class="btn primary" id="bulk-start">Lancer l'export complet</button>
+                <div class="progress" id="bulk-bar" hidden>
+                  <div class="progress-fill" id="bulk-fill"></div>
+                  <span class="progress-label" id="bulk-label"></span>
+                </div>
+                <ul class="report" id="bulk-report"></ul>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <header class="panel-head"><h3>Dernières actions</h3></header>
+            <ul class="log" id="home-log"></ul>
+          </section>
+        </section>
+
+        <!-- ---------------------------------------------------------- modification -->
+        <section class="view" id="view-edit" hidden>
+          <div class="view-head workspace-head">
+            <div>
+              <p class="eyebrow">ESPACE 01 / MODIFICATION</p>
+              <h2>Modifier l'existant</h2>
+              <p class="muted">Explore les ressources du projet et travaille sur des copies,
+                sans écraser les fichiers source.</p>
+            </div>
+            <button class="btn ghost" type="button" data-goto="create">Vers la création du mod →</button>
+          </div>
+          <div class="section-title"><h3>Que veux-tu modifier ou explorer ?</h3></div>
+          <div class="quick tools-grid">
+            <button class="quick-card" type="button" data-goto="models">
+              <span class="tool-number">01</span><b>Modèles</b>
+              <small>Inspecter, prévisualiser et exporter la géométrie reconnue.</small>
+            </button>
+            <button class="quick-card" type="button" data-goto="ensembles">
+              <span class="tool-number">02</span><b>Ensembles</b>
+              <small>Retrouver les textures et animations associées aux modèles.</small>
+            </button>
+            <button class="quick-card" type="button" data-goto="textures">
+              <span class="tool-number">03</span><b>Textures</b>
+              <small>Exporter ou remplacer une image dans les formats pris en charge.</small>
+            </button>
+            <button class="quick-card" type="button" data-goto="sounds">
+              <span class="tool-number">04</span><b>Sons (expérimental)</b>
+              <small>Écouter, exporter et remplacer les sons BWAV compatibles.</small>
+            </button>
+            <button class="quick-card" type="button" data-goto="import">
+              <span class="tool-number">05</span><b>Importer un modèle</b>
+              <small>Analyser un OBJ ou glTF et injecter sa géométrie dans une cible compatible.</small>
+            </button>
+          </div>
+          <div class="info-note">
+            <strong>Les originaux restent intacts.</strong>
+            Les modifications sont enregistrées dans le dossier de travail ;
+            assemble-les ensuite depuis l'espace création de mod.
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- création de mod -->
+        <section class="view" id="view-create" hidden>
+          <div class="view-head workspace-head">
+            <div>
+              <p class="eyebrow create-accent">ESPACE 02 / CRÉATION DE MOD</p>
+              <h2>Créer un mod</h2>
+              <p class="muted">Rassemble tes modifications et prépare un dossier de mod
+                à partir du projet ouvert.</p>
+            </div>
+            <button class="btn ghost" type="button" data-goto="edit">← Vers la modification</button>
+          </div>
+          <div class="workflow-grid">
+            <section class="panel workflow-step">
+              <header class="panel-head"><h3><span class="step-number">01</span> Fichiers du projet</h3></header>
+              <div class="panel-body">
+                <p class="muted">Les copies modifiées dans l'atelier seront incluses dans l'assemblage.</p>
+                <ul class="kv-list" id="creation-status"><li class="muted">Chargement du projet…</li></ul>
+                <button class="btn ghost" type="button" data-goto="edit">Ouvrir la modification →</button>
+              </div>
+            </section>
+            <section class="panel workflow-step">
+              <header class="panel-head"><h3><span class="step-number">02</span> Fiches de mobs</h3></header>
+              <div class="panel-body">
+                <p class="muted">Prépare une fiche et copie un modèle et des textures sous un nouveau nom.</p>
+                <p class="hint">C'est une préparation de fichiers, pas la création automatique d'un acteur jouable.</p>
+                <button class="btn ghost" type="button" data-goto="mobs">Gérer les fiches →</button>
+              </div>
+            </section>
+          </div>
+          <section class="panel build-panel">
+            <header class="panel-head"><h3><span class="step-number">03</span> Assembler le mod</h3></header>
+            <div class="build-layout">
+              <form class="panel-body" id="mod-form">
+                <label class="field">
+                  <span>Nom du mod</span>
+                  <input name="name" id="mod-name" value="HookyMod" spellcheck="false" required>
+                </label>
+                <p class="hint">Le nom du dossier conserve uniquement les lettres, chiffres, tirets et
+                  caractères <code>_</code> ; les espaces sont retirés. S'il ne reste rien,
+                  le nom utilisé est <code>HookyMod</code>.</p>
+                <p class="warning-note">Attention : le dossier <code>mods/&lt;mod&gt;</code>,
+                  s'il existe déjà, sera entièrement remplacé, sans sauvegarde.</p>
+                <button class="btn primary" type="submit">Assembler dans <code>mods/</code></button>
+              </form>
+              <div class="panel-body build-result">
+                <strong>Résultat de l'assemblage</strong>
+                <p class="hint">Les copies sont rangées dans <code>romfs/</code>, avec un manifeste.
+                  L'assemblage ne met pas à jour la table RESTBL : vérifie les tailles et teste en jeu.</p>
+                <ul class="kv-list" id="mod-log" aria-live="polite"></ul>
+              </div>
+            </div>
+          </section>
+          <div class="warning-note game-limit">
+            <strong>Pour un nouveau mob, il reste du travail côté jeu.</strong>
+            La fiche ne crée ni paramètre d'acteur BYML ni placement sur la carte,
+            et ne met pas à jour RESTBL ou les noms internes du modèle.
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- modèles -->
+        <section class="view" id="view-models" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Modèles</h2>
+              <p class="muted" id="model-count">—</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search" placeholder="Filtrer… (Ctrl+F)">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+              <label class="check"><input type="checkbox" id="model-shots"> vignettes 3D</label>
+            </div>
+          </div>
+          <div class="grid" id="model-grid"></div>
+          <div class="more" id="model-more" hidden>
+            <button class="btn ghost" id="model-more-btn">Afficher plus</button>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- ensembles -->
+        <section class="view" id="view-ensembles" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Ensembles</h2>
+              <p class="muted" id="ensemble-count">Modèles et fichiers associés, regroupés par nom.
+                L'aperçu n'anime pas les ressources.</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search-ens" placeholder="Filtrer…">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+              <label class="check"><input type="checkbox" id="ens-textures" checked>
+                couleurs des textures</label>
+            </div>
+          </div>
+          <div class="grid" id="ensemble-grid"></div>
+          <div class="more" id="ensemble-more" hidden>
+            <button class="btn ghost" id="ensemble-more-btn">Afficher plus</button>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- animations -->
+        <section class="view" id="view-animations" hidden>
+          <div class="view-head">
+            <div><h2>Animations <span class="badge">expérimental</span></h2>
+              <p class="muted" id="animation-count">—</p></div>
+            <div class="toolbar"><input type="search" class="search" id="search-animation" placeholder="Filtrer…"></div>
+          </div>
+          <p class="hint">Ouvre un fichier FSKA, choisis un clip et un modèle compatible pour prévisualiser le mouvement.
+            Les courbes et l'association des os restent expérimentales ; l'export du modèle reste statique.</p>
+          <div class="grid" id="animation-grid"></div>
+          <div class="more" id="animation-more" hidden>
+            <button class="btn ghost" id="animation-more-btn">Afficher plus</button>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- textures -->
+        <section class="view" id="view-textures" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Textures</h2>
+              <p class="muted" id="texture-count">—</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search-tex" placeholder="Filtrer…">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+              <select id="tex-role" title="Ne montrer qu'un type de carte">
+                <option value="">Toutes les cartes</option>
+                <option value="albedo">Albédo (Alb)</option>
+                <option value="normal">Normale (Nrm)</option>
+                <option value="roughness">Rugosité (Rgh)</option>
+                <option value="metallic">Métal (Mtl)</option>
+                <option value="occlusion">Occlusion (AO)</option>
+                <option value="emissive">Émission (Emi)</option>
+                <option value="specular">Spéculaire (Spc)</option>
+                <option value="mask">Masque (Msk)</option>
+                <option value="autre">Inconnu (?)</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid" id="texture-grid"></div>
+          <div class="more" id="texture-more" hidden>
+            <button class="btn ghost" id="texture-more-btn">Afficher plus</button>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- sons -->
+        <section class="view" id="view-sounds" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Sons <span class="badge">expérimental</span></h2>
+              <p class="muted" id="sound-count">—</p>
+            </div>
+            <div class="toolbar">
+              <input type="search" class="search" id="search-sound" placeholder="Filtrer…">
+              <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+            </div>
+          </div>
+          <p class="hint">BWAV PCM16 ou DSP-ADPCM mono/stéréo et Opus mono : écoute et export WAV, MP3, FLAC ou Ogg.
+            Un remplacement écrit une copie BWAV PCM16 expérimentale ; les banques BARS et la compatibilité en jeu ne sont pas validées.</p>
+          <div class="grid" id="sound-grid"></div>
+          <div class="more" id="sound-more" hidden>
+            <button class="btn ghost" id="sound-more-btn">Vérifier plus de sons</button>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- vidéos -->
+        <section class="view" id="view-videos" hidden>
+          <div class="view-head">
+            <div><h2>Vidéos <span class="badge">expérimental</span></h2>
+              <p class="muted" id="video-count">—</p></div>
+            <div class="toolbar"><input type="search" class="search" id="search-video" placeholder="Filtrer…"></div>
+          </div>
+          <p class="hint">Lecture WebM selon les codecs du navigateur. Le remplacement copie un WebM fourni sans transcodage ;
+            la compatibilité en jeu et les données NDVE associées ne sont pas vérifiées ou modifiées.</p>
+          <div class="grid" id="video-grid"></div>
+          <div class="more" id="video-more" hidden><button class="btn ghost" id="video-more-btn">Afficher plus</button></div>
+        </section>
+
+        <!-- ---------------------------------------------------------- mobs -->
+        <section class="view" id="view-mobs" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Fiches de mobs</h2>
+              <p class="muted">Prépare une fiche en copiant des ressources existantes sous un nouveau nom.</p>
+            </div>
+            <button class="btn ghost" type="button" data-goto="create">← Retour à la création du mod</button>
+          </div>
+          <div class="warning-note game-limit">
+            <strong>Fiche préparatoire uniquement.</strong> Les noms internes des ressources ne sont
+            pas modifiés et aucun acteur jouable, placement ni entrée RESTBL n'est créé automatiquement.
+          </div>
+          <div class="split">
+            <section class="panel">
+              <header class="panel-head"><h3>Nouveau mob</h3></header>
+              <form class="panel-body" id="mob-form">
+                <label class="field"><span>Nom affiché</span>
+                  <input name="name" id="mob-name" placeholder="Créature de la forêt" required></label>
+                <label class="field"><span>Parent à noter sur la fiche (facultatif)</span>
+                  <input name="parent" id="mob-parent" placeholder="Animal_Horse"></label>
+                <label class="field"><span>Rechercher une ressource</span>
+                  <input type="search" id="mob-resource-search" placeholder="Nom ou chemin"></label>
+                <label class="field"><span>Modèle source</span>
+                  <select id="mob-model" name="model"></select></label>
+                <label class="field"><span>Textures (plusieurs possibles)</span>
+                  <select id="mob-textures" multiple size="6"></select></label>
+                <p class="hint">Seules les ressources décodées sont proposées, progressivement.</p>
+                <p class="hint" id="mob-validation-status" role="status"></p>
+                <p class="hint" id="mob-texture-validation-status" role="status"></p>
+                <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+                <button class="btn ghost tiny" id="mob-validate-more" type="button" hidden>Vérifier 48 ressources de plus</button>
+                <button class="btn primary" type="submit">Créer la fiche</button>
+              </form>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h3>Fiches existantes</h3></header>
+              <div class="grid small" id="mob-grid"></div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- import de modèle -->
+        <section class="view" id="view-import" hidden>
+          <div class="view-head workspace-head">
+            <div>
+              <p class="eyebrow">OUTIL / GÉOMÉTRIE</p>
+              <h2>Importer un modèle</h2>
+              <p class="muted">Prévisualise un OBJ, glTF ou GLB triangulé puis injecte sa géométrie
+                dans une copie de travail d'un modèle compatible.</p>
+            </div>
+          </div>
+          <div class="warning-note game-limit">
+            <strong>Compatibilité limitée.</strong> Seules certaines structures BFRES 9.x sont réécrites ;
+            l'écriture BFRES 10.x n'est pas disponible. La cible doit avoir une seule forme et un seul niveau de détail, sans squelette,
+            déformation ni bornes à réécrire. La géométrie doit tenir dans les tampons existants.
+            Seuls les matériaux et textures de la cible sont conservés.
+          </div>
+          <div class="split import-layout">
+            <section class="panel">
+              <header class="panel-head"><h3><span class="step-number">01</span> Modèle source</h3></header>
+              <div class="panel-body">
+                <div class="drop" id="model-drop">
+                  <strong>Dépose tes fichiers ici</strong>
+                  <small>OBJ, glTF ou GLB · 64 Mio maximum au total</small>
+                  <button class="btn" id="model-file-choose" type="button">Choisir les fichiers…</button>
+                  <input type="file" id="model-files" accept=".obj,.gltf,.glb,.bin" multiple hidden>
+                </div>
+                <p class="hint">Pour un glTF avec tampons externes, sélectionne aussi les fichiers .bin associés.
+                  Les textures et matériaux du fichier source ne sont pas importés. Les tangentes,
+                  couleurs et UV secondaires non conservables bloquent l'injection.</p>
+                <ul class="import-files" id="model-file-summary" aria-live="polite"><li>Aucun fichier choisi</li></ul>
+                <button class="btn" id="model-inspect" type="button" disabled>Analyser et prévisualiser</button>
+              </div>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h3><span class="step-number">02</span> Cible et transformation</h3></header>
+              <div class="panel-body">
+                <label class="field"><span>Axes du fichier source</span>
+                  <select id="model-axis">
+                    <option value="keep">Conserver les axes (glTF Y vers le haut)</option>
+                    <option value="z_up">Convertir Z vers le haut en Y vers le haut</option>
+                  </select></label>
+                <label class="field"><span>Échelle</span>
+                  <input type="number" id="model-scale" value="1" step="0.1" min="0.001" max="1000"></label>
+                <label class="check"><input type="checkbox" id="model-fit">
+                  adapter à la taille et au centre de la cible</label>
+                <label class="field"><span>Rechercher le modèle cible</span>
+                  <input type="search" id="model-target-search" placeholder="Nom ou chemin"></label>
+                <label class="field"><span>Modèle cible</span>
+                  <select id="model-target"></select></label>
+                <p class="hint">Seules les cibles vérifiées pour cette écriture limitée sont proposées.
+                  L'absence de cible compatible est possible.</p>
+                <p class="hint" id="model-import-validation-status" role="status"></p>
+                <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
+                <button class="btn ghost tiny" id="model-import-validate-more" type="button" hidden>Vérifier 48 modèles de plus</button>
+                <button class="btn primary" id="model-inject" type="button" disabled>Injecter dans la copie de travail</button>
+                <p class="hint">La source du projet reste intacte. Assemble ensuite les modifications dans « Mon mod ».</p>
+              </div>
+            </section>
+            <section class="panel wide">
+              <header class="panel-head"><h3><span class="step-number">03</span> Aperçu et rapport</h3></header>
+              <div class="panel-body">
+                <div class="shots">
+                  <figure><img id="model-source-shot" alt="Aperçu limité du modèle source" hidden><figcaption>Source analysée</figcaption></figure>
+                  <figure><img id="model-result-shot" alt="Aperçu limité de la copie modifiée" hidden><figcaption>Copie modifiée</figcaption></figure>
+                </div>
+                <ul class="report" id="model-import-report" aria-live="polite"><li class="muted">Le rapport apparaîtra ici après l'analyse.</li></ul>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- réglages -->
+        <section class="view" id="view-settings" hidden>
+          <div class="view-head">
+            <div>
+              <h2>Réglages</h2>
+              <p class="muted">Le budget décide de ce que l'aperçu s'autorise. Rien n'est
+                envoyé ailleurs : tout est écrit dans <code>settings.json</code> du dossier
+                de travail.</p>
+            </div>
+            <button class="btn ghost" id="set-reset">Valeurs par défaut</button>
+          </div>
+
+          <div class="split">
+            <section class="panel">
+              <header class="panel-head"><h3>Mémoire</h3></header>
+              <div class="panel-body">
+                <label class="field"><span>Budget des aperçus
+                  <b id="set-vram-out">6 Go</b></span>
+                  <input type="range" id="set-vram" min="1" max="25" step="0.5">
+                </label>
+                <div class="gauge"><div class="gauge-fill" id="set-vram-fill"></div></div>
+                <p class="hint">6 Go évite les plantages sur un poste modeste ; au-delà,
+                  les très gros modèles s'affichent plus finement.</p>
+                <label class="field"><span>Anticrénelage <b id="set-ss-out">×2</b></span>
+                  <input type="range" id="set-ss" min="1" max="4" step="1">
+                </label>
+                <p class="hint">Les vues conservent toutes les faces décodées ; si le budget ne suffit pas, le PNG est refusé.</p>
+                <label class="check"><input type="checkbox" id="set-cull">
+                  culling des faces vues de dos</label>
+                <label class="check"><input type="checkbox" id="set-frustum">
+                  culling des faces hors écran</label>
+                <label class="check"><input type="checkbox" id="set-adaptive">
+                  réduire l'anticrénelage si nécessaire</label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>Interface</h3></header>
+              <div class="panel-body">
+                <label class="field"><span>Thème</span>
+                  <select id="set-theme">
+                    <option value="light">Clair</option>
+                    <option value="dark">Sombre</option>
+                    <option value="newgenoldtendo">NewGenOldtendo</option>
+                  </select></label>
+                <label class="field"><span>Langue</span>
+                  <select id="set-language">
+                    <option value="fr">Français</option>
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                    <option value="zh">简体中文</option>
+                  </select></label>
+                <label class="field"><span>Couleur d'accent</span>
+                  <select id="set-accent"></select></label>
+                <label class="field"><span>Densité</span>
+                  <select id="set-density"></select></label>
+                <label class="check"><input type="checkbox" id="set-textured">
+                  colorer les aperçus avec les textures du modèle</label>
+                <label class="check"><input type="checkbox" id="set-export-textures">
+                  joindre les PNG aux exports glTF / OBJ</label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>Moteur &amp; performances</h3></header>
+              <div class="panel-body">
+                <ul class="kv-list" id="engine-list"></ul>
+                <p class="hint" id="engine-hint">Vérification du moteur…</p>
+                <p class="hint">Portage progressif : les fonctions qui ne sont pas
+                  encore en Rust utilisent le moteur Python existant.</p>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>Mémoire &amp; cache</h3></header>
+              <div class="panel-body">
+                <ul class="kv-list" id="memory-list"></ul>
+                <label class="field"><span>Cache de vignettes <b id="set-cache-out">256 Mo</b></span>
+                  <input type="range" id="set-cache" min="0" max="1024" step="32">
+                </label>
+                <div class="row">
+                  <button class="btn" id="cache-clear">Vider le cache</button>
+                  <button class="btn ghost" id="scan-now">Rescanner le projet</button>
+                </div>
+                <div class="row">
+                  <button class="btn ghost" id="warm-start" type="button">Préparer les vignettes</button>
+                  <button class="btn ghost" id="warm-stop" type="button" hidden>Arrêter</button>
+                </div>
+                <p class="hint" id="warm-status" role="status" aria-live="polite">Préparation non lancée.</p>
+                <p class="hint">La préparation complète est facultative. Les vignettes visibles
+                  passent d'abord et le cache est réutilisé à la prochaine ouverture.</p>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header class="panel-head"><h3>Résumé</h3></header>
+              <ul class="kv-list" id="settings-summary"></ul>
+            </section>
+          </div>
+        </section>
+      </div>
+
+      <section class="console" id="console" hidden>
+        <header class="console-head">
+          <h3>Journal</h3>
+          <button class="btn ghost tiny" id="console-clear">vider</button>
+          <button class="btn ghost tiny" id="console-close">fermer</button>
+        </header>
+        <ol class="log lines" id="console-log"></ol>
+      </section>
+    </main>
+
+    <aside class="inspector" id="inspector" hidden>
+      <header class="inspector-head">
+        <h3 id="inspector-title">Détail</h3>
+        <button class="icon-btn" id="inspector-close" title="Fermer (Échap)">✕</button>
+      </header>
+      <div class="inspector-body" id="inspector-body"></div>
+    </aside>
+  </div>
+
+  <!-- ============================================================ barre d'état -->
+  <footer class="statusbar">
+    <span class="status-dot" id="status-dot"></span>
+    <span id="status-message">prêt</span>
+    <button class="thumb-toggle" id="thumb-toggle" type="button" aria-pressed="false"
+            title="Suspendre les vignettes visibles ; les aperçus détaillés restent disponibles">⏸ Vignettes</button>
+    <span class="scan-warning" id="scan-warning" role="status" hidden>⚠ Scan incomplet</span>
+    <span class="status-gap"></span>
+    <span id="status-counts"></span>
+    <span id="status-budget"></span>
+    <span id="status-project"></span>
+    <span id="status-clock">—</span>
+  </footer>
+</div>
+
+<!-- ============================================================ palette -->
+<div class="palette" id="palette" hidden>
+  <div class="palette-box">
+    <input id="palette-input" placeholder="Taper une commande, un modèle, une texture…"
+           autocomplete="off" spellcheck="false">
+    <ul class="palette-list" id="palette-list"></ul>
+  </div>
+</div>
+<section class="export-result" id="export-result" aria-live="polite" hidden>
+  <button class="icon-btn export-dismiss" id="export-dismiss" type="button" title="Fermer">✕</button>
+  <strong id="export-result-title">Export prêt</strong>
+  <p>Le dossier sur cet ordinateur :</p>
+  <code id="export-result-folder"></code>
+  <div class="actions">
+    <a class="btn primary tiny" id="export-download" download>Télécharger le ZIP</a>
+  </div>
+  <p class="hint" id="export-result-note">Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.</p>
+  <p class="warning-note export-warnings" id="export-result-warnings" role="status" hidden></p>
+</section>
+<section class="native-download-result" id="native-download-result" aria-live="polite" hidden>
+  <button class="icon-btn export-dismiss" id="native-download-dismiss" type="button" title="Fermer">✕</button>
+  <strong id="native-download-title"></strong>
+  <code id="native-download-path"></code>
+</section>
+<div class="toasts" id="toasts"></div>
+
+<script src="/static/thumbnails.js"></script>
+<script src="/static/asset_checks.js"></script>
+<script src="/static/session.js"></script>
+<script src="/static/i18n.js"></script>
+<script src="/static/model_animation.js"></script>
+<script src="/static/model_viewer.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
