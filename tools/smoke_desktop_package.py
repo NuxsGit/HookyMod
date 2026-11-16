@@ -12,6 +12,7 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -56,6 +57,28 @@ def macos_bundle_paths(volume: Path) -> tuple[Path, Path, Path]:
             contents / "Resources" / "licenses")
 
 
+def detach_dmg(mount: Path) -> None:
+    """Allow transient OS activity to release the image, but require a real detach."""
+    command = ["hdiutil", "detach", str(mount)]
+    for attempt in range(4):
+        try:
+            subprocess.run(command, check=True, timeout=60, text=True, capture_output=True)
+            return
+        except subprocess.CalledProcessError as error:
+            output = "\n".join(part for part in (error.stdout, error.stderr) if part)
+            if output:
+                print(output, file=sys.stderr, flush=True)
+            # Do not force an unmount or ignore errors: the smoke test must fail
+            # if the volume remains busy or hdiutil reports another problem.
+            if attempt == 3 or "resource busy" not in output.lower():
+                raise
+            delay = 2 * (attempt + 1)
+            print(f"Image disque occupée : nouvelle tentative dans {delay} s.",
+                  file=sys.stderr, flush=True)
+            time.sleep(delay)
+    raise AssertionError("Nombre de tentatives inattendu")
+
+
 @contextmanager
 def mounted_dmg(package: Path, mount: Path):
     """Mount read-only and always detach, including after a failed smoke test."""
@@ -67,7 +90,7 @@ def mounted_dmg(package: Path, mount: Path):
     try:
         yield mount
     finally:
-        subprocess.run(["hdiutil", "detach", str(mount)], check=True, timeout=60)
+        detach_dmg(mount)
 
 
 def verify_contents(app: Path, backend: Path, license_dir: Path, *, executable: bool) -> None:
