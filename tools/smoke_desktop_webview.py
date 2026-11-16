@@ -403,7 +403,7 @@ def run(application: Path) -> None:
                       && result.textContent.includes('Clé imaginaire');
                 """)
                 driver.click_scrolled('#studio-export')
-                design = completed_download(driver, str(clip))
+                design = completed_download(driver, str(grouped))
                 downloads.append(design)
                 assert design.name.startswith('hookymods--') and design.suffix == '.hooky'
                 with zipfile.ZipFile(design) as archive:
