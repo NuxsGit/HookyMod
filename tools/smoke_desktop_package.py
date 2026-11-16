@@ -60,8 +60,10 @@ def macos_bundle_paths(volume: Path) -> tuple[Path, Path, Path]:
 def mounted_dmg(package: Path, mount: Path):
     """Mount read-only and always detach, including after a failed smoke test."""
     mount.mkdir()
+    # Tauri puts the project's license agreement in the DMG. In CI, hdiutil
+    # presents it on stdin; an explicit acceptance avoids an interactive hang.
     subprocess.run(["hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint",
-                    str(mount), str(package)], check=True, timeout=180)
+                    str(mount), str(package)], input="Y\n", text=True, check=True, timeout=180)
     try:
         yield mount
     finally:

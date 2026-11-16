@@ -112,10 +112,12 @@ def test_macos_bundle_rejects_executable_path_traversal(tmp_path):
 
 def test_macos_dmg_is_detached_even_when_smoke_test_fails(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(package_smoke.subprocess, "run", lambda args, **kwargs: calls.append(args))
+    monkeypatch.setattr(package_smoke.subprocess, "run",
+                        lambda args, **kwargs: calls.append((args, kwargs)))
     image, volume = tmp_path / "app.dmg", tmp_path / "mount"
     with pytest.raises(RuntimeError, match="failure"):
         with package_smoke.mounted_dmg(image, volume):
             raise RuntimeError("failure")
-    assert calls[0][:4] == ["hdiutil", "attach", "-readonly", "-nobrowse"]
-    assert calls[1] == ["hdiutil", "detach", str(volume)]
+    assert calls[0][0][:4] == ["hdiutil", "attach", "-readonly", "-nobrowse"]
+    assert calls[0][1]["input"] == "Y\n" and calls[0][1]["text"] is True
+    assert calls[1][0] == ["hdiutil", "detach", str(volume)]
