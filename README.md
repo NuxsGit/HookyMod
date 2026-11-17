@@ -148,4 +148,8 @@ Third-party components retain their own licenses and notices, and prior rights v
 
 Voluntary donations with no goods, services, access or other benefits in return are welcome but never required to obtain or use the software.
 
+
 Solana address: `y8eeEqNTo7pANwRVvwsrNDu9gpPTFYW5FrP2oMUtfhZ`.
+
+polygon adress:
+`0xb7b8ed7b3d86ccf0ff0b0239b1a01584a85c12c6`.
