@@ -3,17 +3,13 @@ name: Nightly Release
 on:
   push:
     branches: [ "main" ]
-  # Optionnel : pour lancer aussi la nightly automatiquement tous les soirs à minuit UTC
-  # schedule:
-  #   - cron: '0 0 * * *'
 
 jobs:
   release:
-  
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write # Nécessaire pour créer les releases et modifier les tags
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -25,27 +21,30 @@ jobs:
           node-version: '20.x'
           cache: 'npm'
 
-      - name: Install dependencies & build
+      - name: Install dependencies & Build
         run: |
           npm ci
           npm run build --if-present
+
+      # ==========================================
+      # AJOUTE ICI TON ÉTAPE DE BUILD / PACKAGING 
+      # (Exemple si tu utilises Tauri ou un bundler)
+      # ==========================================
+      # - name: Build App Installers
+      #   run: npm run tauri build # ou la commande spécifique de ton projet
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Remove existing Nightly Tag & Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="night"
-          
-          # Supprimer le tag distant s'il existe déjà
           git push origin --delete $TAG || true
-          
-          # Supprimer la release GitHub associée s'il elle existe
           gh release delete $TAG --yes || true
-          
-          # Supprimer le tag en local
           git tag -d $TAG || true
 
-      - name: Create Nightly Release
+      - name: Create Nightly Release & Upload Assets
         uses: softprops/action-gh-release@v1
         with:
           tag_name: "night"
@@ -57,8 +56,12 @@ jobs:
             * Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
           draft: false
           prerelease: true
-          # Tu peux ajouter des fichiers générés ici si ton build en produit (ex: dist/*, *.AppImage, etc.)
-          # files: |
-          #   dist/*
+          # C'est ici que tu indiques les chemins vers tes installateurs générés :
+          files: |
+            dist/*
+            # Si tu utilises Tauri, les binaires se trouvent généralement dans :
+            # src-tauri/target/release/bundle/nsis/*.exe
+            # src-tauri/target/release/bundle/deb/*.deb
+            # src-tauri/target/release/bundle/dmg/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
