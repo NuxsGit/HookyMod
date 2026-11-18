@@ -1,0 +1,64 @@
+name: Nightly Release
+
+on:
+  push:
+    branches: [ "main" ]
+  # Optionnel : pour lancer aussi la nightly automatiquement tous les soirs à minuit UTC
+  # schedule:
+  #   - cron: '0 0 * * *'
+
+jobs:
+  release:
+  
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # Nécessaire pour créer les releases et modifier les tags
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies & build
+        run: |
+          npm ci
+          npm run build --if-present
+
+      - name: Remove existing Nightly Tag & Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="night"
+          
+          # Supprimer le tag distant s'il existe déjà
+          git push origin --delete $TAG || true
+          
+          # Supprimer la release GitHub associée s'il elle existe
+          gh release delete $TAG --yes || true
+          
+          # Supprimer le tag en local
+          git tag -d $TAG || true
+
+      - name: Create Nightly Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: "night"
+          name: "Nightly Build 🌙"
+          body: |
+            Automated nightly build derived from the latest changes on `main`.
+            
+            * Commit: `${{ github.sha }}`
+            * Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          draft: false
+          prerelease: true
+          # Tu peux ajouter des fichiers générés ici si ton build en produit (ex: dist/*, *.AppImage, etc.)
+          # files: |
+          #   dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
