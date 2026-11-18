@@ -830,8 +830,8 @@ async function openModel(rel, options = {}) {
       if (serial !== animationRequest || canvas !== $("#model-canvas")) return;
       const clips = result.clips.filter((clip) => clip.supported);
       animClip.innerHTML = clips.length ? clips.map((clip) => `<option value="${clip.index}">${esc(clip.name)} · ${clip.frames} images</option>`).join("")
-        : '<option value="">Aucun clip Euler pris en charge</option>';
-      if (!clips.length) { animStatus.textContent = "Aucun clip squelettique Euler pris en charge."; return; }
+        : '<option value="">Aucun clip avec en-tête pris en charge</option>';
+      if (!clips.length) { animStatus.textContent = "Aucun en-tête de clip squelettique pris en charge."; return; }
       animClip.disabled = false;
       if (preferred !== null && clips.some((clip) => clip.index === preferred)) animClip.value = String(preferred);
       await loadSelectedClip();
@@ -865,6 +865,11 @@ async function openModel(rel, options = {}) {
         onStatus: (message) => { if (modelViewport === viewport) viewStatus.textContent = message; },
         onFailure: failView,
         onModeFallback: () => { if (modelViewport === viewport) $("#model-upscale").value = "native"; },
+        onAnimationError: (message) => {
+          if (modelViewport !== viewport || !animFrame) return;
+          animFrame.disabled = true; animPlay.disabled = true;
+          animStatus.textContent = `Animation interrompue, pose de repos : ${message}`;
+        },
         onAnimationFrame: (frame, playing) => {
           if (modelViewport !== viewport || !animFrame) return;
           animFrame.value = String(frame);
@@ -968,7 +973,7 @@ async function openAnimation(rel) {
   const filename = rel.split("/").pop();
   showInspector("Animation", `
     <h3 data-no-i18n>${esc(filename)}</h3><div class="sub" data-no-i18n>${esc(rel)}</div>
-    <p>${result.clips.length} clip(s) squelettique(s), ${clips.length} en rotations Euler prises en charge.</p>
+    <p>${result.clips.length} clip(s) squelettique(s), ${clips.length} avec en-tête pris en charge ; courbes vérifiées à l'ouverture.</p>
     <label>Clip <select id="animation-clip" ${clips.length ? "" : "disabled"}>
       ${clips.map((c) => `<option value="${c.index}">${esc(c.name)} · ${c.frames} images</option>`).join("")}</select></label>
     <label>Modèle à associer <select id="animation-model" ${models.length ? "" : "disabled"}>

@@ -18,10 +18,16 @@ from pathlib import Path
 from hookycreator.project import Project
 from hookymod import bfres_v10, blender
 from tests import synth
+from tests.synth_animation import (
+    fska_fixture,
+    fska_mixed_quaternion_fixture,
+    fska_two_clips_with_jump,
+    named_rigid_model,
+    player_variant,
+)
 from tests.test_bfres_v10 import DataDrivenTests, make_v10
 from tests.test_bfres_v10_struct import structured_model
 from tests.test_ensembles_blend import _make_project
-from tests.synth_animation import fska_fixture, fska_two_clips_with_jump, named_rigid_model
 
 BLENDER = os.environ.get("HOOKY_TEST_BLENDER") or shutil.which("blender")
 
@@ -79,7 +85,7 @@ print("HOOKY_VERIFY=" + json.dumps({"objects": len(meshes),
                     completed = subprocess.run(
                         [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
                          "--python", str(script), "--", str(source), kind],
-                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
                     self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
                     line = next((line for line in completed.stdout.splitlines()
                                  if line.startswith("HOOKY_VERIFY=")), "")
@@ -169,7 +175,7 @@ print("HOOKY_MATERIALS=" + json.dumps({"faces": faces, "materials": materials}))
                     completed = subprocess.run(
                         [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
                          "--python", str(script), "--", str(folder / f"Objet.{kind}"), kind],
-                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
                     self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
                     line = next((line for line in completed.stdout.splitlines()
                                  if line.startswith("HOOKY_MATERIALS=")), "")
@@ -231,7 +237,7 @@ print("HOOKY_ANIMATION=" + json.dumps({"bones": sorted(b.name for b in armature.
             completed = subprocess.run(
                 [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
                  "--python", str(script), "--", str(glb)],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_ANIMATION=")), "")
             self.assertTrue(line, completed.stdout + completed.stderr)
@@ -245,9 +251,152 @@ print("HOOKY_ANIMATION=" + json.dumps({"bones": sorted(b.name for b in armature.
                 for value, want in zip(actual, expected):
                     self.assertAlmostEqual(value, want, delta=.001)
 
+    def test_scaled_mixed_rotation_and_constant_ssc_in_blender(self) -> None:
+        """Check evaluated vertices for scaled and compensated synthetic rigs."""
+        import struct
+
+        from hookycreator import model_skin
+        from hookymod import animation, gltf_animation
+
+        with tempfile.TemporaryDirectory(prefix="hooky-player-consumer-") as tmp:
+            tmp = Path(tmp)
+            paths = []
+            for label, compensate, rest_scale, animated_scale, move_child in (
+                ("no_ssc", False, (2., 3., 4.), (1., 1., 1.), False),
+                ("shear", False, (2., 3., 4.), (2., 3., 4.), False),
+                ("uniform", True, (2., 2., 2.), (1., 1., 1.), False),
+                ("nonuniform", True, (2., 3., 4.), (2., 3., 4.), True),
+                ("mirrored", True, (-2., 3., 4.), (-2., 3., 4.), True),
+            ):
+                data = bytearray(player_variant(compensate=compensate))
+                struct.pack_into("<3f", data, 0x1580 + 0x30, *rest_scale)
+                # Non-right-angle rest rotation also creates world-space shear
+                # for the nonuniform, uncompensated parent scenario.
+                struct.pack_into("<f", data, 0x1580 + 0x58 + 0x44, .6)
+                meshes, report = bfres_v10.parse(bytes(data))
+                packet = model_skin.encode(bytes(data), meshes, structured=report.structured)
+                skin = model_skin.decode(packet, meshes)
+                clip = animation.read_clip(fska_mixed_quaternion_fixture(), 0)
+                clip["bones"][0]["base"]["scale"] = animated_scale
+                if move_child:
+                    clip["bones"][1]["curves"].append({
+                        "target": "translation.y", "interpolation": "cubic", "frames": [0., 10.],
+                        "values": [2., 3.], "slopes": [.1, .1]})
+                path = blender.export_bundle(meshes, tmp, label, formats=("glb",),
+                                             animation=gltf_animation.bind(skin, clip))["glb"]
+                paths.append((path, compensate, animated_scale, move_child))
+
+            script = tmp / "inspect_scaled_player.py"
+            script.write_text('''
+import bpy, json, math, sys
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.gltf(filepath=sys.argv[sys.argv.index("--") + 1])
+arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+obj = next(o for o in bpy.data.objects if o.type == "MESH" and o.name == "Forme_A")
+assert arm.animation_data and arm.animation_data.action
+assert any(m.type == "ARMATURE" and m.object == arm for m in obj.modifiers)
+fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+samples = []
+for source_frame in (0., 1.25, 5., 7.5, 10.):
+    frame = source_frame * fps / 30
+    bpy.context.scene.frame_set(math.floor(frame), subframe=frame-math.floor(frame))
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    mesh = evaluated.to_mesh()
+    points = [evaluated.matrix_world @ mesh.vertices[i].co for i in (0, 1, 2)]
+    samples.append([[float(v) for v in point] for point in points])
+    evaluated.to_mesh_clear()
+print("HOOKY_PLAYER=" + json.dumps({"bones": sorted(b.name for b in arm.data.bones), "samples": samples}))
+''', encoding="utf-8")
+            for path, compensate, parent_scale, move_child in paths:
+                with self.subTest(path=path.name):
+                    completed = subprocess.run(
+                        [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
+                         "--python", str(script), "--", str(path)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
+                    self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                    line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_PLAYER=")), "")
+                    self.assertTrue(line, completed.stdout + completed.stderr)
+                    verified = json.loads(line.partition("=")[2])
+                    bones = ["Child", "Root"] + (["__HookySSC_1_Child"] if compensate else [])
+                    self.assertEqual(verified["bones"], sorted(bones))
+                    for frame, points in zip((0., 1.25, 5., 7.5, 10.), verified["samples"]):
+                        # Root: x=0.2f, rotation Z=pi*f/20. The child's
+                        # translation inherits the parent scale even with SSC.
+                        root, child = math.pi * frame / 20, .05 * frame
+                        offset = parent_scale[1] * (2 + (.1 * frame if move_child else 0))
+                        sx, sy, sz = (1., 1., 1.) if compensate else parent_scale
+                        expected = []
+                        for u, v in ((0., 0.), (1., 0.), (0., 1.)):
+                            x = sx * (math.cos(child)*u - math.sin(child)*v)
+                            y = offset + sy * (math.sin(child)*u + math.cos(child)*v)
+                            expected.append((.2*frame + math.cos(root)*x - math.sin(root)*y,
+                                             -.125*sz, math.sin(root)*x + math.cos(root)*y))
+                        for actual, want in zip(points, expected):
+                            for value, coordinate in zip(actual, want):
+                                self.assertAlmostEqual(value, coordinate, delta=.002)
+
+    def test_switching_grouped_ssc_actions_restores_helper_channels(self) -> None:
+        from hookycreator import model_skin
+        from hookymod import animation, gltf_animation
+
+        with tempfile.TemporaryDirectory(prefix="hooky-ssc-switch-") as tmp:
+            data = player_variant()
+            meshes, report = bfres_v10.parse(data)
+            skin = model_skin.decode(model_skin.encode(data, meshes, structured=report.structured), meshes)
+            first = animation.read_clip(fska_mixed_quaternion_fixture(), 0)
+            first["name"] = "Small"
+            first["bones"][1]["curves"].append({
+                "target": "translation.y", "interpolation": "cubic", "frames": [0., 10.],
+                "values": [2., 3.], "slopes": [.1, .1]})
+            second = animation.read_clip(fska_mixed_quaternion_fixture(), 0)
+            second["name"] = "Large"
+            second["bones"][0]["base"]["scale"] = [2., 3., 4.]
+            bindings = [gltf_animation.bind(skin, clip) for clip in (first, second)]
+            glb = blender.export_bundle(meshes, tmp, "ssc-actions", formats=("glb",), animations=bindings)["glb"]
+            script = Path(tmp) / "switch_ssc.py"
+            script.write_text("""
+import bpy, json, math, sys
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.gltf(filepath=sys.argv[sys.argv.index('--') + 1])
+arm = next(o for o in bpy.data.objects if o.type == 'ARMATURE')
+obj = next(o for o in bpy.data.objects if o.type == 'MESH' and o.name == 'Forme_A')
+for track in arm.animation_data.nla_tracks:
+    track.mute = True
+fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+samples = []
+for name in ('Small', 'Large', 'Small', 'Large'):
+    arm.animation_data.action = next(a for a in bpy.data.actions if a.name.startswith(name))
+    frame = 5 * fps / 30
+    bpy.context.scene.frame_set(math.floor(frame), subframe=frame-math.floor(frame))
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    mesh = evaluated.to_mesh()
+    points = [list(evaluated.matrix_world @ mesh.vertices[i].co) for i in (0, 1)]
+    evaluated.to_mesh_clear()
+    samples.append({'name': name, 'points': points})
+print('HOOKY_SSC_SWITCH=' + json.dumps(samples))
+""", encoding="utf-8")
+            completed = subprocess.run(
+                [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
+                 "--python", str(script), "--", str(glb)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_SSC_SWITCH=")), "")
+            self.assertTrue(line, completed.stdout + completed.stderr)
+            root, child = math.pi / 4, math.pi / 4 + .25
+            for sample in json.loads(line.partition("=")[2]):
+                offset = 2.5 if sample["name"] == "Small" else 6.
+                x, y = 1. - offset * math.sin(root), offset * math.cos(root)
+                expected = ((x, -.125, y), (x + math.cos(child), -.125, y + math.sin(child)))
+                for actual, want in zip(sample["points"], expected):
+                    for value, coordinate in zip(actual, want):
+                        self.assertAlmostEqual(value, coordinate, delta=.002)
+
     def test_blender_imports_one_glb_with_two_distinct_actions_on_one_skin(self) -> None:
-        from hookymod import animation
         from urllib.parse import parse_qs, urlparse
+
+        from hookymod import animation
         with tempfile.TemporaryDirectory(prefix="hooky-multi-consumer-") as tmp:
             root = Path(tmp) / "source"
             root.mkdir()
@@ -295,7 +444,7 @@ print('HOOKY_MULTI=' + json.dumps({'bones': sorted(b.name for b in arm.data.bone
             completed = subprocess.run(
                 [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
                  "--python", str(script), "--", str(glb)],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_MULTI=")), "")
             self.assertTrue(line, completed.stdout + completed.stderr)
@@ -344,7 +493,7 @@ print('HOOKY_SWITCH=' + json.dumps(samples))
             completed = subprocess.run(
                 [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
                  "--python", str(script), "--", str(glb)],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_SWITCH=")), "")
             self.assertTrue(line, completed.stdout + completed.stderr)
@@ -393,7 +542,7 @@ print("HOOKY_JUMP=" + json.dumps({"actions": [a.name for a in bpy.data.actions],
             completed = subprocess.run(
                 [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
                  "--python", str(script), "--", str(result["glb"])],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_JUMP=")), "")
             self.assertTrue(line, completed.stdout + completed.stderr)
@@ -423,7 +572,7 @@ print("HOOKY_WEIGHTS=" + json.dumps(weights))
             completed = subprocess.run(
                 [BLENDER, "--background", "--factory-startup", "--python-exit-code", "7",
                  "--python", str(script), "--", str(result["glb"])],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False)
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             line = next((line for line in completed.stdout.splitlines() if line.startswith("HOOKY_WEIGHTS=")), "")
             self.assertTrue(line, completed.stdout + completed.stderr)

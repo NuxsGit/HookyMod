@@ -342,16 +342,16 @@ async function main() {
     await translated.goto(`http://127.0.0.1:${server.address().port}/i18n`);
     assert.ok(await translated.evaluate(() => !!window.HookyI18n), JSON.stringify(errors));
     for (const [lang, heading, dynamic, summary, clip] of [
-      ["en", "Settings", "Videos", "5.62 MiB · source file", "1 skeletal clip(s), 1 with supported Euler rotations."],
-      ["ru", "Настройки", "Видео", "5.62 MiB · исходный файл", "Скелетных клипов: 1; с поддерживаемыми вращениями Эйлера: 1."],
-      ["zh", "设置", "视频", "5.62 MiB · 源文件", "1 个骨骼片段，其中 1 个使用受支持的欧拉旋转。"],
-      ["fr", "Réglages", "Vidéos", "5.62 MiB · fichier source", "1 clip(s) squelettique(s), 1 en rotations Euler prises en charge."],
+      ["en", "Settings", "Videos", "5.62 MiB · source file", "1 skeletal clip(s), 1 with a supported header; curves are checked on opening."],
+      ["ru", "Настройки", "Видео", "5.62 MiB · исходный файл", "Скелетных клипов: 1, с поддерживаемым заголовком: 1; кривые проверяются при открытии."],
+      ["zh", "设置", "视频", "5.62 MiB · 源文件", "1 个骨骼片段，其中 1 个标头受支持；打开时检查曲线。"],
+      ["fr", "Réglages", "Vidéos", "5.62 MiB · fichier source", "1 clip(s) squelettique(s), 1 avec en-tête pris en charge ; courbes vérifiées à l'ouverture."],
     ]) {
       await translated.evaluate((value) => {
         HookyI18n.setLanguage(value);
         document.querySelector("#dynamic").textContent = "Vidéos";
         document.querySelector("#summary").textContent = "5.62 MiB · fichier source";
-        document.querySelector("#animation").textContent = "1 clip(s) squelettique(s), 1 en rotations Euler prises en charge.";
+        document.querySelector("#animation").textContent = "1 clip(s) squelettique(s), 1 avec en-tête pris en charge ; courbes vérifiées à l'ouverture.";
         document.querySelector("#validation").textContent = "1 modèle(s) vérifié(s) · 2 en vérification · 3 non pris en charge masqué(s)";
       }, lang);
       await translated.waitForFunction((value) => document.querySelector("#dynamic").textContent === value, dynamic);
@@ -380,6 +380,10 @@ async function main() {
           && !viewStatus.includes("non affichées") && !viewStatus.includes("albédos"), viewStatus);
         const diagnostic = await translated.evaluate(() => HookyI18n.translate("Non restauré : User/Example.bfres"));
         assert.ok(diagnostic.includes("User/Example.bfres") && !diagnostic.startsWith("Non restauré"));
+        const poseError = await translated.evaluate(() => HookyI18n.translate("Animation interrompue, pose de repos : Matrice d'animation singulière."));
+        assert.ok(!poseError.includes("Animation interrompue") && !poseError.includes("singulière"), poseError);
+        const scaleError = await translated.evaluate(() => HookyI18n.translate("Animation indisponible : Compensation d'échelle impossible pour « UserBone » : échelle parent nulle."));
+        assert.ok(scaleError.includes("UserBone") && !scaleError.includes("échelle"), scaleError);
       }
     }
     await translated.close();

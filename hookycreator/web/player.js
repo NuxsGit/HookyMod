@@ -226,6 +226,11 @@ if (typeof window !== "undefined") window.HookyPlayer = (() => {
           if (!sameView(v, serial)) return;
           failViewport(text);
         },
+        onAnimationError: (message) => {
+          if (!sameView(v, serial)) return;
+          $("#player-frame").disabled = true; $("#player-play").disabled = true;
+          $("#player-animation-status").textContent = `Animation interrompue, pose de repos : ${message}`;
+        },
         onAnimationFrame: (frame, playing) => {
           if (!sameView(v, serial)) return;
           $("#player-frame").value = String(frame);
@@ -311,8 +316,8 @@ if (typeof window !== "undefined") window.HookyPlayer = (() => {
       const clips = result.clips.filter((clip) => clip.supported);
       const select = $("#player-animation-clip");
       select.innerHTML = clips.length ? clips.map((clip) => `<option data-no-i18n value="${clip.index}">${esc(clip.name)} · ${clip.frames} images</option>`).join("")
-        : '<option value="">Aucun clip Euler pris en charge</option>';
-      if (!clips.length) { $("#player-animation-status").textContent = "Aucun clip squelettique Euler pris en charge."; return; }
+        : '<option value="">Aucun clip avec en-tête pris en charge</option>';
+      if (!clips.length) { $("#player-animation-status").textContent = "Aucun en-tête de clip squelettique pris en charge."; return; }
       select.disabled = false;
       if (preferred !== null && clips.some((clip) => clip.index === preferred)) select.value = String(preferred);
       await loadSelectedClip();

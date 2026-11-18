@@ -12,10 +12,10 @@ const readline = require("node:readline");
 const { chromium } = require(process.env.HOOKY_PLAYWRIGHT || "playwright-core");
 const ROOT = path.resolve(__dirname, "..");
 const PYTHON_SERVER = String.raw`
-import json, struct, sys
+import json, math, struct, sys
 from pathlib import Path
 from hookycreator.server import HookyCreatorServer
-from tests.synth_animation import fska_fixture, named_rigid_model
+from tests.synth_animation import fska_fixture, fska_mixed_quaternion_fixture, named_rigid_model, player_variant
 from tests import synth
 base = Path(sys.argv[1]); root = base / 'source'; model = root / 'Model'; model.mkdir(parents=True)
 rig = named_rigid_model()
@@ -34,6 +34,34 @@ for age in ('Child', 'Adult'):
 # A second clip deliberately starts far from the model's rest pose; it checks
 # that the optional camera follow keeps root motion in frame.
 (model / 'Offset.anim.bfres').write_bytes(fska_fixture())
+# Mixed rotations and nonuniform rest scale with Maya SSC, without game data.
+scaled = player_variant()
+for name in ('Player_Child_Scaled', 'Armor_Child_Scaled'):
+    (model / f'{name}.bfres').write_bytes(scaled)
+mixed = bytearray(fska_mixed_quaternion_fixture())
+struct.pack_into('<3f', mixed, 0x360, 2., 3., 4.)
+struct.pack_into('<4f', mixed, 0x520, 5., .1, 6., .1)
+struct.pack_into('<8f', mixed, 0x900, 0., 0., math.sin(math.pi/4), math.cos(math.pi/4),
+                 0., 0., -math.sin(3*math.pi/8), -math.cos(3*math.pi/8))
+struct.pack_into('<4f', mixed, 0x760, 0., 0., math.pi/2, 1.)
+struct.pack_into('<4f', mixed, 0x7b0, math.pi/2, .05, math.pi/2 + .5, .05)
+(model / 'Player_Child_Scaled_Animation.anim.bfres').write_bytes(mixed)
+# This clip's second track matches only the outfit, not the base. Its later
+# zero scale exercises failure and recovery of an independent outfit skin.
+outfit_only = bytearray(scaled)
+outfit_only[0x1822:0x1827] = b'Outft'
+(model / 'Armor_Child_OnlySingular.bfres').write_bytes(outfit_only)
+outfit_singular = bytearray(mixed)
+outfit_singular[0x2a2:0x2a7] = b'Outft'
+struct.pack_into('<I', outfit_singular, 0x714, 0x04)
+struct.pack_into('<4f', outfit_singular, 0x7b0, 1., -.1, 0., -.1)
+(model / 'OutfitSingular.anim.bfres').write_bytes(outfit_singular)
+# A later singular frame must stop playback without destroying the viewport.
+singular = bytearray(fska_fixture())
+struct.pack_into('<H', singular, 0x440, 0x0002)
+struct.pack_into('<I', singular, 0x444, 0x04)
+struct.pack_into('<4f', singular, 0x550, 1., -.1, 0., -.1)
+(model / 'Singular.anim.bfres').write_bytes(singular)
 server = HookyCreatorServer(root, base / 'work', host='0.0.0.0', port=0).start()
 print(json.dumps({'origin': 'http://127.0.0.1:' + str(server.port), 'root': str(root)}), flush=True)
 try: sys.stdin.read()
@@ -452,6 +480,98 @@ async function main() {
     assert.equal(await page.locator("#player-base").inputValue(), "Model/Player_Child.bfres");
     assert.equal(await page.locator("#player-animation-file").inputValue(), "Model/Player_Child_Animation.anim.bfres");
     assert.equal(await page.locator("#player-play").isDisabled(), false);
+
+    // Player-like synthetic variant: scaled mixed-mode skeleton, quaternion
+    // animation, independent outfit skin and a bone-mounted object.
+    await page.setViewportSize({ width: 1400, height: 960 });
+    await page.locator("#player-family").selectOption("all");
+    await page.locator("#player-base").selectOption("Model/Player_Child_Scaled.bfres");
+    await page.waitForFunction(() => document.querySelector("#player-bone")?.options.length === 3);
+    await page.locator("#player-animation-file").selectOption("Model/Player_Child_Scaled_Animation.anim.bfres");
+    await page.waitForFunction(() => document.querySelector("#player-animation-status")?.textContent.includes("2 os associés"));
+    await page.locator("#player-slot").selectOption("body");
+    await page.locator("#player-equipment").selectOption("Model/Armor_Child_Scaled.bfres");
+    await page.locator("#player-equip").click();
+    await page.waitForFunction(() => document.querySelector("#player-equipped")?.textContent.includes("2 os associés"));
+    const scaledPixels = await page.evaluate(() => {
+      const v = window.__playerViewports.at(-1), gl = v.gl;
+      v.playAnimation(false); v.setBaseVisible(false); v.yaw = 0; v.pitch = 0;
+      const capture = (frame) => {
+        v.seekAnimation(frame); v.draw();
+        const pixels = new Uint8Array(v.canvas.width * v.canvas.height * 4);
+        gl.readPixels(0, 0, v.canvas.width, v.canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        return pixels;
+      };
+      const first = capture(0), last = capture(8), rest = HookyAnimation.pose(v.animation.binding, 0);
+      let visibleFirst = 0, visibleLast = 0, different = 0;
+      for (let i = 0; i < first.length; i += 4) {
+        if (first[i] > 50 || first[i+1] > 50 || first[i+2] > 50) visibleFirst += 1;
+        if (last[i] > 50 || last[i+1] > 50 || last[i+2] > 50) visibleLast += 1;
+        if (first[i] !== last[i] || first[i+1] !== last[i+1] || first[i+2] !== last[i+2]) different += 1;
+      }
+      v.setBaseVisible(true);
+      return { visibleFirst, visibleLast, different, error: gl.getError(),
+        firstMatrix: [...rest.palette.slice(0, 12)], secondMatrix: [...rest.palette.slice(24, 36)],
+        independent: v.layers.get("body").skin !== v.skin };
+    });
+    assert.equal(scaledPixels.error, 0); assert.equal(scaledPixels.independent, true);
+    assert.ok(scaledPixels.visibleFirst > 100 && scaledPixels.visibleLast > 100 && scaledPixels.different > 100,
+      `scaled mixed-mode outfit must be visible and move: ${JSON.stringify(scaledPixels)}`);
+    const identity = [1,0,0,0, 0,1,0,0, 0,0,1,0];
+    for (const matrix of [scaledPixels.firstMatrix, scaledPixels.secondMatrix])
+      matrix.forEach((value, i) => assert.ok(Math.abs(value - identity[i]) < 1e-5, JSON.stringify(matrix)));
+    await page.locator("#player-slot").selectOption("right");
+    await page.locator("#player-equipment").selectOption("Model/Weapon_Sword_Test.bfres");
+    await page.locator("#player-bone").selectOption("Child");
+    await page.locator("#player-equip").click();
+    await page.waitForFunction(() => document.querySelector("#player-equipped")?.textContent.includes("Attaché à Child"));
+    const mounted = await page.evaluate(() => {
+      const v = window.__playerViewports.at(-1), gl = v.gl;
+      v.seekAnimation(5); v.draw();
+      return { actual: [...gl.getUniform(v.scene, gl.getUniformLocation(v.scene, "u_attachment"))],
+        world: HookyAnimation.pose(v.animation.binding, 5).worlds[1], error: gl.getError() };
+    });
+    assert.equal(mounted.error, 0);
+    const w = mounted.world, expectedAttachment = [w[0],w[4],w[8],0, w[1],w[5],w[9],0,
+      w[2],w[6],w[10],0, w[3],w[7],w[11],1];
+    mounted.actual.forEach((value, i) => assert.ok(Math.abs(value - expectedAttachment[i]) < 1e-5));
+
+    // A zero scale reached later in playback is reported rather than silently
+    // substituting an identity matrix; the outfit and WebGL view survive.
+    await page.locator("#player-animation-file").selectOption("Model/Singular.anim.bfres");
+    await page.waitForFunction(() => document.querySelector("#player-animation-status")?.textContent.includes("os associés"));
+    const singular = await page.evaluate(() => {
+      const v = window.__playerViewports.at(-1), mode = v.mode;
+      v.playAnimation(false); v.seekAnimation(10); v.draw();
+      return { stopped: v.animation === null, ready: v.ready && !v.disposed,
+        modeUnchanged: v.mode === mode, outfit: v.layers.has("body") };
+    });
+    assert.deepEqual(singular, { stopped: true, ready: true, modeUnchanged: true, outfit: true });
+    assert.match(await page.locator("#player-animation-status").innerText(), /Animation interrompue, pose de repos : .*singulière/);
+    assert.equal(await page.locator("#player-play").isDisabled(), true);
+
+    // The base remains valid here; only the outfit's extra bone becomes
+    // singular. The composition must still stop and return to its rest pose.
+    await page.locator("#player-slot").selectOption("body");
+    await page.locator("#player-equipment").selectOption("Model/Armor_Child_OnlySingular.bfres");
+    await page.locator("#player-equip").click();
+    await page.waitForFunction(() => document.querySelector("#player-equipped")?.textContent.includes("Armor_Child_OnlySingular"));
+    await page.locator("#player-animation-file").selectOption("Model/OutfitSingular.anim.bfres");
+    await page.waitForFunction(() => document.querySelector("#player-animation-status")?.textContent.includes("1 os associés"));
+    const outfitSingular = await page.evaluate(() => {
+      const v = window.__playerViewports.at(-1), outfit = v.layers.get("body"), mode = v.mode;
+      v.playAnimation(false); v.seekAnimation(10);
+      const baseValid = HookyAnimation.pose(v.animation.binding, 10).palette.every(Number.isFinite);
+      let outfitFails = false;
+      try { HookyAnimation.pose(outfit.binding, 10); } catch (error) { outfitFails = error instanceof HookyAnimation.PoseError; }
+      v.draw();
+      return { baseValid, outfitFails, stopped: v.animation === null, ready: v.ready && !v.disposed,
+        modeUnchanged: v.mode === mode, outfit: v.layers.get("body") === outfit };
+    });
+    assert.deepEqual(outfitSingular, { baseValid: true, outfitFails: true, stopped: true, ready: true,
+      modeUnchanged: true, outfit: true });
+    assert.match(await page.locator("#player-animation-status").innerText(), /Animation interrompue, pose de repos : .*singulière/);
+    assert.equal(await page.locator("#player-play").isDisabled(), true);
     assert.deepEqual(errors, []);
     for (const [name, bytes] of originals) assert.deepEqual(fs.readFileSync(path.join(info.root, "Model", name)), bytes);
     console.log("Player + animation associations browser smoke: OK");

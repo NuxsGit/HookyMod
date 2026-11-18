@@ -816,7 +816,9 @@ class ModelViewport {
           gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 6, layer.skin.bones.length, gl.RGBA, gl.FLOAT, palette);
           gl.activeTexture(gl.TEXTURE0);
         } catch (error) {
-          if (layer === this) throw error;
+          // A singular pose in an outfit must stop the whole composition too;
+          // otherwise the outfit vanishes while the base continues animating.
+          if (layer === this || error instanceof HookyAnimation.PoseError) throw error;
           const warning = `Tenue non affichée : ${error.message}`;
           if (layer.runtimeWarning !== warning) { layer.runtimeWarning = warning; reportChanged = true; }
           continue;
@@ -943,6 +945,14 @@ class ModelViewport {
     gl.bindVertexArray(this.fullscreenVao); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   }
 
+  recoverAnimationPose(error) {
+    if (!this.animation || typeof HookyAnimation === "undefined" || !(error instanceof HookyAnimation.PoseError)) return false;
+    // A later frame can become singular even if frame zero was valid. Retain
+    // the scene and equipment, then redraw everything in its rest pose.
+    this.stopAnimation(); this.options.onAnimationError?.(error.message); this.schedule();
+    return true;
+  }
+
   draw() {
     if (!this.sizeCanvas()) return;
     const gl = this.gl, width = this.canvas.width, height = this.canvas.height;
@@ -965,11 +975,14 @@ class ModelViewport {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null); this.drawScene(width, height);
       }
     } catch (error) {
+      if (this.recoverAnimationPose(error)) return;
       if (this.mode === "fsr") {
         this.mode = "native"; this.releaseTargets(); this.options.onModeFallback?.();
         this.addNote(`FSR 1 indisponible : ${error.message}`);
         try { gl.bindFramebuffer(gl.FRAMEBUFFER, null); this.drawScene(width, height); }
-        catch (nativeError) { this.options.onFailure?.(`Vue 3D indisponible : ${nativeError.message}`); }
+        catch (nativeError) {
+          if (!this.recoverAnimationPose(nativeError)) this.options.onFailure?.(`Vue 3D indisponible : ${nativeError.message}`);
+        }
       } else this.options.onFailure?.(`Vue 3D indisponible : ${error.message}`);
     }
   }

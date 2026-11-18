@@ -104,6 +104,30 @@ assert.equal(fallbackViewport.mode, "native");
 assert.deepEqual(notes, ["FSR 1 indisponible : FSR échoué"]);
 assert.deepEqual(failures, ["Vue 3D indisponible : Scène échouée"]);
 
+// A singular pose on the native retry after FSR fails is still an animation
+// error, not a reason to destroy the viewport or leave a frozen frame.
+const oldAnimation = global.HookyAnimation;
+global.HookyAnimation = require("../hookycreator/web/model_animation.js");
+try {
+  const viewport = Object.create(ModelViewport.prototype), messages = [], failed = [];
+  let scheduled = 0;
+  Object.assign(viewport, {
+    sizeCanvas: () => true, canvas: { width: 320, height: 240 }, gl: { FRAMEBUFFER: 0, bindFramebuffer() {} },
+    mode: "fsr", fsr: {}, animation: {}, ensureTargets: () => { throw new Error("FSR échoué"); },
+    releaseTargets() {}, addNote() {}, stopAnimation() { this.animation = null; }, schedule() { scheduled += 1; },
+    drawScene: () => { throw new global.HookyAnimation.PoseError("Matrice d'animation singulière."); },
+    options: { onAnimationError: (message) => messages.push(message), onFailure: (message) => failed.push(message) },
+  });
+  assert.doesNotThrow(() => viewport.draw());
+  assert.equal(viewport.mode, "native");
+  assert.equal(viewport.animation, null);
+  assert.equal(scheduled, 1);
+  assert.deepEqual(messages, ["Matrice d'animation singulière."]);
+  assert.deepEqual(failed, []);
+} finally {
+  if (oldAnimation === undefined) delete global.HookyAnimation; else global.HookyAnimation = oldAnimation;
+}
+
 // A slower refresh cap must reduce GPU draws, not slow the animation clock;
 // paused scrubbing is still painted immediately between two capped frames.
 const scheduled = [], oldRaf = global.requestAnimationFrame;

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import copy
+import itertools
 import json
 import os
 import struct
@@ -21,7 +22,11 @@ from hookycreator.project import Project, ProjectError
 from hookycreator.server import HookyCreatorServer
 from hookymod import blender, gltf_animation
 from tests import synth
-from tests.synth_animation import fska_fixture, fska_two_clips_with_jump, named_rigid_model
+from tests.synth_animation import (
+    fska_fixture,
+    fska_two_clips_with_jump,
+    named_rigid_model,
+)
 from tests.test_animated_export import accessor, glb_parts, simple_binding
 
 
@@ -118,7 +123,7 @@ def test_one_glb_shared_skin_each_clip_once_embedded_textures_and_snapshots(tmp_
         assert clip["extras"]["sourceFile"] in group["source_files"]
         for sampler in clip["samplers"]:
             times = [t[0] for t in accessor(doc, blob, sampler["input"])]
-            assert all(a < b for a, b in zip(times, times[1:]))
+            assert all(a < b for a, b in itertools.pairwise(times))
             assert times[-1] == pytest.approx(10 / 30)  # no repeated loop
     for name, expected in (("Walk", 4.), ("Run", -4.)):
         clip = next(c for c in doc["animations"] if c["name"] == name)
@@ -177,7 +182,7 @@ def test_distinct_homonyms_are_not_deduplicated_and_exact_copies_are_reported(tm
 def test_partial_export_reports_every_incompatible_clip_file_and_missing_track(tmp_path):
     project = make_project(tmp_path)
     two = bytearray(fska_two_clips_with_jump())
-    struct.pack_into("<I", two, 0x154, 0x0004)  # Run has unsupported rotation mode
+    struct.pack_into("<I", two, 0x154, 0x3004)  # Run has an unknown rotation mode
     (project.root / "Rigid_A.anim.bfres").write_bytes(two)
     (project.root / "Rigid_B.anim.bfres").write_bytes(b"broken BFRES")
     missing = bytearray(fska_fixture())
@@ -190,7 +195,7 @@ def test_partial_export_reports_every_incompatible_clip_file_and_missing_track(t
     assert group["partial"] and group["source_clips"] == 4
     assert [(item["path"], item["index"]) for item in group["skipped"]] == [
         ("Rigid_A.anim.bfres", 1), ("Rigid_B.anim.bfres", None), ("Rigid_C.anim.bfres", 0)]
-    assert "Euler" in group["skipped"][0]["reason"]
+    assert "rotation" in group["skipped"][0]["reason"]
     assert "Aucun os animé" in group["skipped"][2]["reason"]
     assert group["exported"][1]["missing"] == ["Ghost"]
     assert any("Export partiel" in warning for warning in result["warnings"])
@@ -211,8 +216,8 @@ def test_no_compatible_clips_refuses_without_overwriting_previous_export(tmp_pat
     folder = Path(previous["absolute_folder"])
     before = {name: (folder / name).read_bytes() for name in previous["files"]}
     data = bytearray(fska_two_clips_with_jump())
-    struct.pack_into("<I", data, 0x104, 4)
-    struct.pack_into("<I", data, 0x154, 4)
+    struct.pack_into("<I", data, 0x104, 0x3004)
+    struct.pack_into("<I", data, 0x154, 0x3004)
     path.write_bytes(data)
     with pytest.raises(ProjectError, match="Aucun clip compatible") as error:
         project.export_model("Rigid.bfres", textures=False, all_animations=True, archive=True)
@@ -246,7 +251,7 @@ def test_sampling_budget_is_shared_between_clips_and_reports_the_failing_clip(tm
 
 
 def test_grouped_actions_restore_unkeyed_channels_and_obey_shared_budgets(tmp_path, monkeypatch):
-    mesh, skin, bindings = independent_bindings()
+    mesh, _skin, bindings = independent_bindings()
     target = tmp_path / "independent.glb"
     blender.export_bundle([mesh], tmp_path, "independent", formats=("glb",), animations=bindings)
     doc, blob = glb_parts(target.read_bytes())
@@ -306,9 +311,8 @@ def test_bounds_and_source_mutations_refuse_without_publishing_partial_glb(tmp_p
         replacement.write_bytes(with_name("Jump"))
         os.replace(replacement, second)
         return written
-    with patch.object(blender, "export_bundle", side_effect=mutate):
-        with pytest.raises(ProjectError, match="a changé"):
-            project.export_model("Rigid.bfres", textures=False, all_animations=True, archive=True)
+    with patch.object(blender, "export_bundle", side_effect=mutate), pytest.raises(ProjectError, match="a changé"):
+        project.export_model("Rigid.bfres", textures=False, all_animations=True, archive=True)
     assert target.read_bytes() == before
     # A file that changes before its turn is decoded must also be detected.
     read_clip = project_mod.animation_mod.read_clip
@@ -322,9 +326,9 @@ def test_bounds_and_source_mutations_refuse_without_publishing_partial_glb(tmp_p
             replacement.write_bytes(with_name("Other"))
             os.replace(replacement, second)  # identity changes even on coarse-timestamp filesystems
         return clip
-    with patch.object(project_mod.animation_mod, "read_clip", side_effect=mutate_before_second):
-        with pytest.raises(ProjectError, match="Rigid_B.*a changé"):
-            project.export_model("Rigid.bfres", textures=False, all_animations=True, archive=True)
+    with patch.object(project_mod.animation_mod, "read_clip", side_effect=mutate_before_second), \
+            pytest.raises(ProjectError, match="Rigid_B.*a changé"):
+        project.export_model("Rigid.bfres", textures=False, all_animations=True, archive=True)
     assert target.read_bytes() == before
 
 

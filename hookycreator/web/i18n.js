@@ -69,8 +69,8 @@ const HookyI18n = (() => {
     ["Choisis d'abord le personnage et un autre modèle.", "First choose a character and another model.", "Сначала выберите персонажа и другую модель.", "请先选择角色和另一个模型。"],
     ["Choisis d'abord un modèle.", "First choose a model.", "Сначала выберите модель.", "请先选择模型。"],
     ["Chargement de l'équipement…", "Loading equipment…", "Загрузка снаряжения…", "正在加载装备…"],
-    ["Aucun clip Euler pris en charge", "No supported Euler clip", "Нет поддерживаемых клипов Эйлера", "没有受支持的欧拉片段"],
-    ["Aucun clip squelettique Euler pris en charge.", "No supported Euler skeletal clip.", "Нет поддерживаемых скелетных клипов Эйлера.", "没有受支持的欧拉骨骼片段。"],
+    ["Aucun clip avec en-tête pris en charge", "No clip with a supported header", "Нет клипов с поддерживаемым заголовком", "没有标头受支持的片段"],
+    ["Aucun en-tête de clip squelettique pris en charge.", "No skeletal clip with a supported header.", "Нет скелетных клипов с поддерживаемым заголовком.", "没有标头受支持的骨骼片段。"],
     ["L'ancien équipement est conservé.", "The previous equipment is kept.", "Предыдущее снаряжение сохранено.", "保留之前的装备。"],
     ["Aucun équipement n'a été ajouté.", "No equipment was added.", "Снаряжение не добавлено.", "未添加装备。"],
     ["Vue 3D indisponible", "3D view unavailable", "3D недоступно", "3D 视图不可用"],
@@ -80,9 +80,17 @@ const HookyI18n = (() => {
     ["Équipement non affiché", "Equipment not displayed", "Снаряжение не отображается", "装备未显示"],
     ["Non restauré", "Not restored", "Не восстановлено", "未恢复"],
     ["FSR 1 indisponible", "FSR 1 unavailable", "FSR 1 недоступен", "FSR 1 不可用"],
+    ["Animation interrompue, pose de repos", "Animation stopped, rest pose restored", "Анимация остановлена, восстановлена исходная поза", "动画已停止，已恢复静止姿势"],
     ["Contexte WebGL perdu.", "WebGL context lost.", "Контекст WebGL потерян.", "WebGL 上下文已丢失。"],
     ["Transformation d'équipement invalide.", "Invalid equipment transform.", "Некорректное преобразование снаряжения.", "装备变换无效。"],
     ["Os d'attache à échelle nulle.", "Attachment bone has zero scale.", "Масштаб кости крепления равен нулю.", "附着骨骼的缩放为零。"],
+    ["Matrice d'animation singulière.", "Singular animation matrix.", "Вырожденная матрица анимации.", "动画矩阵不可逆。"],
+    ["Matrice d'animation non finie.", "Non-finite animation matrix.", "Неконечная матрица анимации.", "动画矩阵包含非有限值。"],
+    ["Matrice d'animation trop grande pour WebGL.", "Animation matrix is too large for WebGL.", "Матрица анимации слишком велика для WebGL.", "动画矩阵超出 WebGL 的范围。"],
+    ["Transformation non finie.", "Non-finite transform.", "Неконечное преобразование.", "变换包含非有限值。"],
+    ["Quaternion d'animation invalide.", "Invalid animation quaternion.", "Некорректный кватернион анимации.", "动画四元数无效。"],
+    ["Quaternion d'os invalide.", "Invalid bone quaternion.", "Некорректный кватернион кости.", "骨骼四元数无效。"],
+    ["Mode d'échelle Softimage FSKA non pris en charge.", "FSKA Softimage scale mode is not supported.", "Режим масштаба Softimage в FSKA не поддерживается.", "不支持 FSKA 的 Softimage 缩放模式。"],
     ["Choisis un os reconnu du modèle de base.", "Choose a recognized bone from the base model.", "Выберите распознанную кость базовой модели.", "请选择基础模型中已识别的骨骼。"],
     ["Composition trop volumineuse : aucune géométrie n'a été supprimée.", "Composition too large: no geometry was removed.", "Композиция слишком велика: геометрия не удалена.", "组合过大：未删除任何几何体。"],
     ["Skins de la composition supérieurs à 64 Mio.", "Composition skins exceed 64 MiB.", "Скины композиции превышают 64 МиБ.", "组合的皮肤超过 64 MiB。"],
@@ -564,8 +572,8 @@ const HookyI18n = (() => {
     if (m) return { en: `${m[1]} WebM video(s) found`, ru: `Найдено видео WebM: ${m[1]}`, zh: `找到 ${m[1]} 个 WebM 视频` }[language];
     m = normalize(source).match(/^(\d+) fichier\(s\) d'animation repéré\(s\) · cliquer pour inspecter$/);
     if (m) return { en: `${m[1]} animation file(s) found · click to inspect`, ru: `Найдено файлов анимации: ${m[1]} · нажмите для просмотра`, zh: `找到 ${m[1]} 个动画文件 · 点击查看` }[language];
-    m = normalize(source).match(/^(\d+) clip\(s\) squelettique\(s\), (\d+) en rotations Euler prises en charge\.$/);
-    if (m) return { en: `${m[1]} skeletal clip(s), ${m[2]} with supported Euler rotations.`, ru: `Скелетных клипов: ${m[1]}; с поддерживаемыми вращениями Эйлера: ${m[2]}.`, zh: `${m[1]} 个骨骼片段，其中 ${m[2]} 个使用受支持的欧拉旋转。` }[language];
+    m = normalize(source).match(/^(\d+) clip\(s\) squelettique\(s\), (\d+) avec en-tête pris en charge ; courbes vérifiées à l'ouverture\.$/);
+    if (m) return { en: `${m[1]} skeletal clip(s), ${m[2]} with a supported header; curves are checked on opening.`, ru: `Скелетных клипов: ${m[1]}, с поддерживаемым заголовком: ${m[2]}; кривые проверяются при открытии.`, zh: `${m[1]} 个骨骼片段，其中 ${m[2]} 个标头受支持；打开时检查曲线。` }[language];
     m = source.trim().match(/^([\s\S]+) · (\d+) images$/);
     if (m) return { en: `${m[1]} · ${m[2]} frames`, ru: `${m[1]} · кадров: ${m[2]}`, zh: `${m[1]} · ${m[2]} 帧` }[language];
     m = normalize(source).match(/^(\d+) os associés(?:, (\d+) absents)? · 30 images\/s par convention · lecture expérimentale, non validée en jeu\.$/);
@@ -590,7 +598,11 @@ const HookyI18n = (() => {
     if (m) return { en: `Equipment not added: ${lookup(m[1])} ${lookup(m[2])}`, ru: `Снаряжение не добавлено: ${lookup(m[1])} ${lookup(m[2])}`, zh: `未添加装备：${lookup(m[1])} ${lookup(m[2])}` }[language];
     m = source.trim().match(/^(Tête|Tenue|Jambes|Main droite|Main gauche) non restauré : ([\s\S]+)$/);
     if (m) return { en: `${lookup(m[1])} not restored: ${lookup(m[2])}`, ru: `${lookup(m[1])} не восстановлено: ${lookup(m[2])}`, zh: `${lookup(m[1])}未恢复：${lookup(m[2])}` }[language];
-    m = source.trim().match(/^(Animation indisponible|Vue 3D indisponible|Squelette du modèle indisponible|Tenue statique|Tenue non affichée|Équipement non affiché|Non restauré|FSR 1 indisponible) : ([\s\S]+)$/);
+    m = source.trim().match(/^Compensation d'échelle impossible pour « ([\s\S]+) » : échelle parent nulle\.$/);
+    if (m) return { en: `Scale compensation is impossible for “${m[1]}”: parent scale is zero.`, ru: `Компенсация масштаба для «${m[1]}» невозможна: масштаб родителя равен нулю.`, zh: `无法为“${m[1]}”补偿缩放：父级缩放为零。` }[language];
+    m = source.trim().match(/^Rotation Euler partielle sans base pour l'os quaternion « ([\s\S]+) »\.$/);
+    if (m) return { en: `Partial Euler rotation without a base for quaternion bone “${m[1]}”.`, ru: `Неполное вращение Эйлера без базового значения для кости-кватерниона «${m[1]}».`, zh: `四元数骨骼“${m[1]}”的欧拉旋转不完整且缺少基值。` }[language];
+    m = source.trim().match(/^(Animation indisponible|Animation interrompue, pose de repos|Vue 3D indisponible|Squelette du modèle indisponible|Tenue statique|Tenue non affichée|Équipement non affiché|Non restauré|FSR 1 indisponible) : ([\s\S]+)$/);
     if (m) return `${lookup(m[1])} : ${lookup(m[2])}`;
     m = normalize(source).match(/^image plafonnée à (\d+) px \/ densité ×(\d+)$/);
     if (m) return { en: `image capped at ${m[1]} px / density ×${m[2]}`, ru: `изображение ограничено ${m[1]} пикс. / плотность ×${m[2]}`, zh: `图像限制为 ${m[1]} 像素 / 密度 ×${m[2]}` }[language];

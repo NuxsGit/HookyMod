@@ -1,13 +1,15 @@
-"""Export d'un skin BFRES validé et de clips Euler vers glTF 2.0.
+"""Export d'un skin BFRES validé et de clips Euler/quaternion vers glTF 2.0.
 
 Les positions reçues sont déjà en espace modèle dans la pose de repos. Les
 joints, matrices inverses et poids décrivent donc la même déformation que
 l'aperçu WebGL. Les courbes cubiques sont échantillonnées en LINEAR pour éviter
 la perte de tangentes à l'import de certains logiciels ; les rotations Euler
-sont converties en quaternions. Les clés au même instant restent dans la courbe
-source ; un saut est approché par une brève transition puisque glTF impose des
-temps distincts. Les variantes non représentables ne sont jamais remplacées
-par une animation statique silencieuse. Ce module n'écrit aucun fichier du jeu.
+sont converties en quaternions. Les courbes quaternion sont aussi subdivisées
+pour limiter l'erreur des consommateurs qui interpolent leurs composantes
+linéairement. Les clés au même instant restent dans la courbe source ; un saut
+est approché par une brève transition puisque glTF impose des temps distincts.
+Les variantes non représentables ne sont jamais remplacées par une animation
+statique silencieuse. Ce module n'écrit aucun fichier du jeu.
 """
 from __future__ import annotations
 
@@ -41,6 +43,21 @@ class ExportAnimationError(HookyError):
     """Skin ou animation non représentable par cet exporteur glTF."""
 
 
+def _inverse_scale(scale):
+    """Retourne l'inverse d'une échelle à trois composantes non singulières."""
+    if any(not math.isfinite(value) or abs(value) < 1e-8 for value in scale):
+        return None
+    return tuple(1.0 / value for value in scale)
+
+
+def _uniform_inverse(scale):
+    """Retourne 1/s si les trois composantes représentent une échelle uniforme."""
+    value = scale[0]
+    if abs(value) < 1e-8 or any(not math.isclose(v, value, rel_tol=1e-9, abs_tol=1e-12) for v in scale[1:]):
+        return None
+    return 1.0 / value
+
+
 def bind(skin: dict, clip: dict) -> dict:
     """Associe les pistes par nom et refuse les compensations incompatibles."""
     bones, meshes = skin.get("bones"), skin.get("meshes")
@@ -59,6 +76,11 @@ def bind(skin: dict, clip: dict) -> dict:
                 raise ExportAnimationError("Transformation de repos invalide.")
         if type(bone.get("ssc")) is not bool:
             raise ExportAnimationError("Compensation d'échelle du squelette invalide.")
+        mode = bone.get("rotation_mode", "euler")
+        if mode not in ("euler", "quaternion"):
+            raise ExportAnimationError(f"Mode de rotation inconnu pour l'os « {name} ».")
+        if mode == "quaternion" and not 0.999 <= math.hypot(*bone["rotation"]) <= 1.001:
+            raise ExportAnimationError(f"Quaternion de repos non unitaire pour l'os « {name} ».")
         names[name] = i
     done = set()
     for index in range(len(bones)):
@@ -69,6 +91,8 @@ def bind(skin: dict, clip: dict) -> dict:
             seen.add(current)
             current = bones[current]["parent"]
         done.update(seen)
+    if clip.get("scale_mode") == 0x300:
+        raise ExportAnimationError("Mode d'échelle Softimage FSKA non pris en charge.")
     frames, fps, clip_bones = clip.get("frames"), clip.get("fps"), clip.get("bones")
     if (not isinstance(frames, (int, float)) or not math.isfinite(frames) or not 0 <= frames <= 100_000
             or not isinstance(fps, (int, float)) or not math.isfinite(fps) or not 0 < fps <= 240
@@ -90,51 +114,93 @@ def bind(skin: dict, clip: dict) -> dict:
             if values is not None and (not isinstance(values, (list, tuple)) or len(values) != n
                                        or not all(math.isfinite(v) for v in values)):
                 raise ExportAnimationError("Pose d'animation invalide.")
+        mode = track.get("rotation_mode", "euler")
+        if mode not in ("euler", "quaternion"):
+            raise ExportAnimationError(f"Mode de rotation de l'os « {name} » inconnu.")
+        if mode == "quaternion" and "rotation" in track["base"] and not (
+                0.999 <= math.hypot(*track["base"]["rotation"]) <= 1.001):
+            raise ExportAnimationError(f"Quaternion de base non unitaire pour l'os « {name} ».")
         targets = set()
         for curve in track["curves"]:
             target = curve.get("target")
-            if (target not in {f"{path}.{axis}" for path in ("translation", "rotation", "scale") for axis in "xyz"}
-                    or target in targets or curve.get("interpolation") != "cubic"):
+            quaternion = target == "rotation" and curve.get("interpolation") == "slerp" and mode == "quaternion"
+            scalar = (target in {f"{path}.{axis}" for path in ("translation", "rotation", "scale") for axis in "xyz"}
+                      and curve.get("interpolation") == "cubic"
+                      and (mode != "quaternion" or not target.startswith("rotation.")))
+            if (not quaternion and not scalar) or target in targets:
                 raise ExportAnimationError("Courbe ou composante de rotation non prise en charge.")
             targets.add(target)
             keys, values, slopes = curve.get("frames"), curve.get("values"), curve.get("slopes")
             if (not isinstance(keys, list) or not keys or not isinstance(values, list)
-                    or not isinstance(slopes, list) or len(keys) != len(values) or len(keys) != len(slopes)):
+                    or len(keys) != len(values)
+                    or (scalar and (not isinstance(slopes, list) or len(keys) != len(slopes)))):
                 raise ExportAnimationError(f"Données d'images-clés incomplètes pour l'os « {name} ».")
-            if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (*keys, *values, *slopes)):
+            if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in keys):
                 raise ExportAnimationError(f"Image-clé ou valeur non finie pour l'os « {name} ».")
-            if any(a > b for a, b in zip(keys, keys[1:])):
+            if scalar and not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (*values, *slopes)):
+                raise ExportAnimationError(f"Image-clé ou valeur non finie pour l'os « {name} ».")
+            if quaternion and any(not isinstance(q, (list, tuple)) or len(q) != 4
+                                  or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in q)
+                                  or not 0.999 <= math.hypot(*q) <= 1.001 for q in values):
+                raise ExportAnimationError(f"Quaternion invalide pour l'os « {name} ».")
+            if any(a > b for a, b in itertools.pairwise(keys)):
                 raise ExportAnimationError(f"Images-clés non triées pour l'os « {name} ».")
             # Deux valeurs à la même image peuvent décrire un saut. On les
             # conserve dans la courbe source pour évaluer les deux côtés.
-            repeated_keys += sum(a == b for a, b in zip(keys, keys[1:]))
+            repeated_keys += sum(a == b for a, b in itertools.pairwise(keys))
+        rotations = {target for target in targets if target.startswith("rotation.")}
+        if (rotations and len(rotations) < 3 and "rotation" not in track["base"]
+                and bones[index].get("rotation_mode", "euler") == "quaternion"):
+            raise ExportAnimationError(
+                f"Rotation Euler partielle sans base pour l'os quaternion « {name} ».")
         tracks[index] = track
         matched += 1
         animated += bool(track["curves"])
     if not matched or not animated:
         raise ExportAnimationError("Aucun os animé de ce clip ne correspond au modèle.")
 
-    # La compensation BFRES applique T * inverse(scale parent) * R * S. Un
-    # unique nœud TRS glTF ne peut pas représenter ce cisaillement en général.
-    # Lorsque le parent reste à l'échelle unité, la compensation est l'identité.
+    # Une compensation présente dans le FSKL est représentée par deux nœuds
+    # TRS : T * inverse(S_parent) puis R * S. Elle reste exacte même si S_parent
+    # n'est pas uniforme, tant que son échelle est constante pendant le clip.
+    # Une compensation ajoutée uniquement par le clip garde l'ancien traitement
+    # scalaire, compatible avec l'export progressif de plusieurs clips : dans
+    # ce cas inverse(S_parent) doit être uniforme pour commuter avec R.
+    factors = [1.0] * len(bones)
+    pivot_scales = [None] * len(bones)
     for i, bone in enumerate(bones):
-        parent = bone["parent"]
-        track = tracks[i]
+        parent, track = bone["parent"], tracks[i]
         if parent < 0 or not (bone["ssc"] or (track and track.get("ssc"))):
             continue
         parent_track = tracks[parent]
-        base = (parent_track["base"].get("scale", bones[parent]["scale"])
-                if parent_track else bones[parent]["scale"])
-        changes = parent_track["curves"] if parent_track else ()
-        if (any(abs(value - 1.0) > 1e-8 for value in base)
-                or any(c["target"].startswith("scale.")
-                       and (any(abs(value - 1.0) > 1e-8 for value in c["values"])
-                            or any(abs(value) > 1e-8 for value in c["slopes"])) for c in changes)):
+        effective = list(parent_track["base"].get("scale", bones[parent]["scale"])
+                         if parent_track else bones[parent]["scale"])
+        variable = False
+        for curve in parent_track["curves"] if parent_track else ():
+            if curve["target"].startswith("scale."):
+                value = curve["values"][0]
+                if any(v != value for v in curve["values"]) or any(v != 0 for v in curve["slopes"]):
+                    variable = True
+                    break
+                effective["xyz".index(curve["target"][-1])] = value
+        inverse = _inverse_scale(effective)
+        if variable or inverse is None:
             raise ExportAnimationError(
-                f"Compensation d'échelle de l'os « {bone['name']} » avec parent animé : "
-                "cette variante n'est pas représentable fidèlement en glTF.")
+                f"Compensation d'échelle de l'os « {bone['name']} » : le parent doit avoir "
+                "une échelle constante et non nulle pour cet export glTF.")
+        if bone["ssc"]:
+            if _inverse_scale(bones[parent]["scale"]) is None:
+                raise ExportAnimationError(f"Compensation d'échelle de repos impossible pour « {bone['name']} ».")
+            pivot_scales[i] = inverse
+        else:
+            factor = _uniform_inverse(effective)
+            if factor is None:
+                raise ExportAnimationError(
+                    f"Compensation d'échelle de l'os « {bone['name']} » présente seulement dans le clip : "
+                    "le parent doit avoir une échelle uniforme et constante pour cet export glTF.")
+            factors[i] = factor
     return {"skin": skin, "clip": clip, "tracks": tracks, "matched": matched,
-            "missing": missing, "repeated_keys": repeated_keys}
+            "missing": missing, "repeated_keys": repeated_keys, "ssc_factors": factors,
+            "ssc_pivot_scales": pivot_scales}
 
 
 def _quat(rotation):
@@ -142,6 +208,13 @@ def _quat(rotation):
     sx, cx, sy, cy, sz, cz = math.sin(x), math.cos(x), math.sin(y), math.cos(y), math.sin(z), math.cos(z)
     return (sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz,
             cx*cy*sz - sx*sy*cz, cx*cy*cz + sx*sy*sz)
+
+
+def _rest_quat(bone):
+    if bone.get("rotation_mode", "euler") == "quaternion":
+        length = math.hypot(*bone["rotation"])
+        return tuple(value / length for value in bone["rotation"])
+    return _quat(bone["rotation"])
 
 
 def _slerp(a, b, t):
@@ -157,6 +230,17 @@ def _slerp(a, b, t):
     divisor = math.sin(theta)
     return tuple((math.sin((1-t)*theta)*x + math.sin(t*theta)*y)/divisor
                  for x, y in zip(a, b))
+
+
+def _nlerp(a, b, t):
+    """Interpolation linéaire normalisée, utilisée par certains importeurs."""
+    if sum(x*y for x, y in zip(a, b)) < 0:
+        b = tuple(-v for v in b)
+    result = tuple(x + t*(y-x) for x, y in zip(a, b))
+    length = math.hypot(*result)
+    if not math.isfinite(length) or length < 1e-8:
+        raise ExportAnimationError("Quaternion d'animation invalide.")
+    return tuple(value / length for value in result)
 
 
 def _angle(a, b):
@@ -210,7 +294,7 @@ def _times(doc, binary, frames, fps):
         values = array("f", (frame / fps for frame in frames))
     except (OverflowError, ValueError) as exc:
         raise ExportAnimationError("Temps d'animation hors limites glTF.") from exc
-    if any(a >= b for a, b in zip(values, values[1:])):
+    if any(a >= b for a, b in itertools.pairwise(values)):
         raise ExportAnimationError("Images-clés trop proches pour les temps glTF float32.")
     return _add_accessor(doc, binary, values, 5126, "SCALAR", len(values),
                          minimum=[values[0]], maximum=[values[-1]])
@@ -326,7 +410,7 @@ def _vector_channel(doc, binary, curves, base, frames, fps, factor, remaining):
             times.append(b)
             samples.append(vb)
 
-    for a, b in zip(anchors, anchors[1:]):
+    for a, b in itertools.pairwise(anchors):
         if (a, b) in transitions:
             # LINEAR ne représente pas un saut instantané : limiter le mélange
             # aux deux échantillons qui l'encadrent au lieu de subdiviser sans fin.
@@ -347,7 +431,7 @@ def _vector_channel(doc, binary, curves, base, frames, fps, factor, remaining):
 
 def _rotation_channel(doc, binary, curves, base, frames, fps, remaining):
     anchors, transitions = _sampling_anchors(curves, frames, fps, remaining)
-    if curves and sum(math.ceil(b-a) for a, b in zip(anchors, anchors[1:])) + 1 > remaining:
+    if curves and sum(math.ceil(b-a) for a, b in itertools.pairwise(anchors)) + 1 > remaining:
         raise ExportAnimationError("Animation trop longue pour l'échantillonnage des rotations.")
 
     def quaternion(frame):
@@ -370,7 +454,12 @@ def _rotation_channel(doc, binary, curves, base, frames, fps, remaining):
         needs_split = span > 1.0 or not math.isfinite(bound) or bound > MAX_ROTATION_STEP
         if not needs_split:
             for ratio in (.25, .5, .75):
-                if _angle(quaternion(a + span*ratio), _slerp(qa, qb, ratio)) > ROTATION_ERROR:
+                actual = quaternion(a + span*ratio)
+                # glTF specifies SLERP; Blender 4.2 imports the quaternion
+                # components as linear F-curves. Fast Euler turns need the same
+                # bound for both interpretations as native quaternion curves.
+                if (_angle(actual, _slerp(qa, qb, ratio)) > ROTATION_ERROR
+                        or _angle(actual, _nlerp(qa, qb, ratio)) > ROTATION_ERROR):
                     needs_split = True
                     break
         if needs_split:
@@ -389,7 +478,7 @@ def _rotation_channel(doc, binary, curves, base, frames, fps, remaining):
             quats.append(qb)
 
     if curves:
-        for a, b in zip(anchors, anchors[1:]):
+        for a, b in itertools.pairwise(anchors):
             if (a, b) in transitions:
                 if len(times) >= remaining:
                     raise ExportAnimationError("Trop d'échantillons pour l'animation glTF.")
@@ -400,6 +489,65 @@ def _rotation_channel(doc, binary, curves, base, frames, fps, remaining):
                 quats.append(qb)
             else:
                 split(a, quaternion(a), b, quaternion(b), 0)
+    inp = _times(doc, binary, times, fps)
+    try:
+        values = array("f", (v for q in quats for v in q))
+    except (OverflowError, ValueError) as exc:
+        raise ExportAnimationError("Rotation trop grande pour glTF.") from exc
+    out = _add_accessor(doc, binary, values, 5126, "VEC4", len(times))
+    return inp, out, "LINEAR", len(times)
+
+
+def _quaternion_channel(doc, binary, curve, base, frames, fps, remaining):
+    # glTF LINEAR rotation uses SLERP, but Blender 4.2 imports quaternion
+    # components as LINEAR F-curves (normalized linear interpolation). Subdivide
+    # until both interpretations closely follow the source, without Euler
+    # conversion. A jump remains a deliberately short, reported transition.
+    anchors, transitions = _sampling_anchors({"q": curve} if curve else {}, frames, fps, remaining)
+
+    def quaternion(frame):
+        q = animation_mod.evaluate_quaternion(curve, frame) if curve else tuple(base)
+        length = math.hypot(*q)
+        if not math.isfinite(length) or length < 1e-8:
+            raise ExportAnimationError("Quaternion d'animation invalide.")
+        return tuple(v / length for v in q)
+
+    times, quats = [anchors[0]], [quaternion(anchors[0])]
+
+    def append(frame, q):
+        if len(times) >= remaining:
+            raise ExportAnimationError("Trop d'échantillons pour l'animation glTF.")
+        if sum(x*y for x, y in zip(quats[-1], q)) < 0:
+            q = tuple(-v for v in q)
+        times.append(frame)
+        quats.append(q)
+
+    def split(a, qa, b, qb, depth):
+        if sum(x*y for x, y in zip(qa, qb)) < 0:
+            qb = tuple(-v for v in qb)
+        span = b - a
+        needs_split = False
+        for ratio in (.25, .5, .75):
+            actual = quaternion(a + span*ratio)
+            if (_angle(actual, _slerp(qa, qb, ratio)) > ROTATION_ERROR
+                    or _angle(actual, _nlerp(qa, qb, ratio)) > ROTATION_ERROR):
+                needs_split = True
+                break
+        if needs_split:
+            if depth >= MAX_SUBDIVISION or (a+b)/2 in (a, b):
+                raise ExportAnimationError("Rotation trop rapide ou irrégulière pour l'export glTF.")
+            middle = (a+b) / 2
+            qm = quaternion(middle)
+            split(a, qa, middle, qm, depth + 1)
+            split(middle, qm, b, qb, depth + 1)
+        else:
+            append(b, qb)
+
+    for a, b in itertools.pairwise(anchors):
+        if (a, b) in transitions:
+            append(b, quaternion(b))
+        else:
+            split(a, quaternion(a), b, quaternion(b), 0)
     inp = _times(doc, binary, times, fps)
     try:
         values = array("f", (v for q in quats for v in q))
@@ -436,8 +584,29 @@ def add_animations_to_gltf(doc: dict, binary, meshes, bindings, scale: float = 1
     for bone in bones:
         doc["nodes"].append({"name": bone["name"],
                              "translation": [v * scale for v in bone["translation"]],
-                             "rotation": list(_quat(bone["rotation"])),
+                             "rotation": list(_rest_quat(bone)),
                              "scale": list(bone["scale"])})
+    # Split a compensated joint's local transform into two valid TRS nodes.
+    # The helper is not a skin joint; original joint indices and names stay
+    # unchanged. Its translation is animated instead of the joint's one.
+    pivots = {}
+    used_names = {node.get("name") for node in doc["nodes"] if node.get("name")}
+    for i, bone in enumerate(bones):
+        if bone["parent"] < 0 or not bone["ssc"]:
+            continue
+        rest_inverse = _inverse_scale(bones[bone["parent"]]["scale"])
+        if rest_inverse is None:
+            raise ExportAnimationError(f"Compensation d'échelle de repos impossible pour « {bone['name']} ».")
+        base_name = f"__HookySSC_{i}_{bone['name']}"
+        name, suffix = base_name, 0
+        while name in used_names:
+            suffix += 1
+            name = f"{base_name}_{suffix}"
+        used_names.add(name)
+        pivots[i] = len(doc["nodes"])
+        doc["nodes"].append({"name": name, "translation": [v * scale for v in bone["translation"]],
+                             "scale": list(rest_inverse), "children": [first_node + i]})
+        doc["nodes"][first_node + i]["translation"] = [0., 0., 0.]
     roots = []
     for i, bone in enumerate(bones):
         index = first_node + i
@@ -445,7 +614,7 @@ def add_animations_to_gltf(doc: dict, binary, meshes, bindings, scale: float = 1
             roots.append(index)
         else:
             parent = doc["nodes"][first_node + bone["parent"]]
-            parent.setdefault("children", []).append(index)
+            parent.setdefault("children", []).append(pivots.get(i, index))
     # glTF exige un ancêtre commun même si le FSKL possède plusieurs racines.
     # Un conteneur identité ne change pas les matrices ni les indices de joints.
     if len(roots) == 1:
@@ -510,7 +679,7 @@ def add_animations_to_gltf(doc: dict, binary, meshes, bindings, scale: float = 1
         clip = binding["clip"]
         try:
             item, budget, channel_budget = _add_clip(
-                doc, binary, bones, first_node, binding, scale, budget, channel_budget)
+                doc, binary, bones, first_node, pivots, binding, scale, budget, channel_budget)
         except ExportAnimationError as exc:
             source = f" dans {clip['rel']} (index {clip['index']})" if "rel" in clip and "index" in clip else ""
             raise ExportAnimationError(f"Clip « {clip.get('name', 'Animation')} »{source} : {exc}") from exc
@@ -558,16 +727,32 @@ def _isolate_animations(doc, binary, animations, budget, channel_budget):
                                      "target": {"node": node, "path": path}})
 
 
-def _add_clip(doc, binary, bones, first_node, binding, scale, budget, channel_budget):
+def _add_clip(doc, binary, bones, first_node, pivots, binding, scale, budget, channel_budget):
     clip, tracks = binding["clip"], binding["tracks"]
     samplers, channels = [], []
     for i, track in enumerate(tracks):
-        if track is None:
-            continue
-        for path in ("translation", "rotation", "scale"):
+        track = track or {"base": {}, "curves": []}
+        factor = binding["ssc_factors"][i]
+        pivot = pivots.get(i)
+        if pivot is not None:
+            inverse = binding["ssc_pivot_scales"][i]
+            if tuple(inverse) != tuple(doc["nodes"][pivot]["scale"]):
+                if budget <= 0:
+                    raise ExportAnimationError("Trop d'images-clés pour l'ensemble des animations glTF.")
+                if channel_budget <= 0:
+                    raise ExportAnimationError("Trop de canaux pour l'ensemble des animations glTF.")
+                inp, out, interpolation, used = _vector_channel(
+                    doc, binary, {}, inverse, clip["frames"], clip["fps"], 1.0, budget)
+                budget -= used
+                channel_budget -= 1
+                samplers.append({"input": inp, "output": out, "interpolation": interpolation})
+                channels.append({"sampler": len(samplers) - 1, "target": {"node": pivot, "path": "scale"}})
+        for path in ("translation", "rotation", "scale"):  # the joint's original channels
             curves = {"xyz".index(c["target"][-1]): c for c in track["curves"]
                       if c["target"].startswith(path + ".")}
-            if not curves and path not in track["base"]:
+            quat_curve = next((c for c in track["curves"] if c["target"] == "rotation"), None) if path == "rotation" else None
+            compensation_changed = path == "scale" and factor != 1.0
+            if not curves and not quat_curve and path not in track["base"] and not compensation_changed:
                 continue
             if budget <= 0:
                 raise ExportAnimationError("Trop d'images-clés pour l'ensemble des animations glTF.")
@@ -575,18 +760,22 @@ def _add_clip(doc, binary, bones, first_node, binding, scale, budget, channel_bu
                 raise ExportAnimationError("Trop de canaux pour l'ensemble des animations glTF.")
             channel_budget -= 1
             base = track["base"].get(path, bones[i][path])
-            if path == "rotation":
+            if path == "rotation" and track.get("rotation_mode", "euler") == "quaternion":
+                inp, out, interpolation, used = _quaternion_channel(
+                    doc, binary, quat_curve, base, clip["frames"], clip["fps"], budget)
+            elif path == "rotation":
                 inp, out, interpolation, used = _rotation_channel(
                     doc, binary, curves, base, clip["frames"], clip["fps"], budget)
             else:
                 inp, out, interpolation, used = _vector_channel(
                     doc, binary, curves, base, clip["frames"], clip["fps"],
-                    scale if path == "translation" else 1.0, budget)
+                    scale if path == "translation" else factor, budget)
             budget -= used
             if budget < 0:
                 raise ExportAnimationError("Trop d'images-clés pour l'ensemble des animations glTF.")
             samplers.append({"input": inp, "output": out, "interpolation": interpolation})
-            channels.append({"sampler": len(samplers) - 1, "target": {"node": first_node + i, "path": path}})
+            node = pivot if path == "translation" and pivot is not None else first_node + i
+            channels.append({"sampler": len(samplers) - 1, "target": {"node": node, "path": path}})
     extras = {"sourceFPSConvention": clip["fps"], "sourceLoop": bool(clip.get("loop"))}
     if "rel" in clip and "index" in clip:
         extras.update({"sourceFile": clip["rel"], "sourceClipIndex": clip["index"],

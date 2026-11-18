@@ -4,7 +4,8 @@ The existing H3D1 positions are already in the static model pose for rigid
 shapes and in model space for smooth shapes.  Skin matrices therefore use
 animated_world @ inverse_rest_world for *both*. All eight influences of the
 observed BFRES 10.4 layouts are retained; no triangle or influence is removed.
-Only validated unit-scale Euler rest skeletons are accepted. No file is changed.
+Invertible Euler/quaternion rest skeletons use full affine inverse matrices.
+Unsupported variants are rejected; no file is changed.
 """
 from __future__ import annotations
 
@@ -25,17 +26,6 @@ MAGIC = b"H3S1"
 
 class SkinError(HookyError):
     """Unsupported or invalid skinned model."""
-
-
-def _inverse_unit(matrix):
-    # The validated rest skeleton contains rigid, unit-scale matrices only.
-    r = (matrix[0], matrix[4], matrix[8],
-         matrix[1], matrix[5], matrix[9],
-         matrix[2], matrix[6], matrix[10])
-    t = (matrix[3], matrix[7], matrix[11])
-    return [r[0], r[1], r[2], -sum(r[i] * t[i] for i in range(3)),
-            r[3], r[4], r[5], -sum(r[3+i] * t[i] for i in range(3)),
-            r[6], r[7], r[8], -sum(r[6+i] * t[i] for i in range(3))]
 
 
 def _attr(attrs, key, kind, stride):
@@ -72,12 +62,10 @@ def _encode(data: bytes, meshes, *, structured: bool) -> bytes:
         raise SkinError("Modèle FMDL absent.")
     skeleton_ptr = u64(data, model + 0x18)
     skeleton = skel_mod.read(data, skeleton_ptr)
-    if struct_mod._u32(data, skeleton_ptr + 4) & 0x7000 != 0x1000:
-        raise SkinError("Seul le squelette en rotations Euler est pris en charge.")
     bone_ptr = u64(data, skeleton_ptr + 0x10)
     bones = []
     names = set()
-    for index, matrix in enumerate(skeleton.matrices):
+    for index in range(len(skeleton.matrices)):
         p = bone_ptr + index * 0x58
         name = struct_mod._name(data, u64(data, p))
         if name in names:
@@ -89,8 +77,9 @@ def _encode(data: bytes, meshes, *, structured: bool) -> bytes:
         rotation = struct.unpack_from("<4f", data, p + 0x3c)
         translation = struct.unpack_from("<3f", data, p + 0x4c)
         bones.append({"name": name, "parent": parent, "scale": scale,
-                      "rotation": rotation, "translation": translation,
-                      "ssc": bool(flags & 0x00800000), "inverse": _inverse_unit(matrix)})
+                      "rotation": rotation, "rotation_mode": skeleton.rotation_modes[index],
+                      "translation": translation, "ssc": bool(flags & 0x00800000),
+                      "inverse": skeleton.inverse_matrices[index]})
     shapes = u64(data, model + 0x28)
     count, = struct.unpack_from("<H", data, model + 0x6a)
     if not count or count != len(meshes):
