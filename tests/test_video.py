@@ -57,9 +57,8 @@ def test_import_writes_a_copy_without_mutating_source_and_limits(tmp_path: Path)
     assert source.read_bytes() == original
     assert (tmp_path / "work" / "assets" / "intro.webm").read_bytes() == replacement
     assert server.project.video_info("intro.webm")["edited"]
-    built = server.project.build_mod("Synthetic")
-    assert built["files"] == 1
-    assert (root / "mods" / "Synthetic" / "romfs" / "intro.webm").read_bytes() == replacement
+    assert "intro.webm" in server.project.edited_files()
+    assert not (root / "mods").exists()
     assert source.read_bytes() == original
     for value in ("!", base64.b64encode(b"not video").decode()):
         with pytest.raises(Exception):

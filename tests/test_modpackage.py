@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hookycreator import modpackage as package
-from hookycreator import studio
+from modmaker import studio
 
 
 META = {

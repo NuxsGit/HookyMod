@@ -1,8 +1,8 @@
 """Les aperçus et exports doivent utiliser les modifications, pas le dump d'origine."""
 from __future__ import annotations
 
-import os
 import base64
+import os
 import struct
 import tempfile
 import unittest
@@ -14,6 +14,7 @@ from hookycreator import model_import
 from hookycreator.project import Project, ProjectError
 from hookymod import bntx
 from hookymod.util import decode_png, png_bytes
+from modmaker.legacy_project import LegacyModProject
 from tests import synth
 
 
@@ -123,7 +124,9 @@ class WorkingCopyTests(unittest.TestCase):
     def test_mob_copies_current_assets_with_the_right_compression_suffix(self):
         rel = "Tex/Mt_Test_Alb.bntx"
         self.project.import_texture(rel, 0, self.solid(255, 0, 0))
-        mob = self.project.create_mob("Copie", "Model/Test.bfres", [rel])
+        legacy = LegacyModProject(self.root, self.project.work)
+        legacy.scan()
+        mob = legacy.create_mob("Copie", "Model/Test.bfres", [rel])
         model, texture = mob["files"]
         self.assertTrue(model["to"].endswith(".bfres"))
         self.assertTrue(texture["to"].endswith(".bntx"))
@@ -141,12 +144,17 @@ class WorkingCopyTests(unittest.TestCase):
         project.scan()
         rel = "Tex/Mt_Test_Alb.bntx"
         project.import_texture(rel, 0, self.solid(255, 0, 0))
-        project.create_mob("Copie", "Model/Test.bfres", [rel])
+        # Historical work files remain excluded even though the app no longer
+        # creates them. Existing user data is not deleted or reindexed.
+        old_mob = work / "mobs" / "Copie" / "ancien.bfres"
+        old_mob.parent.mkdir(parents=True)
+        old_mob.write_bytes(self.model.read_bytes())
         project.scan()
         paths = [asset.rel for asset in project.assets]
         self.assertIn("scratch/custom-work-sibling/Other.bntx", paths)
         self.assertFalse(any(path.startswith("scratch/custom-work/") for path in paths))
         self.assertEqual(project.edited_files(), [rel])  # séparateurs portables, même sous Windows
+        self.assertTrue(old_mob.is_file())
 
     def test_work_folder_cannot_be_the_source_root(self):
         with self.assertRaises(ProjectError):

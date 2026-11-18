@@ -48,14 +48,14 @@ async function passivePollingDoesNotInterruptThumbnails() {
     api: async (_path, opts) => { options = opts; return { running: false }; },
     toast() {}, refresh: async () => {}, esc: String,
   });
-  vm.runInContext(section("async function pollBulk()", "async function buildMod("), bulk);
+  vm.runInContext(section("async function pollBulk()", "/* ------------------------------------------------------------------ menus */"), bulk);
   await vm.runInContext("pollBulk()", bulk);
   assert.equal(options?.background, true, "le suivi de l'export est passif");
 }
 
 async function incompleteScanIsVisibleInStatusAndExport() {
   const { $ } = elements();
-  const state = { project: { root: "dump", assets: [], mobs: [], edited: [],
+  const state = { project: { root: "dump", assets: [], edited: [],
                              scan_truncated: true, scan_limit: 2 }, settings: { vram_gb: 6 } };
   const ctx = vm.createContext({ $, state, console, humanBytes: String, esc: String });
   vm.runInContext(section("function renderStatus()", "/* ------------------------------------------------------------------ accueil */"), ctx);
@@ -83,7 +83,7 @@ async function incompleteScanIsVisibleInStatusAndExport() {
     api: async () => ({ running: false, done: 1, total: 1, report }),
     toast: (...args) => toasts.push(args), refresh: async () => {}, esc: String,
   });
-  vm.runInContext(section("async function pollBulk()", "async function buildMod("), bulk);
+  vm.runInContext(section("async function pollBulk()", "/* ------------------------------------------------------------------ menus */"), bulk);
   await vm.runInContext("pollBulk()", bulk);
   assert.match($("#bulk-label").textContent, /scan incomplet/i);
   assert.ok(toasts.some(([text, kind]) => /scan incomplet/i.test(text) && kind === "error"));
@@ -142,7 +142,7 @@ async function olderStateResponsesCannotUndoANewerScan() {
   const ctx = vm.createContext({ $, state, console, status() {}, renderStatus() {}, renderHome() {},
     assetValidation: { revision: "session-1", setScope(_name, _items, revision) { this.revision = revision; } },
     renderModels: async () => {}, renderTextures: async () => {}, renderEnsembles: async () => {},
-    renderMobs: async () => {}, renderBlends: async () => {}, renderSettings() {},
+    renderBlends: async () => {}, renderSettings() {},
     refreshSystem() {}, refreshBlender() {}, applyUiSettings() {}, toast() {},
     api: (url) => new Promise((resolve) => requests.push({ url, resolve })),
   });

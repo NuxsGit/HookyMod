@@ -1,13 +1,6 @@
-"""HookyCreator — le cœur : projet, assets, textures, modèles, mobs, export de mod.
+"""HookyCreator: asset exploration and editing through working copies.
 
-L'idée est celle d'un « MCreator » pour ce jeu : on ouvre un dossier (romfs ou
-assets extraits), on voit ce qu'il contient, on modifie des textures, on crée
-des variantes de mobs, et on sort un dossier de mod prêt à charger.
-
-Rien n'est magique : chaque opération écrit dans un dossier de travail
-(``work/``) et n'écrase **jamais** l'asset d'origine. L'export copie les
-fichiers modifiés dans ``mods/<Nom>/romfs/`` avec leur chemin d'origine, ce que
-le jeu attend (layeredFS).
+Original project files are not overwritten by supported editing operations.
 """
 
 from __future__ import annotations
@@ -331,7 +324,6 @@ class Project:
             raise ProjectError("Le dossier de travail doit être distinct du dossier du projet.")
         self.work.mkdir(parents=True, exist_ok=True)
         (self.work / "cache").mkdir(exist_ok=True)
-        (self.work / "mobs").mkdir(exist_ok=True)
         self.settings = Settings.load(self.settings_path)
         self.thumbs = cache_mod.ImageCache(self.work / "cache" / "thumbs",
                                            self.settings.cache_mb)
@@ -2795,75 +2787,6 @@ class Project:
                     found.setdefault(key, str(target))
         return found
 
-    # ------------------------------------------------------------------ mobs
-    def _mobs_file(self) -> Path:
-        return self.work / "mobs" / "mobs.json"
-
-    def list_mobs(self) -> list[dict]:
-        path = self._mobs_file()
-        if not path.is_file():
-            return []
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return []
-
-    def create_mob(self, name: str, model: str, textures: list[str],
-                   parent: str = "") -> dict:
-        """Crée la fiche d'un mob et copie ses assets sous un nouveau nom.
-
-        Le paramètre d'acteur du jeu (BYML) n'est **pas** encore écrit : la fiche
-        liste donc précisément ce qui reste à faire, plutôt que de laisser croire
-        que le mob est déjà jouable.
-        """
-        clean = "".join(ch for ch in name if ch.isalnum() or ch in "_- ") .strip()
-        if not clean:
-            raise ProjectError("Nom de mob invalide.")
-        slug = clean.replace(" ", "_")
-        mob_dir = self.work / "mobs" / slug
-        mob_dir.mkdir(parents=True, exist_ok=True)
-
-        copied = []
-        model_stem = Path(model).name.split(".")[0]
-        if model:
-            self.read_asset(model)  # vérifie notamment que la compression est lisible
-            source = self._current_asset(model)[0].read_bytes()
-            extension = ".bfres.zs" if zs.is_zstd(source) else ".bfres"
-            target = mob_dir / f"{slug}{extension}"
-            # Recopier les octets courants sans recomprimer ni mentir sur le suffixe.
-            target.write_bytes(source)
-            copied.append({"from": model, "to": target.name, "kind": "model"})
-        for rel in textures:
-            info = self.texture_info(rel)
-            name_t = info["textures"][0]["name"]
-            suffix = name_t.split("_")[-1]
-            source = self._current_asset(rel)[0].read_bytes()
-            extension = ".bntx.zs" if zs.is_zstd(source) else ".bntx"
-            target = mob_dir / f"{slug}_{suffix}{extension}"
-            target.write_bytes(source)
-            copied.append({"from": rel, "to": target.name, "kind": "texture",
-                           "texture": name_t})
-
-        entry = {
-            "name": clean,
-            "slug": slug,
-            "parent": parent or model_stem,
-            "model_source": model,
-            "texture_sources": list(textures),
-            "files": copied,
-            "todo": [
-                "écrire le paramètre d'acteur (BYML) : copie du $parent, nom du modèle",
-                "déclarer les tailles dans la table RESTBL du mod",
-                "vérifier sur une carte (Banc/*.bcett.byml)",
-            ],
-        }
-        mobs = [m for m in self.list_mobs() if m.get("slug") != slug]
-        mobs.append(entry)
-        self._mobs_file().write_text(json.dumps(mobs, indent=2, ensure_ascii=False),
-                                     encoding="utf-8")
-        self.bump()
-        return entry
-
     # ------------------------------------------------------------------ export
     def export_selection(self, items: list[dict]) -> bytes:
         """ZIP de la sélection : GLB/glTF et OBJ statiques, PNG pour les textures."""
@@ -2936,46 +2859,6 @@ class Project:
         if not models and not textures:
             raise ProjectError("Rien à exporter dans cette sélection.")
         return buffer.getvalue()
-
-    def build_mod(self, name: str = "HookyMod") -> dict:
-        """Assemble un dossier de mod (layeredFS) avec tout ce qui est modifié."""
-        clean = "".join(ch for ch in name if ch.isalnum() or ch in "_-").strip() or "HookyMod"
-        target = self.root / "mods" / clean / "romfs"
-        if target.parent.exists():
-            shutil.rmtree(target.parent)
-        target.mkdir(parents=True, exist_ok=True)
-
-        written = []
-        assets_dir = self.work / "assets"
-        if assets_dir.is_dir():
-            for path in assets_dir.rglob("*"):
-                if not path.is_file():
-                    continue
-                rel = path.relative_to(assets_dir)
-                destination = target / rel
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(path, destination)
-                written.append(rel.as_posix())
-
-        mobs_dir = self.work / "mobs"
-        for mob in self.list_mobs():
-            folder = mobs_dir / mob["slug"]
-            for file in mob.get("files", []):
-                source = folder / file["to"]
-                if not source.is_file():
-                    continue
-                folder_name = "Model" if file["kind"] == "model" else "Tex"
-                destination = target / folder_name / file["to"]
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, destination)
-                written.append(f"{folder_name}/{file['to']}")
-
-        manifest = {"name": clean, "files": written, "mobs": len(self.list_mobs()),
-                    "source_root": str(self.root)}
-        (target.parent / "hookycreator.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"mod": clean, "path": self.shown_path(target.parent),
-                "files": len(written), "mobs": manifest["mobs"]}
 
     # ------------------------------------------------------------------ état
     def edited_files(self, max_age: float = 2.0) -> list[str]:
@@ -3066,7 +2949,6 @@ class Project:
             "root": str(self.root),
             "work": str(self.work.relative_to(self.root)) if self.work.is_relative_to(self.root) else str(self.work),
             "assets": [a.as_json() for a in assets],
-            "mobs": self.list_mobs(),
             "dicts": len(self._load_dicts()),
             "zstd": zs.zstd_available(),
             "settings": settings.as_json(),

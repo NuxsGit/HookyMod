@@ -33,7 +33,7 @@ La CLI de modèle recherche des textures voisines par nom : seul un albédo uniq
 
 - Une interface Tk absente peut nécessiter l'installation du paquet système `python3-tk` sous Debian/Ubuntu ; la CLI et l'atelier navigateur peuvent être utilisés sans elle.
 - Les textures BC6/BC7/ASTC ont besoin de `texture2ddecoder` pour les chemins de lecture concernés. L'encodage ASTC/BC7 n'est pas fourni.
-- Une ressource modifiée dont la taille change peut nécessiter une adaptation de la table RESTBL. L'assemblage de HookyCreator ne la met pas automatiquement à jour.
+- Une ressource modifiée dont la taille change peut nécessiter une adaptation de la table RESTBL. HookyCreator ne la met pas automatiquement à jour et n'assemble plus de mod dans cette version source.
 - Les archives, animations, paramètres et formats non reconnus peuvent rester illisibles. Une exportation ou une relecture valide ne garantit pas le résultat en jeu.
 
 ## Références et attributions

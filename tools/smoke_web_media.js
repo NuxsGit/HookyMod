@@ -264,36 +264,26 @@ async function main() {
     assert.deepEqual(fs.readFileSync(videoCopy), fs.readFileSync(path.join(temp, "replacement.webm")));
     assert.deepEqual(fs.readFileSync(videoSource), originalVideo);
 
-    // A declined build must leave an existing mod untouched, and the dialog
-    // must explicitly explain that accepting replaces it without a backup.
+    // Existing mod folders are left untouched; no maker routes or controls
+    // remain in either the source server or the authenticated desktop sidecar.
     const sentinel = path.join(info.root, "mods", "HookyMod", "keep.txt");
     fs.mkdirSync(path.dirname(sentinel), { recursive: true });
     fs.writeFileSync(sentinel, "keep");
-    await page.locator('[data-view="create"]').click();
-    message = "";
-    page.once("dialog", async (dialog) => { message = dialog.message(); await dialog.dismiss(); });
-    await page.locator('#mod-form button[type="submit"]').click();
-    assert.match(message, /mods\//); assert.match(message, /without a backup/);
+    const retired = await page.evaluate(async () => {
+      const paths = ["/api/mod/build", "/api/mobs", "/api/studio/workspaces"];
+      return Promise.all(paths.map(async (route) => [
+        (await fetch(route)).status,
+        (await fetch(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status,
+      ]));
+    });
+    assert.deepEqual(retired, [[405, 405], [405, 405], [405, 405]]);
+    assert.equal(await page.locator('[data-view="create"], [data-view="studio"], [data-view="mobs"]').count(), 0);
     assert.equal(fs.readFileSync(sentinel, "utf8"), "keep");
-    // User-defined names must not be mistaken for French UI labels.
-    await page.locator("#mod-name").fill("Fichier");
-    page.once("dialog", (dialog) => dialog.accept());
-    const buildResponse = page.waitForResponse((response) => response.url().endsWith("/api/mod/build")
-      && response.request().method() === "POST");
-    await page.locator('#mod-form button[type="submit"]').click();
-    const built = await (await buildResponse).json();
-    assert.equal(built.mod, "Fichier"); assert.equal(built.files, 2);
-    await page.waitForFunction(() => document.querySelector("#mod-log li span[data-no-i18n]")?.textContent === "Fichier");
-    assert.deepEqual(fs.readFileSync(path.join(info.root, "mods", "Fichier", "romfs", "Model", "Synthetic.webm")),
-      fs.readFileSync(path.join(temp, "replacement.webm")));
-    assert.deepEqual(fs.readFileSync(path.join(info.root, "mods", "Fichier", "romfs", "Model", "Silence.bwav")),
-      fs.readFileSync(soundCopy));
     assert.deepEqual(fs.readFileSync(soundSource), originalSound);
     assert.deepEqual(fs.readFileSync(videoSource), originalVideo);
-    assert.equal(fs.readFileSync(sentinel, "utf8"), "keep");
     assert.deepEqual(errors, []);
     console.log(`Browser media smoke (${info.token ? "authenticated sidecar" : "source backend"}): OK — `
-      + "languages/themes, visible animation, audio/video playback and replacements, build confirmation");
+      + "languages/themes, visible animation, audio/video playback and replacements, retired maker routes");
   } catch (error) {
     failed = true;
     if (stderr) console.error("Synthetic backend log:\n" + stderr);

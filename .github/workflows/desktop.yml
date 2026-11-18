@@ -70,13 +70,14 @@ jobs:
         run: |
           node --check hookycreator/web/app.js
           node --check hookycreator/web/i18n.js
-          node --check hookycreator/web/studio.js
           node --check hookycreator/web/model_animation.js
           node --check hookycreator/web/model_viewer.js
           node --check hookycreator/web/player.js
           python -c "import glob,subprocess; [subprocess.run(['node', path], check=True) for path in glob.glob('tests/*_test.js')]"
       - name: Build standalone sidecar including Rust core
         run: python .github/scripts/run_ci_command.py -- python tools/build_desktop_backend.py
+      - name: Verify the separated maker is absent from the sidecar
+        run: python .github/scripts/run_ci_command.py -- python tools/check_desktop_bundle.py src-tauri/binaries/hookycreator-backend-${{ matrix.target }}${{ matrix.extension }}
       - name: Smoke test the standalone sidecar
         run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-${{ matrix.target }}${{ matrix.extension }}
       - name: Install isolated Chromium dependencies for the sidecar
@@ -90,7 +91,7 @@ jobs:
           export HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core"
           python .github/scripts/run_ci_command.py -- node tools/smoke_web_media.js
           python .github/scripts/run_ci_command.py -- node tools/smoke_animated_export.js
-          python .github/scripts/run_ci_command.py -- node tools/smoke_studio.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_separation.js
       - name: Format and test Tauri Rust
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
@@ -147,7 +148,7 @@ jobs:
           python .github/scripts/run_ci_command.py -- node tools/smoke_player.js
           python .github/scripts/run_ci_command.py -- node tools/smoke_animated_export.js
           python .github/scripts/run_ci_command.py -- node tools/smoke_web_media.js
-          python .github/scripts/run_ci_command.py -- node tools/smoke_studio.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_separation.js
 
   model-formats:
     name: Formats OBJ / glTF et interopérabilité / Linux

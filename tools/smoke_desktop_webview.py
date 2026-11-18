@@ -109,7 +109,7 @@ class Driver:
         self.call("POST", f"/session/{self.session}/element/{identity}/click", {})
 
     def click_scrolled(self, selector: str) -> None:
-        # Les commandes Studio vivent dans #views, un conteneur défilant.
+        # Certaines commandes vivent dans #views, un conteneur défilant.
         # WebKitWebDriver ne le fait pas toujours défiler avant son clic natif.
         # Le clic reste un vrai clic WebDriver, pas un element.click() simulé.
         self.script("""
@@ -182,6 +182,17 @@ def run(application: Path) -> None:
         raise SystemExit(f"Application debug introuvable : {application}")
     with tempfile.TemporaryDirectory(prefix="hooky-webview-test-") as tmp:
         root = make_desktop_fixture(Path(tmp) / "dump")
+        # Pre-existing maker data is no longer opened by the app, but must not
+        # be removed on startup, closing or resuming the workspace.
+        old_design = root / "hookycreator_work" / "hookymods" / "legacy.json"
+        old_design.parent.mkdir(parents=True, exist_ok=True)
+        old_design.write_text("design conservé", encoding="utf-8")
+        old_mob = root / "hookycreator_work" / "mobs" / "mobs.json"
+        old_mob.parent.mkdir(parents=True, exist_ok=True)
+        old_mob.write_text("fiche conservée", encoding="utf-8")
+        old_mod = root / "mods" / "legacy" / "keep.txt"
+        old_mod.parent.mkdir(parents=True, exist_ok=True)
+        old_mod.write_text("mod conservé", encoding="utf-8")
         env = {**os.environ, "HOOKY_DESKTOP_TEST_PROJECT": str(root), "PYTHONUTF8": "1",
                "HOOKY_DESKTOP_TEST_CONFIG": str(Path(tmp) / "config")}
         env.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
@@ -367,57 +378,12 @@ def run(application: Path) -> None:
                 assert len(document['skins']) == 1
                 print("Webview native : session, ZIP, audio, vidéo, JSON et GLB multi-clips OK")
 
-                # L'archive .hooky utilise le véritable gestionnaire de
-                # téléchargement Tauri, pas seulement le backend HTTP.
-                close_panels(driver)
-                driver.click('button[data-view="studio"]')
-                driver.script("""
-                    const name = document.querySelector('#studio-new-name');
-                    name.value = 'Création synthétique';
-                    document.querySelector('#studio-create-form').requestSubmit();
-                """)
-                driver.wait("projet HookyMod's prêt", """
-                    return !document.querySelector('#studio-workspace').hidden
-                      && !document.querySelector('#studio-controls').disabled;
-                """)
-                driver.click_scrolled('[data-studio-kind="item"]')
-                driver.script("""
-                    const name = document.querySelector('#studio-element-name');
-                    name.value = 'Objet synthétique';
-                    name.dispatchEvent(new Event('input', { bubbles: true }));
-                """)
-                driver.click_scrolled('[data-studio-block="when_use"]')
-                driver.click_scrolled('[data-studio-block="give_item"]')
-                driver.script("""
-                    const value = document.querySelector('[data-block-value="1"]');
-                    value.value = 'Clé imaginaire';
-                    value.dispatchEvent(new Event('input', { bubbles: true }));
-                    const event = document.querySelector('#studio-simulation-event');
-                    event.value = 'when_use';
-                    event.dispatchEvent(new Event('change', { bubbles: true }));
-                """)
-                driver.click_scrolled('#studio-simulate')
-                driver.wait("simulation hors jeu", """
-                    const result = document.querySelector('#studio-simulation-result');
-                    return result && !result.hidden && result.textContent.includes('Action simulée')
-                      && result.textContent.includes('Clé imaginaire');
-                """)
-                driver.click_scrolled('#studio-export')
-                design = completed_download(driver, str(grouped))
-                downloads.append(design)
-                assert design.name.startswith('hookymods--') and design.suffix == '.hooky'
-                with zipfile.ZipFile(design) as archive:
-                    assert set(archive.namelist()) == {'manifest.json', 'workspace.json'}
-                    assert json.loads(archive.read('manifest.json'))['playable'] is False
-                    assert json.loads(archive.read('workspace.json'))['elements'][0]['name'] == 'Objet synthétique'
-                close_panels(driver)
-                # Laisser un brouillon non enregistré : le checkpoint natif
-                # doit le sauver même après avoir changé de vue.
-                driver.script("""
-                    const description = document.querySelector('#studio-description');
-                    description.value = 'Brouillon HookyMod conservé';
-                    description.dispatchEvent(new Event('input', { bubbles: true }));
-                """)
+                # Maker UI is absent, while existing projects and files remain
+                # untouched on disk. Regular downloads were exercised above.
+                assert not driver.query("return !!document.querySelector('[data-view=studio], [data-view=create], [data-view=mobs]')")
+                assert old_design.read_text(encoding="utf-8") == "design conservé"
+                assert old_mob.read_text(encoding="utf-8") == "fiche conservée"
+                assert old_mod.read_text(encoding="utf-8") == "mod conservé"
 
                 # Une sauvegarde finale > 64 Kio et artificiellement retardée
                 # doit être confirmée avant l'arrêt, pas confiée à keepalive.
@@ -435,7 +401,7 @@ def run(application: Path) -> None:
                     };
                     state.selection.add('model:Model/Heros.bfres');
                     for (let i = 0; i < 800; i++) state.selection.add('model:missing-' + i + '-' + 'x'.repeat(120));
-                    const name = document.querySelector('#mod-name');
+                    const name = document.querySelector('#model-target-search');
                     name.value = 'Brouillon conservé';
                     name.dispatchEvent(new Event('input', { bubbles: true }));
                     const search = document.querySelector('#search');
@@ -454,11 +420,12 @@ def run(application: Path) -> None:
                 sessions = list((root / "hookycreator_work" / "sessions").glob("*.json"))
                 assert len(sessions) == 1 and sessions[0].stat().st_size > 64 * 1024, sessions
                 saved = json.loads(sessions[0].read_text(encoding="utf-8"))["state"]
-                assert saved["fields"]["mod-name"] == "Brouillon conservé"
+                assert saved["fields"]["model-target-search"] == "Brouillon conservé"
                 assert saved["fields"]["search"] == "Heros"
                 assert "model:Model/Heros.bfres" in saved["selection"]
-                designs = list((root / "hookycreator_work" / "hookymods").glob("*.json"))
-                assert len(designs) == 1 and json.loads(designs[0].read_text(encoding="utf-8"))["description"] == "Brouillon HookyMod conservé"
+                assert old_design.read_text(encoding="utf-8") == "design conservé"
+                assert old_mob.read_text(encoding="utf-8") == "fiche conservée"
+                assert old_mod.read_text(encoding="utf-8") == "mod conservé"
                 recent = json.loads((Path(tmp) / "config" / "recent-project.json").read_text(encoding="utf-8"))
                 assert Path(recent["project"]) == root
 
@@ -472,7 +439,7 @@ def run(application: Path) -> None:
                     const models = document.querySelector('#view-models');
                     return !!(models && !models.hidden && document.querySelector('#btn-export-model')
                       && document.querySelector('#search').value === 'Heros'
-                      && document.querySelector('#mod-name').value === 'Brouillon conservé');
+                      && document.querySelector('#model-target-search').value === 'Brouillon conservé');
                 """, timeout=120)
                 assert driver.query("return [...state.selection]") == ["model:Model/Heros.bfres"]
                 assert driver.query("return !document.querySelector('#inspector').hidden")
@@ -483,7 +450,7 @@ def run(application: Path) -> None:
                 # Cette fois, fermer la fenêtre elle-même (et non le bouton de
                 # l'interface) immédiatement après la dernière modification.
                 driver.script("""
-                    const name = document.querySelector('#mod-name');
+                    const name = document.querySelector('#model-target-search');
                     name.value = 'Après redémarrage';
                     name.dispatchEvent(new Event('input', { bubbles: true }));
                 """)
@@ -494,7 +461,7 @@ def run(application: Path) -> None:
                     driver.close()
                 driver = None
                 saved = json.loads(sessions[0].read_text(encoding="utf-8"))["state"]
-                assert saved["fields"]["mod-name"] == "Après redémarrage"
+                assert saved["fields"]["model-target-search"] == "Après redémarrage"
                 print("Reprise native, fermeture confirmée et grande session : OK")
             except Exception as error:
                 # Afficher d'abord l'erreur précise : les annotations de CI
@@ -518,14 +485,6 @@ def run(application: Path) -> None:
                               exportFolder: text('export-result-folder'),
                               nativeVisible: !!node('native-download-result') && !node('native-download-result').hidden,
                               nativeTitle: text('native-download-title'), nativePath: text('native-download-path'),
-                              studioDisabled: !!node('studio-controls')?.disabled,
-                              studioItem: (() => {
-                                const el = document.querySelector('[data-studio-kind="item"]');
-                                if (!el) return null;
-                                const r = el.getBoundingClientRect();
-                                return {x: r.x, y: r.y, width: r.width, height: r.height,
-                                        hit: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 200)};
-                              })(),
                               toasts: text('toasts'), log: text('console-log').slice(-3000),
                             };
                         """)

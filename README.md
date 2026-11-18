@@ -15,14 +15,14 @@
   <a href="#license-and-credits">License and credits</a>
 </p>
 
-**HookyCreator** is HookyMod's local visual workspace for exploring user-supplied models, textures, sounds, animations and WebM videos, making standard exports, and assembling working copies. A Python/Tk explorer and command-line tools are also available.
+**HookyCreator** is HookyMod's local visual workspace for exploring user-supplied models, textures, sounds, animations and WebM videos, editing working copies and making standard exports. A Python/Tk explorer and command-line tools are also available.
 
-**HookyMod's** is a separate design workspace within the same application for imagining new items, cutscenes, dungeons and buildings. The workspace currently exports **non-playable design projects** as `.hooky`. A separate experimental source-only reference tool can also package already prepared mod files as `.hooky`; it does not generate or validate playable content. The older 11.26.1-beta installers predate the workspace.
+The source branch separates the experimental mod-maker from HookyCreator: its design workspace, mob sheets and mod assembly are no longer exposed by the app. Existing projects and files are not deleted. Historical source code is retained under [`modmaker/`](modmaker/README.md); it is not a standalone application. A separate source-only `.hooky` packaging tool remains available for already prepared files.
 
 > [!IMPORTANT]
 > No game, game assets, dictionaries, cryptographic keys or game executable are intentionally supplied. Bring your own files obtained lawfully and check your rights before using or sharing them. Tests use synthetic fixtures and do not require game files. No decryption capability or keys are supplied. The supplied project logo is kept at the maintainer's request; its origin and rights have not been verified.
 >
-> Working copies, exports and assembled mods can contain original or derivative material from your input files. Review the outputs and share them only when you have the necessary rights. The tool does not establish those rights or guarantee legal compliance.
+> Working copies, exports and separately assembled mods can contain original or derivative material from your input files. Review the outputs and share them only when you have the necessary rights. The tool does not establish those rights or guarantee legal compliance.
 
 HookyMod is an independent project, not affiliated with or endorsed by Team MagicBean or the authors of Hookshot.
 
@@ -30,18 +30,17 @@ HookyMod is an independent project, not affiliated with or endorsed by Team Magi
 
 ## Project status
 
-HookyMod 11.26.2 is a public release with experimental features. This source branch also contains **unreleased** skeleton and animation fixes; the published 11.26.2 installers do not include them. Format support is partial; a successful export, replacement or package does not guarantee visual accuracy or in-game compatibility. The Linux, Windows and macOS installers are unsigned, and macOS notarization and interactive window testing remain unverified. Check the rights and dependency notices before distributing any binary.
+HookyMod 11.26.2 is a public release with experimental features. This source branch also contains **unreleased** skeleton and animation fixes and removes the mod-maker from HookyCreator; the published 11.26.2 installers do not include those changes and still contain the previous mod-maker. Format support is partial; a successful export, replacement or package does not guarantee visual accuracy or in-game compatibility. The Linux, Windows and macOS installers are unsigned, and macOS notarization and interactive window testing remain unverified. Check the rights and dependency notices before distributing any binary.
 
 | Area | Current support and limits |
 | --- | --- |
 | Local workspace | Browse and filter assets, maintain a per-project session, and work on copies. Some diagnostics and native-window messages remain in French. |
-| HookyMod's and `.hooky` | Create visual design projects and simulate simple blocks locally. A separate experimental source tool packages existing `romfs` mod files; no generator from blocks or direct launcher integration is implemented or validated. |
+| Separated source tools | Historical design-project code and an experimental `.hooky` packager remain in the source tree, outside the app. No generator from blocks or direct launcher integration is implemented or validated. |
 | Models | Inspect and export GLB / glTF / OBJ with available textures. Geometry injection is restricted to some BFRES 9.x targets; BFRES 10.x injection, rig injection and morphs are not supported. |
 | Textures | Preview, export PNG and replace supported BNTX images. ASTC and BC7 encoding is not available. |
 | Animations | Preview supported BFRES 10.x FSKA Euler, quaternion and mixed clips, export curves as JSON, or experimentally export clips with their skin: one selected clip in GLB/glTF, or detected clips together in one GLB. OBJ/MTL and batch exports are static; animation injection is not supported. |
 | Collections and Player | Find name-based model/outfit suggestions for an animation and temporarily compose a character with separately skinned outfits or bone-attached items. These are experimental previews, not validated in-game assemblies or exports. |
 | Audio and video | Experimental BWAV conversion and replacement, plus WebM preview and replacement. Game compatibility is not validated. |
-| Mod assembly | Collect working copies and preparatory mob records. It does not create playable actors or update RESTBL automatically. Building deletes and recreates `mods/<name>` without a backup. |
 | Desktop | CI targets Tauri and a standalone backend on Windows, Linux and macOS. Packages are experimental; the macOS window has not been tested interactively. |
 
 ## Getting started
@@ -49,7 +48,7 @@ HookyMod 11.26.2 is a public release with experimental features. This source bra
 ### What you need
 
 - Python 3.10 or newer and the packages in `requirements.txt` for the browser workspace.
-- Your own legally obtained extracted assets, including any required zstd dictionary, for HookyCreator's asset tools. HookyMod's design workspace and the tests work with an empty folder and do not require game files.
+- Your own legally obtained extracted assets, including any required zstd dictionary, for HookyCreator's asset tools. Automated tests use synthetic fixtures and do not require game files.
 - A WebGL2-capable browser for the interactive model view; a static PNG fallback is available.
 - Optionally, Tkinter for the original explorer. To build the native window, see [desktop prerequisites](docs/DESKTOP.md).
 
@@ -68,9 +67,11 @@ The original explorer is available with `python AssetViewer.py`. For the native 
 
 ## Features and limitations
 
-### HookyMod's: design new content
+### Separated mod-maker sources
 
-Create a workspace from the **HookyMod's** tab, add descriptive elements and compose an ordered block sketch with the mouse or keyboard. A small in-memory simulator can test events and conditions without changing files or running a game. The studio exports and imports `.hooky` **design projects**, which are not game mods. A separate, experimental source tool can also package an existing `romfs` mod overlay into a different `.hooky` variant; packaging does not make the files compatible or playable. The intended target is Longshot on PC with [Link's Tool Box](https://github.com/losava/Links-Toolbox), but no generator from blocks or direct launcher integration has been validated. See the [HookyMod's guide](docs/HOOKYMODS.md) and [launcher format contract](docs/HOOKY_FORMAT_EN.md) for current behavior, proposed interoperability and limitations.
+The current HookyCreator app has no design workspace, mob records or mod-build action. Older `hookycreator_work/hookymods/` projects, `hookycreator_work/mobs/` records and existing `mods/` folders remain untouched. Old sessions are restored to Home when their former view no longer exists; other supported filters, tabs and import choices are retained. Before the first new checkpoint, a byte-for-byte backup of a session containing retired maker data is saved under `sessions/*.pre-modmaker-*.json.bak`; if that backup fails, the original session is not replaced.
+
+The prototype's Python code and non-standalone historical interface are kept under [`modmaker/`](modmaker/README.md) for future separation. The archived assembly code is not exposed in the app; if invoked directly it **deletes an existing `mods/<name>` folder without a backup**. The standalone source-only packager can still handle already prepared files via `python -m modmaker.modpackage`; the historical `python -m hookycreator.modpackage` entry point remains as a compatibility alias. Neither tool generates game content or guarantees compatibility. The published 11.26.2 release predates this separation. See the [historical maker notes](docs/HOOKYMODS.md) and [launcher format contract](docs/HOOKY_FORMAT_EN.md).
 
 ### Models: export and return
 
@@ -149,7 +150,7 @@ Format tests use synthetic fixtures. A software-browser WebGL2 / FSR smoke test 
 
 ## Documentation
 
-- [HookyMod's design workspace](docs/HOOKYMODS.md)
+- [Separated mod-maker sources and historical design projects](docs/HOOKYMODS.md)
 - [`.hooky` project and experimental mod package contract for launchers](docs/HOOKY_FORMAT_EN.md) ([French reference](docs/HOOKY_FORMAT.md))
 - [Workspace, formats and limitations](docs/HOOKYCREATOR.md)
 - [Native window and build](docs/DESKTOP.md)

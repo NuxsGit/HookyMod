@@ -20,8 +20,6 @@ Le scan repère jusqu'à 200 000 fichiers reconnus par défaut. S'il est tronqu�
 ## Les espaces
 
 - **Modification / HookyCreator** : modèles, ensembles, Player, animations, textures, sons, vidéos WebM et import de modèle.
-- **HookyMod's** : atelier distinct pour imaginer de nouveaux éléments et des blocs visuels, puis exporter ou importer un projet `.hooky`. Ce prototype de conception ne produit pas de mod jouable et ne lance pas de jeu ; voir [HOOKYMODS.md](HOOKYMODS.md).
-- **Création de mod** : parcours historique des copies modifiées, fiches préparatoires et assemblage, indépendant des projets HookyMod's.
 - **Réglages** : budget des aperçus, vignettes, thèmes clair/sombre/Aurora, langue FR/EN/RU/ZH, cache et moteur. Les préférences de l'ancien thème sont automatiquement migrées vers Aurora sans modifier les autres réglages. Certains diagnostics du backend et messages de la fenêtre native restent en français.
 
 Les grilles et boutons peuvent être utilisés à la souris ou au clavier. Les flèches déplacent le focus entre tuiles, Entrée ouvre l'élément et Échap ferme les panneaux. `Ctrl+K` ouvre la palette de commandes, `Ctrl+J` le journal et `Ctrl+F` la recherche.
@@ -132,10 +130,10 @@ Le mode lots parcourt aussi les packs reconnus jusqu'à trois niveaux. Les modè
 
 Les dossiers de lots portent eux aussi un marqueur local de source ; les dossiers de provenance inconnue ne sont pas réutilisés. Relancer un lot **remplace les fichiers de même nom** dans les dossiers reconnus, ainsi que `rapport.json`, sans supprimer les autres fichiers. Sauvegarde les exports modifiés avant de recommencer et évite de lancer plusieurs processus d'export en parallèle vers une même destination.
 
-## Assemblage et sécurité des données
+## Séparation du mod maker et sécurité des données
 
-**Création de mod** assemble les copies sous `mods/<nom>/romfs/`. Construire un mod **supprime et recrée entièrement** `mods/<nom>` s'il existe, sans sauvegarde ; l'interface demande confirmation mais l'API directe ne le fait pas. Sauvegarde ce dossier avant toute opération. Les noms sont nettoyés ; deux noms saisis peuvent donc désigner le même dossier.
+L'atelier de conception HookyMod's, les fiches de mobs et l'assemblage d'un dossier de mod ne sont plus proposés dans cette version source de HookyCreator. Les projets historiques dans `hookycreator_work/hookymods/`, les fiches dans `hookycreator_work/mobs/`, les dossiers `mods/` existants et les copies de travail ne sont pas supprimés. Un `--work` personnalisé change l'emplacement des deux premiers dossiers. Les anciennes sessions ouvertes sur les vues retirées reviennent à l'accueil ; les autres onglets, filtres, sélections et choix d'import compatibles sont conservés. Avant la première nouvelle sauvegarde, une copie exacte des anciennes sessions contenant des données mod maker est conservée dans `sessions/*.pre-modmaker-*.json.bak` ; en cas d'échec de cette copie, la session d'origine n'est pas remplacée.
 
-Une fiche de mob copie des fichiers et conserve des notes, mais ne crée ni acteur, ni placement, ni entrée RESTBL. L'assemblage ne met pas non plus RESTBL à jour automatiquement pour les ressources modifiées. Inspecte les tailles et teste le mod dans son environnement cible.
+Le code historique est archivé hors application dans [`modmaker/`](../modmaker/README.md), sans interface autonome. **Son ancien assembleur supprime et recrée `mods/<nom>` sans sauvegarde s'il est invoqué directement** ; il n'est plus accessible depuis HookyCreator. Les outils source indépendants restent disponibles, avec leurs propres limites : [notes de séparation](HOOKYMODS.md). Les installateurs publics 11.26.2 contiennent encore les anciennes fonctions : ce retrait concerne le code source non publié.
 
 Le noyau Rust est facultatif et ne couvre qu'une partie des traitements. Son état et les replis Python sont affichés dans **Réglages → Moteur & performances** ; détails dans [RUST.md](RUST.md).

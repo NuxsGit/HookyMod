@@ -63,7 +63,7 @@ supplémentaires : voir [`DESKTOP.md`](DESKTOP.md).
 | Lecture et reconstruction SARC | Rust dans l'application pour les entrées compatibles, avec repli Python ; objets, avertissements et archives imbriquées conservés |
 | Lecture et reconstruction RESTBL | Rust pour les tables compatibles, avec repli Python ; le dictionnaire Python, les opérations de modification et le CRC restent dans l'application |
 | Paquets NUP | Liste, vérification et extraction d'une entrée en Rust ; extraction complète et application restent en Python |
-| Serveur, navigation, lecture BFRES complète, Blender, mobs et exports | Python, comme avant |
+| Serveur, navigation, lecture BFRES complète et exports | Python, comme avant |
 
 Le moteur ne modifie pas la géométrie exportée autrement que par les contrôles
 BFRES existants. Ses entrées sont vérifiées et les cas non pris en charge
@@ -214,7 +214,7 @@ L'objectif de trois secondes doit aussi être vérifié dans l'interface réelle
 
 Porter et tester progressivement le parsing BFRES/BNTX, les exports, la
 recompression avec dictionnaire et les autres opérations sur les conteneurs,
-puis le serveur et les outils de création de mods. Conserver les vérifications
+puis le serveur et, séparément, les éventuels outils source. Conserver les vérifications
 de parité et les refus explicites à chaque étape,
 notamment pour les formats qui ne peuvent pas encore être reconstruits sans
 risquer d'inventer de la géométrie.

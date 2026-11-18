@@ -2,14 +2,14 @@
 
 Ce document est destiné aux créateurs de mods et aux développeurs de lanceurs. **`.hooky` est le format de HookyMod's**, avec pour objectif de transporter aussi bien des modifications que de nouveaux contenus pour Longshot sur PC. Les identifiants et les versions ci-dessous servent à distinguer les usages : l'extension seule ne suffit pas. Voir aussi la [présentation en anglais pour les développeurs de lanceurs](HOOKY_FORMAT_EN.md).
 
-> **Statut : expérimental, à discuter avec les développeurs des lanceurs avant stabilisation.** L'atelier exporte déjà des projets de conception. Une implémentation de référence distincte, utilisable depuis les sources, peut également emballer et vérifier des fichiers de mod déjà préparés. Elle ne génère pas ces fichiers depuis les blocs visuels. Aucun chargement direct `.hooky` par Link's Tool Box ou le lanceur officiel Longshot, ni compatibilité en jeu, n'a été validé ici. Les anciens installateurs `11.26.1-beta` ne contiennent pas l'atelier ; celui-ci est inclus à partir de 11.26.2.
+> **Statut : expérimental, à discuter avec les développeurs des lanceurs avant stabilisation.** Le code source de l'atelier historique et une implémentation de référence de paquet sont conservés dans `modmaker/`, hors de l'application HookyCreator. L'interface historique n'est pas autonome. Les installateurs publics 11.26.2 contiennent encore l'atelier de conception ; la version source le retire. L'outil de paquet peut emballer et vérifier des fichiers déjà préparés, mais ne les génère pas depuis les blocs visuels. Aucun chargement direct `.hooky` par Link's Tool Box ou le lanceur officiel Longshot, ni compatibilité en jeu, n'a été validé ici.
 
 | Identifiant dans `manifest.json` | Version | Usage actuel | Produit par |
 | --- | --- | --- | --- |
-| `org.hookymod.workspace` | 1 | Projet de conception avec éléments et blocs ; **non jouable** | L'atelier HookyMod's et `hookycreator/studio.py` |
-| `org.hookymod.mod` | 1 | Proposition d'un paquet contenant des fichiers `romfs` déjà préparés | Outil de référence `hookycreator/modpackage.py`, depuis les sources uniquement |
+| `org.hookymod.workspace` | 1 | Projet de conception avec éléments et blocs ; **non jouable** | Ancien atelier HookyMod's (11.26.2) ; code source `modmaker/studio.py` |
+| `org.hookymod.mod` | 1 | Proposition d'un paquet contenant des fichiers `romfs` déjà préparés | Outil de référence `modmaker/modpackage.py`, depuis les sources uniquement |
 
-Chaque variante est un ZIP dont le manifeste se trouve à la racine. Lire et vérifier `format`, `version` et `kind` avant de choisir un traitement ; refuser une variante ou une version inconnue, sans supposer qu'il s'agit d'un mod. L'import de projet de l'atelier accepte uniquement la première variante. Une archive de mod ne devient pas automatiquement un projet éditable, et un projet ne doit pas être installé comme mod.
+Chaque variante est un ZIP dont le manifeste se trouve à la racine. Lire et vérifier `format`, `version` et `kind` avant de choisir un traitement ; refuser une variante ou une version inconnue, sans supposer qu'il s'agit d'un mod. Le lecteur historique de projet accepte uniquement la première variante ; HookyCreator ne propose plus cet import. Une archive de mod ne devient pas automatiquement un projet éditable, et un projet ne doit pas être installé comme mod.
 
 La spécification et le code de référence de ce dépôt sont soumis à la [licence du projet](../LICENSE), qui limite notamment leur utilisation et distribution commerciales. Les conditions d'une éventuelle collaboration et d'une distribution tierce doivent être vérifiées avec les titulaires de droits. Aucun droit sur Longshot, ses ressources ou les marques tierces n'est accordé.
 
@@ -17,7 +17,7 @@ La spécification et le code de référence de ce dépôt sont soumis à la [lic
 
 ### Archive et manifeste
 
-Le lecteur actuel de l'atelier accepte **exactement** deux entrées nommées à la racine :
+Le lecteur source historique accepte **exactement** deux entrées nommées à la racine :
 
 ```text
 manifest.json
@@ -62,10 +62,10 @@ Chaque élément contient exactement `id`, `kind`, `name`, `description`, `asset
 
 - `id` : 32 caractères hexadécimaux minuscules, unique parmi les éléments du projet.
 - `kind` : `item`, `scene`, `dungeon` ou `building`. `name` et `description` suivent les mêmes limites que pour le projet ; le nom doit être non vide.
-- `asset` : `null` ou objet `{ "name": "...", "data": "..." }`. `data` est du base64 standard strict des octets du fichier. Le nom est un nom simple non caché, sans séparateur, de 128 caractères maximum et dont l'extension, insensible à la casse, est `.png`, `.obj` ou `.glb`. L'atelier effectue seulement un contrôle de l'en-tête PNG/GLB ou de l'encodage UTF-8 de l'OBJ, pas une conversion ni une validation complète du modèle. Une pièce jointe fait de 1 octet à 2 Mio ; leur total est limité à 6 Mio.
+- `asset` : `null` ou objet `{ "name": "...", "data": "..." }`. `data` est du base64 standard strict des octets du fichier. Le nom est un nom simple non caché, sans séparateur, de 128 caractères maximum et dont l'extension, insensible à la casse, est `.png`, `.obj` ou `.glb`. Le lecteur source effectue seulement un contrôle de l'en-tête PNG/GLB ou de l'encodage UTF-8 de l'OBJ, pas une conversion ni une validation complète du modèle. Une pièce jointe fait de 1 octet à 2 Mio ; leur total est limité à 6 Mio.
 - `blocks` : liste ordonnée de 0 à 100 objets contenant exactement `{ "type": "...", "value": "..." }`. La valeur est une chaîne d'au plus 256 caractères, éventuellement vide.
 
-Types de blocs reconnus : événements `when_enter`, `when_interact`, `when_use` ; conditions `if_has_item`, `if_flag` ; actions `show_message`, `give_item`, `open_door`, `play_scene`, `wait`. Ce sont actuellement des **données de conception**, pas une interface de programmation du jeu. Leur interprétation locale est décrite dans le [guide de l'atelier](HOOKYMODS.md#simuler-une-procédure-hors-jeu) et ne vaut pas spécification d'un moteur de jeu.
+Types de blocs reconnus : événements `when_enter`, `when_interact`, `when_use` ; conditions `if_has_item`, `if_flag` ; actions `show_message`, `give_item`, `open_door`, `play_scene`, `wait`. Ce sont actuellement des **données de conception**, pas une interface de programmation du jeu. Leur interprétation locale est décrite dans le [guide historique archivé](../modmaker/legacy_web/HOOKYMODS-legacy.md#simuler-une-procédure-hors-jeu) et ne vaut pas spécification d'un moteur de jeu.
 
 Le lecteur actuel borne l'archive à 12 Mio, le manifeste à 8 192 octets et `workspace.json` à 10 Mio. Il refuse notamment les fichiers supplémentaires, doublons ZIP, liens symboliques, entrées chiffrées, méthodes de compression autres que STORED et DEFLATE, JSON invalide, champs inconnus et empreintes incorrectes. Il lit en mémoire et n'extrait pas l'archive. L'import crée une copie avec un nouvel `id` de projet et une révision `0` ; les éléments restent ceux de la copie. Un contrôle de conception réussi n'est pas un contrôle de compatibilité du jeu. Le lecteur actuel n'est pas une garantie générale contre toutes les archives malveillantes.
 
@@ -140,13 +140,13 @@ Les noms complets doivent être uniques ; les collisions après `casefold` Unico
 
 ### Outil de référence et essai reproductible sans jeu
 
-Depuis la racine du dépôt et Python 3.10 ou plus récent, le module utilise la bibliothèque standard et ne nécessite aucune donnée de jeu. L'exemple ci-dessous crée uniquement un fichier texte synthétique : **il ne sera pas jouable**.
+Depuis la racine du dépôt et Python 3.10 ou plus récent, le module utilise la bibliothèque standard et ne nécessite aucune donnée de jeu. L'ancien nom `python -m hookycreator.modpackage` reste un alias source compatible ; aucun de ces modules n'est inclus dans le backend desktop. L'exemple ci-dessous crée uniquement un fichier texte synthétique : **il ne sera pas jouable**.
 
 ```bash
 python -c "from pathlib import Path; p=Path('exemple-mod/romfs/Example/hello.txt'); p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b'Hello Hooky!\n')"
-python -m hookycreator.modpackage pack --romfs exemple-mod/romfs --output exemple.hooky --id org.hookymod.example --name "Exemple synthétique" --mod-version 0.1.0 --description "Démonstration du conteneur uniquement, pas un mod jouable."
-python -m hookycreator.modpackage inspect exemple.hooky
-python -m hookycreator.modpackage unpack exemple.hooky --destination exemple-extrait
+python -m modmaker.modpackage pack --romfs exemple-mod/romfs --output exemple.hooky --id org.hookymod.example --name "Exemple synthétique" --mod-version 0.1.0 --description "Démonstration du conteneur uniquement, pas un mod jouable."
+python -m modmaker.modpackage inspect exemple.hooky
+python -m modmaker.modpackage unpack exemple.hooky --destination exemple-extrait
 ```
 
 `inspect` vérifie l'ensemble de l'archive et affiche son manifeste sans extraire ; `unpack` revérifie puis crée `exemple-extrait/romfs/...` dans un **nouveau** dossier. Ni l'un ni l'autre n'installe ou ne lance un mod. `pack` et `unpack` refusent de remplacer une destination existante ; le paquet doit être placé hors du `romfs` source. En cas d'erreur d'écriture, un fichier ou dossier partiel peut rester à inspecter et supprimer manuellement. La collecte refuse les liens symboliques et points de réanalyse et parcourt au maximum 8 192 entrées source. Ces commandes supposent un système de fichiers local de confiance, sans modification concurrente des dossiers pendant l'opération ; elles ne constituent pas un bac à sable contre un autre processus local hostile.
@@ -157,7 +157,7 @@ Pour un prototype Python, l'API de référence renvoie le manifeste vérifié et
 
 ```python
 from pathlib import Path
-from hookycreator.modpackage import MAX_ARCHIVE_BYTES, PackageError, read_package
+from modmaker.modpackage import MAX_ARCHIVE_BYTES, PackageError, read_package
 
 try:
     with Path("exemple.hooky").open("rb") as source:

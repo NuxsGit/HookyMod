@@ -21,7 +21,7 @@ const state = {
   anchor: null,
   shown: { models: 48, textures: 48, ensembles: 48, sounds: 48, animations: 48, videos: 48, chooser: 48 },
   modelCandidates: [], textureCandidates: [], ensembleCandidates: [], soundCandidates: [],
-  chooserModels: [], chooserTextures: [],
+  chooserModels: [],
   system: null,
   engine: null,
   warm: null,
@@ -47,7 +47,6 @@ let ensembleRenderSequence = 0;
 let projectSnapshotRevision = null;
 let projectRequestSequence = 0;
 let appliedProjectRequest = 0;
-let modBuildPending = false;
 // Des sélecteurs ne sont remplis qu'après la validation progressive des assets.
 let restoredChoices = {};
 let restoredModelQuality = "";
@@ -217,7 +216,7 @@ function showView(view, options = {}) {
     if (scroll) scroll.scrollTop = 0;
     // Les espaces d'accueil doivent rester lisibles, surtout sur mobile où
     // l'inspecteur est superposé. L'onglet du document reste disponible.
-    if (view === "edit" || view === "create" || view === "studio" || view === "player" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
+    if (view === "edit" || view === "player" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
       hideInspector();
     }
   }
@@ -233,8 +232,6 @@ function showView(view, options = {}) {
     renderTabs();
   }
   if (view === "home") renderHome();
-  if (view === "create") renderCreation();
-  if (view === "studio") window.HookyStudio?.show();
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
   if (view === "player" && !options.skipPlayer) window.HookyPlayer?.show();
@@ -242,7 +239,6 @@ function showView(view, options = {}) {
   if (view === "animations") renderAnimations();
   if (view === "videos") renderVideos();
   if (view === "sounds") renderSounds();
-  if (view === "mobs") renderMobs();
   if (view === "import") renderModelImport();
   if (view === "settings") { renderSettings(); refreshSystem(); }
 }
@@ -250,8 +246,6 @@ function showView(view, options = {}) {
 const VIEW_LABELS = {
   home: "Accueil",
   edit: "Modification",
-  create: "Création de mod",
-  studio: "HookyMod's",
   models: "Modèles",
   ensembles: "Ensembles",
   player: "Player",
@@ -259,7 +253,6 @@ const VIEW_LABELS = {
   animations: "Animations",
   videos: "Vidéos",
   sounds: "Sons",
-  mobs: "Mobs",
   import: "Importer un modèle",
   settings: "Réglages",
 };
@@ -289,8 +282,7 @@ function renderStatus() {
   const node = $("#status-counts");
   if (node) {
     node.textContent = `${count("model")} modèles repérés · ${auxiliary} ressources auxiliaires · `
-      + `${count("texture")} textures repérées · `
-      + `${state.project?.mobs?.length || 0} fiches de mobs`;
+      + `${count("texture")} textures repérées`;
   }
   const scan = state.project || {};
   const incomplete = Boolean(scan.scan_incomplete || scan.scan_truncated || scan.scan_errors);
@@ -325,7 +317,6 @@ function renderStatus() {
       <span class="chip"><b>${count("model")}</b> modèles repérés</span>
       <span class="chip"><b>${count("sound")}</b> BWAV repérés</span>
       <span class="chip"><b>${auxiliary}</b> BFRES auxiliaires</span>
-      <span class="chip"><b>${state.project?.mobs?.length || 0}</b> fiches de mobs</span>
       <span class="chip"><b>${state.project?.edited?.length || 0}</b> fichiers modifiés</span>
       <span class="chip" title="Budget mémoire des aperçus">budget
         <b>${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} GiB</b></span>`;
@@ -347,24 +338,12 @@ function renderHome() {
     activity.innerHTML = [
       ["Racine", `<code>${esc(project.root)}</code>`],
       ["Dossier de travail", `<code>${esc(project.work)}</code>`],
-      ["Fichiers modifiés", edited.length ? `${edited.length} en attente d'assemblage` : "aucun"],
-      ["Fiches de mobs", project.mobs.length || "aucune"],
+      ["Fichiers modifiés", edited.length ? `${edited.length} dans le dossier de travail` : "aucun"],
       ["Réglages", `écrits dans <code>settings.json</code>`],
     ].map(([key, value]) => `<li><span class="k">${key}</span><span>${value}</span></li>`).join("");
   }
   renderLogs();
   renderStatus();
-}
-
-/* ------------------------------------------------------------------ création de mod */
-function renderCreation() {
-  const list = $("#creation-status");
-  if (!list || !state.project) return;
-  const edited = state.project.edited?.length || 0;
-  const mobs = state.project.mobs?.length || 0;
-  list.innerHTML = `
-    <li><span class="k">Copies modifiées</span><span>${edited}</span></li>
-    <li><span class="k">Fiches de mobs préparées</span><span>${mobs}</span></li>`;
 }
 
 /* ------------------------------------------------------------------ modèles */
@@ -398,12 +377,9 @@ function updateValidatedAssets() {
   if (state.view === "textures") errors = summary(state.textureCandidates, "texture", "texture(s)", "#texture-count").errors;
   if (state.view === "ensembles") errors = summary(state.ensembleCandidates, "model", "ensemble(s)", "#ensemble-count").errors;
   if (state.view === "sounds") errors = summary(state.soundCandidates, "sound", "son(s)", "#sound-count").errors;
-  if (state.view === "mobs" || state.view === "import") {
-    const selector = state.view === "mobs" ? "#mob-validation-status" : "#model-import-validation-status";
-    const model = summary(state.chooserModels, "model", "modèle(s)", selector);
-    const texture = summary(state.chooserTextures, "texture", "texture(s)", "#mob-texture-validation-status");
-    errors = model.errors + (state.view === "mobs" ? texture.errors : 0);
-    fillMobSelects();
+  if (state.view === "import") {
+    errors = summary(state.chooserModels, "model", "modèle(s)", "#model-import-validation-status").errors;
+    fillModelTargets();
   }
   $$("[data-validate-retry]").forEach((button) => { button.hidden = !errors; });
   updateSelectionBar();
@@ -1260,88 +1236,37 @@ async function openVideo(rel) {
   state.tab = `video:${rel}`; renderTabs();
 }
 
-/* ------------------------------------------------------------------ mobs */
-function fillMobSelects() {
-  const models = (state.chooserModels || []).filter((asset) => assetValidation.valid("model", asset.rel));
-  const textures = (state.chooserTextures || []).filter((asset) => assetValidation.valid("texture", asset.rel));
-  const injectable = models.filter((asset) => assetValidation.entry("model", asset.rel)?.injectable);
-  const options = (items) => items.map((asset) =>
-    `<option data-no-i18n value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
-  const setSingle = (select, items, empty, requireChoice = false) => {
-    if (!select) return;
-    const prompt = requireChoice && items.length ? "(choisir un modèle cible)" : empty;
-    const html = (requireChoice || !items.length ? `<option value="">${prompt}</option>` : "") + options(items);
-    if (select.dataset.optionsHtml === html) return;
-    const previous = select.value;
-    select.innerHTML = html;
-    select.dataset.optionsHtml = html;
-    if (items.some((item) => item.rel === previous)) select.value = previous;
-  };
-  setSingle($("#mob-model"), models, "(aucun modèle vérifié)");
-  // Ne jamais injecter par défaut dans le premier modèle validé.
-  setSingle($("#model-target"), injectable, "(aucun modèle réinjectable vérifié)", true);
-  const textureSelect = $("#mob-textures");
-  if (textureSelect) {
-    const html = options(textures);
-    if (textureSelect.dataset.optionsHtml !== html) {
-      const previous = new Set([...textureSelect.selectedOptions].map((option) => option.value));
-      textureSelect.innerHTML = html;
-      textureSelect.dataset.optionsHtml = html;
-      for (const option of textureSelect.options) option.selected = previous.has(option.value);
+/* ------------------------------------------------------------------ modèles cibles pour l'import */
+function fillModelTargets() {
+  const models = (state.chooserModels || []).filter((asset) => assetValidation.valid("model", asset.rel)
+    && assetValidation.entry("model", asset.rel)?.injectable);
+  const select = $("#model-target");
+  if (select) {
+    const prompt = models.length ? "(choisir un modèle cible)" : "(aucun modèle réinjectable vérifié)";
+    const html = `<option value="">${prompt}</option>` + models.map((asset) =>
+      `<option data-no-i18n value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
+    if (select.dataset.optionsHtml !== html) {
+      const previous = select.value;
+      select.innerHTML = html;
+      select.dataset.optionsHtml = html;
+      if (models.some((item) => item.rel === previous)) select.value = previous;
     }
   }
+  // Ne jamais injecter par défaut dans le premier modèle validé.
   applyRestoredChoices();
   updateModelImportControls();
 }
 
-function requestChooserChecks(includeTextures) {
+function requestChooserChecks() {
   const assets = state.project?.assets || [];
   const cap = state.shown.chooser || 48;
-  const search = $(includeTextures ? "#mob-resource-search" : "#model-target-search");
-  const filter = (search?.value || "").trim().toLowerCase();
+  const filter = ($("#model-target-search")?.value || "").trim().toLowerCase();
   const models = assets.filter((asset) => asset.kind === "model" && matches(asset, filter));
-  const textures = includeTextures
-    ? assets.filter((asset) => asset.kind === "texture" && matches(asset, filter)) : [];
   state.chooserModels = models.slice(0, cap);
-  state.chooserTextures = textures.slice(0, cap);
-  assetValidation.setScope("view", [...state.chooserModels, ...state.chooserTextures],
-                           state.project?.image_revision);
-  const more = $(includeTextures ? "#mob-validate-more" : "#model-import-validate-more");
-  if (more) more.hidden = models.length <= cap && textures.length <= cap;
+  assetValidation.setScope("view", state.chooserModels, state.project?.image_revision);
+  const more = $("#model-import-validate-more");
+  if (more) more.hidden = models.length <= cap;
   updateValidatedAssets();
-}
-
-async function renderMobs() {
-  requestChooserChecks(true);
-  const mobs = state.project?.mobs || [];
-  $("#mob-grid").innerHTML = mobs.map((mob) => `
-    <article class="tile" role="button" tabindex="0" aria-label="Ouvrir ${esc(mob.name)}"
-             data-kind="mob" data-slug="${esc(mob.slug)}">
-      <div class="meta">
-        <strong data-no-i18n>${esc(mob.name)}</strong>
-        <small><span>parent :</span> <span data-no-i18n>${esc(mob.parent)}</span></small>
-        <small>${mob.files.length} fichier(s) copié(s) · fiche préparatoire</small>
-      </div>
-    </article>`).join("") || `<p class="muted">Aucune fiche pour l'instant.</p>`;
-}
-
-function openMob(slug) {
-  const mob = (state.project?.mobs || []).find((item) => item.slug === slug);
-  if (!mob) return;
-  showInspector("Mob", `
-    <h3 data-no-i18n>${esc(mob.name)}</h3>
-    <div class="sub"><span data-no-i18n>${esc(mob.slug)}</span> · <span>parent</span> <span data-no-i18n>${esc(mob.parent)}</span></div>
-    <dl class="kv">
-      <dt>Modèle source</dt><dd data-no-i18n>${esc(mob.model_source || "—")}</dd>
-      <dt>Textures</dt><dd data-no-i18n>${mob.texture_sources.map(esc).join(", ") || "—"}</dd>
-      <dt>Fichiers</dt><dd data-no-i18n>${mob.files.map((file) => esc(file.to)).join(", ") || "—"}</dd>
-    </dl>
-    <p class="warning-note">Fiche préparatoire : aucun acteur jouable n'a été créé.</p>
-    <strong>Reste à faire côté jeu</strong>
-    <ul class="todo">${mob.todo.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`);
-  ensureTab({ id: `mob:${slug}`, kind: "mob", label: mob.name, doc: { type: "mob", slug } });
-  state.tab = `mob:${slug}`;
-  renderTabs();
 }
 
 function openDoc(doc) {
@@ -1351,7 +1276,6 @@ function openDoc(doc) {
   if (doc.type === "sound") return openSound(doc.rel);
   if (doc.type === "animation") return openAnimation(doc.rel);
   if (doc.type === "video") return openVideo(doc.rel);
-  if (doc.type === "mob") return openMob(doc.slug);
 }
 
 /* ------------------------------------------------------------------ import OBJ / glTF */
@@ -1374,7 +1298,7 @@ function updateModelImportControls() {
 }
 
 function renderModelImport() {
-  requestChooserChecks(false);
+  requestChooserChecks();
   updateModelImportControls();
 }
 
@@ -1656,8 +1580,7 @@ async function flushSettings() {
     if (state.view === "textures") await renderTextures();
     if (state.view === "ensembles") await renderEnsembles();
     if (state.view === "sounds") await renderSounds();
-    if (state.view === "mobs") await renderMobs();
-    if (state.view === "import") requestChooserChecks(false);
+    if (state.view === "import") requestChooserChecks();
     if (notify) toast("Réglages enregistrés");
     settingsSaveFailed = false;
     saved = true;
@@ -2080,54 +2003,6 @@ async function pollBulk() {
   await refresh();
 }
 
-async function buildMod(event) {
-  event.preventDefault();
-  if (modBuildPending) return;
-  const name = new FormData(event.target).get("name");
-  if (!window.confirm(tr("Assembler ce mod ?\n\nLe nom du dossier est nettoyé : seuls les lettres, "
-      + "chiffres, tirets et _ sont conservés (ou HookyMod s'il ne reste rien). "
-      + "Si ce dossier existe déjà dans mods/, il sera entièrement remplacé, sans sauvegarde."))) return;
-  modBuildPending = true;
-  const button = event.target.querySelector('button[type="submit"]');
-  if (button) button.disabled = true;
-  try {
-    const result = await api("/api/mod/build", {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    });
-    $("#mod-log").innerHTML = `
-      <li><span class="k">Mod</span><span data-no-i18n>${esc(result.mod)}</span></li>
-      <li><span class="k">Dossier</span><code>${esc(result.path)}</code></li>
-      <li><span class="k">Fichiers</span><span>${result.files}</span></li>
-      <li><span class="k">Fiches de mobs</span><span>${result.mobs}</span></li>`;
-    toast(`Mod assemblé : ${result.path} (${result.files} fichier(s))`);
-  } catch (error) { toast(error.message, "error"); }
-  finally {
-    modBuildPending = false;
-    if (button) button.disabled = false;
-  }
-}
-
-async function createMob(event) {
-  event.preventDefault();
-  const form = new FormData(event.target);
-  const textures = [...($("#mob-textures")?.selectedOptions || [])].map((option) => option.value);
-  try {
-    const mob = await api("/api/mobs", {
-      method: "POST",
-      body: JSON.stringify({
-        name: form.get("name"),
-        parent: form.get("parent") || "",
-        model: form.get("model"),
-        textures,
-      }),
-    });
-    toast(`Fiche créée : ${mob.name}`);
-    await refresh();
-    renderMobs();
-  } catch (error) { toast(error.message, "error"); }
-}
-
 /* ------------------------------------------------------------------ menus */
 const MENUS = {
   fichier: [
@@ -2136,7 +2011,6 @@ const MENUS = {
     { label: "Exporter la sélection (ZIP)", run: () => exportSelection() },
     { sep: true },
     { label: "Exporter tout le projet", run: () => { showView("home"); startBulk(); } },
-    { label: "Assembler le mod…", run: () => { showView("create"); $("#mod-name")?.focus(); } },
     { sep: true },
     { label: "Ouvrir le dossier de travail", run: () => toast(`Dossier : ${state.project?.work || "—"}`) },
     { sep: true },
@@ -2175,8 +2049,6 @@ const MENUS = {
   affichage: [
     { label: "Accueil", hint: "Ctrl+1", run: () => showView("home") },
     { label: "Espace modification", run: () => showView("edit") },
-    { label: "HookyMod's", run: () => showView("studio") },
-    { label: "Espace création de mod", run: () => showView("create") },
     { label: "Réglages", hint: "Ctrl+6", run: () => showView("settings") },
     { sep: true },
     { label: "Journal", hint: "Ctrl+J", run: toggleConsole },
@@ -2230,20 +2102,16 @@ function paletteCommands() {
   const commands = [
     { label: "Aller à l'accueil", group: "vue", run: () => showView("home") },
     { label: "Espace modification", group: "vue", run: () => showView("edit") },
-    { label: "HookyMod's", group: "vue", run: () => showView("studio") },
-    { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
     { label: "Aller à Player", group: "vue", run: () => showView("player") },
     { label: "Aller aux animations", group: "vue", run: () => showView("animations") },
     { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
     { label: "Aller aux sons", group: "vue", run: () => showView("sounds") },
     { label: "Aller aux vidéos", group: "vue", run: () => showView("videos") },
-    { label: "Aller aux mobs", group: "vue", run: () => showView("mobs") },
     { label: "Importer un modèle", group: "vue", run: () => showView("import") },
     { label: "Aller aux réglages", group: "vue", run: () => showView("settings") },
     { label: "Rafraîchir le projet", group: "action", run: () => refresh({ quiet: false }) },
     { label: "Exporter tout le projet", group: "action", run: () => { showView("home"); startBulk(); } },
-    { label: "Assembler le mod…", group: "action", run: () => { showView("create"); $("#mod-name")?.focus(); } },
     { label: "Analyser les fichiers choisis", group: "import", run: () => runModelImport(false) },
     { label: "Injecter le modèle source", group: "import", run: () => runModelImport(true) },
     { label: "Basculer le journal", group: "affichage", run: toggleConsole },
@@ -2490,10 +2358,8 @@ async function rescanProject() {
     if (state.view === "animations") renderAnimations();
     if (state.view === "videos") renderVideos();
     if (state.view === "sounds") await renderSounds();
-    if (state.view === "mobs") await renderMobs();
     if (state.view === "import") await renderModelImport();
     if (state.view === "home") renderHome();
-    if (state.view === "create") renderCreation();
     if (payload.scan.incomplete || payload.scan.truncated) {
       toast("Scan incomplet : consulte les détails à l'accueil.", "error");
     } else {
@@ -2532,7 +2398,7 @@ async function quitApp() {
   ]);
   clearTimeout(timeout);
   if (!saved && !window.confirm(tr(
-    "La session, les réglages ou le projet HookyMod's n'ont pas pu être enregistrés. Quitter quand même ?"))) {
+    "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?"))) {
     document.body.inert = false;
     return;
   }
@@ -2619,7 +2485,6 @@ async function refresh(options = {}) {
   applyUiSettings(state.settings);
   renderStatus();
   if (state.view === "home") renderHome();
-  if (state.view === "create") renderCreation();
   if (state.view === "models") await renderModels();
   if (state.view === "ensembles") await renderEnsembles();
   if (state.view === "player") window.HookyPlayer?.refresh();
@@ -2627,7 +2492,6 @@ async function refresh(options = {}) {
   if (state.view === "animations") renderAnimations();
   if (state.view === "videos") renderVideos();
   if (state.view === "sounds") await renderSounds();
-  if (state.view === "mobs") await renderMobs();
   if (state.view === "import") await renderModelImport();
   if (state.view === "settings") { renderSettings(); refreshSystem(); }
   if (options.quiet === false) {
@@ -2682,7 +2546,6 @@ function handleTileNavigation(event) {
 }
 
 function wire() {
-  window.HookyStudio?.wire({ api, toast });
   window.HookyPlayer?.wire({ api, toast, getAssets: () => state.project?.assets || [],
     getSettings: settingsOrDefault, getRevision: () => state.project?.image_revision || "" });
   let paused = false;
@@ -2751,13 +2614,9 @@ function wire() {
     state.shown.videos = 48;
     renderVideos();
   });
-  onInputDebounced("#mob-resource-search", () => {
-    state.shown.chooser = 48;
-    requestChooserChecks(true);
-  });
   onInputDebounced("#model-target-search", () => {
     state.shown.chooser = 48;
-    requestChooserChecks(false);
+    requestChooserChecks();
   });
   $("#model-shots").onchange = renderModels;
   const ensMore = $("#ensemble-more-btn");
@@ -2799,17 +2658,12 @@ function wire() {
       if (state.view === "textures") renderTextures();
       if (state.view === "ensembles") renderEnsembles();
       if (state.view === "sounds") renderSounds();
-      if (state.view === "mobs") requestChooserChecks(true);
-      if (state.view === "import") requestChooserChecks(false);
+      if (state.view === "import") requestChooserChecks();
     };
   });
-  $("#mob-validate-more").onclick = () => {
-    state.shown.chooser += 48;
-    requestChooserChecks(true);
-  };
   $("#model-import-validate-more").onclick = () => {
     state.shown.chooser += 48;
-    requestChooserChecks(false);
+    requestChooserChecks();
   };
   $("#selection-export").onclick = () => exportSelection();
   $("#selection-clear").onclick = clearSelection;
@@ -2870,12 +2724,9 @@ function wire() {
       if (tile.dataset.kind === "sound") openSound(tile.dataset.rel);
       if (tile.dataset.kind === "animation") openAnimation(tile.dataset.rel);
       if (tile.dataset.kind === "video") openVideo(tile.dataset.rel);
-      if (tile.dataset.kind === "mob") openMob(tile.dataset.slug);
     }
   });
 
-  $("#mob-form").onsubmit = createMob;
-  $("#mod-form").onsubmit = buildMod;
   $("#bulk-start").onclick = startBulk;
 
   // Import de fichiers standards. Les fichiers ne sont jamais stockés dans la session.
@@ -2937,7 +2788,7 @@ function wire() {
     }
     if (meta && "123456".includes(event.key)) {
       event.preventDefault();
-      const views = ["home", "models", "textures", "mobs", "import", "settings"];
+      const views = ["home", "models", "textures", "player", "import", "settings"];
       showView(views[Number(event.key) - 1]);
       return;
     }
@@ -2968,34 +2819,21 @@ function wire() {
 
 /* ------------------------------------------------------------------ reprise automatique */
 const SESSION_TEXT_FIELDS = ["search", "search-tex", "search-ens", "search-sound", "search-animation", "search-video", "tex-role",
-  "mod-name", "mob-name", "mob-parent", "mob-resource-search", "model-axis", "model-scale",
+  "model-axis", "model-scale",
   "model-target-search"];
 const SESSION_CHECK_FIELDS = ["model-shots", "ens-textures", "bulk-anim", "model-fit"];
 let sessionTouchedDuringBoot = false;
 
 function applyRestoredChoices() {
-  for (const id of ["mob-model", "model-target"]) {
-    const desired = restoredChoices[id];
-    if (!desired) continue;
-    const select = $(`#${id}`);
-    if (!select) continue;
-    if ([...select.options].some((option) => option.value === desired)) {
-      select.value = desired;
-      delete restoredChoices[id];
-    } else {
-      // Ne pas soumettre par accident le premier modèle encore en cours de
-      // validation à la place de celui que l'utilisateur avait choisi.
-      select.value = "";
-    }
-  }
-  const textures = $("#mob-textures");
-  if (textures && Array.isArray(restoredChoices["mob-textures"])) {
-    const pending = new Set(restoredChoices["mob-textures"]);
-    for (const option of textures.options) {
-      if (pending.delete(option.value)) option.selected = true;
-    }
-    restoredChoices["mob-textures"] = [...pending];
-    if (!pending.size) delete restoredChoices["mob-textures"];
+  const desired = restoredChoices["model-target"];
+  const select = $("#model-target");
+  if (!desired || !select) return;
+  if ([...select.options].some((option) => option.value === desired)) {
+    select.value = desired;
+    delete restoredChoices["model-target"];
+  } else {
+    // Ne pas injecter par accident dans le premier modèle en cours de validation.
+    select.value = "";
   }
 }
 
@@ -3012,12 +2850,7 @@ function captureUiSession() {
   const quality = $("#model-quality")?.value || restoredModelQuality;
   if (quality) fields["model-quality"] = quality;
   const choices = {
-    "mob-model": restoredChoices["mob-model"] || $("#mob-model")?.value || "",
     "model-target": restoredChoices["model-target"] || $("#model-target")?.value || "",
-    "mob-textures": [...new Set([
-      ...(restoredChoices["mob-textures"] || []),
-      ...[...($("#mob-textures")?.selectedOptions || [])].map((option) => option.value),
-    ])].slice(0, 5000),
   };
   const tabs = state.tabs.slice(0, 64).map((tab) => {
     if (tab.view) return { type: "view", view: tab.view };
@@ -3041,7 +2874,6 @@ function captureUiSession() {
 async function restoreUiSession(saved) {
   if (!saved || saved.version !== 1 || !state.project) return;
   const assets = new Map((state.project.assets || []).map((asset) => [`${asset.kind}:${asset.rel}`, asset]));
-  const mobs = new Map((state.project.mobs || []).map((mob) => [mob.slug, mob]));
   if (sessionTouchedDuringBoot) return;
   for (const id of [...SESSION_TEXT_FIELDS, ...SESSION_CHECK_FIELDS]) {
     const value = saved.fields?.[id];
@@ -3064,10 +2896,7 @@ async function restoreUiSession(saved) {
     && (key.startsWith("model:") || key.startsWith("texture:"))));
   const choices = saved.choices || {};
   restoredChoices = {};
-  if (assets.has(`model:${choices["mob-model"]}`)) restoredChoices["mob-model"] = choices["mob-model"];
   if (assets.has(`model:${choices["model-target"]}`)) restoredChoices["model-target"] = choices["model-target"];
-  restoredChoices["mob-textures"] = (choices["mob-textures"] || [])
-    .filter((rel) => assets.has(`texture:${rel}`));
 
   state.tabs = [];
   ensureViewTab("home", VIEW_LABELS.home).closable = false;
@@ -3080,9 +2909,6 @@ async function restoreUiSession(saved) {
       if (asset) ensureTab({ id: `${tab.type}:${tab.rel}${index ? `#${index}` : ""}`,
                              kind: tab.type, label: asset.name,
                              doc: { type: tab.type, rel: tab.rel, ...(tab.type === "texture" ? { index } : {}) } });
-    } else if (tab.type === "mob" && mobs.has(tab.slug)) {
-      ensureTab({ id: `mob:${tab.slug}`, kind: "mob", label: mobs.get(tab.slug).name,
-                  doc: { type: "mob", slug: tab.slug } });
     }
   }
   const view = Object.hasOwn(VIEW_LABELS, saved.view) ? saved.view : "home";
@@ -3115,10 +2941,7 @@ async function saveUiCheckpoint() {
     const settingsSaved = await finishPendingSettings();
     const sessionSaved = uiSessionWriter?.enabled
       ? await uiSessionWriter.flush() : !sessionTouchedDuringBoot;
-    // La fermeture et le changement de projet natifs attendent aussi les
-    // brouillons HookyMod's ; une erreur ne doit pas les perdre silencieusement.
-    const studioSaved = await (window.HookyStudio?.flush() ?? Promise.resolve(true));
-    return settingsSaved && sessionSaved && studioSaved;
+    return settingsSaved && sessionSaved;
   } catch (error) {
     toast(`Sauvegarde de session impossible : ${error.message}`, "error");
     return false;
@@ -3139,7 +2962,7 @@ function wireUiSession() {
         sessionLoadFailed = false;
       }
     }
-    if (event?.type === "change" && ["mob-model", "mob-textures", "model-target"].includes(event.target?.id)) {
+    if (event?.type === "change" && event.target?.id === "model-target") {
       delete restoredChoices[event.target.id];
     }
     uiSessionWriter.schedule(event?.type === "input" || event?.type === "scroll" ? 250 : 100);

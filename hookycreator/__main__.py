@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         return _export_all(argv[1:])
     parser = argparse.ArgumentParser(
         prog="hookycreator",
-        description="HookyCreator — atelier de contenu (mobs, textures, modèles).",
+        description="HookyCreator — exploration et édition de ressources (textures, modèles, sons).",
     )
     parser.add_argument("--version", action="version", version=f"HookyCreator {__version__}")
     parser.add_argument("root", nargs="?", default=".", help="dossier du projet (romfs ou assets extraits)")

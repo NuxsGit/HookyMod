@@ -17,6 +17,8 @@ de jeton ; elle le rouvre automatiquement s'il existe. Sinon le sélecteur de
 dossier revient. Pour le navigateur, il faut relancer le serveur sur le même
 projet et avec le même dossier `--work` éventuel ; le port peut changer.
 
+Avant la première écriture d'une session contenant des données de mod maker retirées, une copie exacte est conservée dans `sessions/*.pre-modmaker-*.json.bak` ; si cette copie échoue, la session d'origine n'est pas remplacée. Cette copie n'est pas restaurée automatiquement et peut contenir des informations personnelles.
+
 Les écritures sont atomiques. En cas de sauvegardes arrivant dans le désordre
 pour une même fenêtre, la plus récente est conservée. Si deux fenêtres ou deux
 serveurs écrivent dans le même travail, la dernière écriture reçue l'emporte :

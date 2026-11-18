@@ -57,51 +57,28 @@ class WebContractTests(unittest.TestCase):
         self.assertTrue(sections <= labels | {"home"})
         self.assertIn("home", sections)
 
-    def test_editing_and_mod_creation_have_separate_workspaces(self) -> None:
-        self.assertIn('data-goto="edit"', self.html)
-        self.assertIn('data-goto="create"', self.html)
-        home = self.html.split('id="view-home"', 1)[1].split('id="view-edit"', 1)[0]
-        creation = self.html.split('id="view-create"', 1)[1].split('id="view-models"', 1)[0]
-        self.assertNotIn('id="mod-form"', home)
-        self.assertIn('id="mod-form"', creation)
-        self.assertIn('id="creation-status"', creation)
-        self.assertIn('sera entièrement remplacé', creation)
-        self.assertIn("pas la création automatique d'un acteur jouable", creation)
-        self.assertIn('showView("create"); $("#mod-name")?.focus()', self.js)
-        self.assertNotIn('$("#mod-form")?.requestSubmit()', self.js)
-
-    def test_hookymods_is_a_separate_wired_design_workspace(self) -> None:
-        studio_js = _read("studio.js")
-        section = self.html.split('id="view-studio"', 1)[1].split('id="view-create"', 1)[0]
-        self.assertIn('data-view="studio"', self.html)
-        self.assertIn('data-goto="studio"', self.html)
-        self.assertIn('<script src="/static/studio.js"></script>', self.html)
-        self.assertIn("maquette ordonnée", section)
-        self.assertIn("ne créent pas encore de contenu jouable", section)
-        self.assertIn('data-studio-block="when_interact"', section)
-        self.assertIn('data-studio-kind="dungeon"', section)
-        self.assertIn("Longshot + Link's Tool Box : compatibilité", section)
-        self.assertIn("projets .hooky de conception, non jouables", section)
-        self.assertIn("fichiers de mod déjà préparés", section)
-        self.assertIn("Aucun import direct .hooky par un lanceur n'a été validé", section)
-        self.assertIn('id="studio-simulate"', section)
-        self.assertIn('Simulation en mémoire uniquement', section)
-        self.assertIn('/api/studio/simulate', studio_js)
-        self.assertIn('window.HookyStudio?.show()', self.js)
-        self.assertIn('window.HookyStudio?.flush()', self.js)
-        used = set(re.findall(r'\$\("#([A-Za-z0-9_-]+)"', studio_js))
-        present = set(re.findall(r'id="([A-Za-z0-9_-]+)"', self.html))
-        self.assertEqual(sorted(used - present), [])
-        self.assertIn('data-no-i18n title="${escape(project.name)}"', studio_js)
-        self.assertIn('data-no-i18n title="${escape(element.name)}"', studio_js)
-        self.assertIn('data-block-value="${index}" data-no-i18n', studio_js)
+    def test_maker_is_absent_but_asset_player_and_exports_remain(self) -> None:
+        for view in ("edit", "models", "player", "textures", "import", "settings"):
+            self.assertIn(f'data-view="{view}"', self.html)
+        for view in ("create", "studio", "mobs"):
+            self.assertNotIn(f'id="view-{view}"', self.html)
+            self.assertNotIn(f'data-view="{view}"', self.html)
+            self.assertNotIn(f'data-goto="{view}"', self.html)
+            self.assertNotIn(f'showView("{view}")', self.js)
+        for retired in ("/api/studio/", "/api/mod/build", "/api/mobs", "HookyStudio"):
+            self.assertNotIn(retired, self.html + self.js)
+        self.assertFalse((WEB / "studio.js").exists())
+        self.assertIn('id="model-target"', self.html)
+        self.assertIn('function fillModelTargets()', self.js)
+        self.assertIn('function exportModel(', self.js)
+        self.assertIn('window.HookyPlayer', self.js)
+        self.assertIn('"textures", "player", "import", "settings"', self.js)
 
     def test_unsupported_operations_are_described_without_promising_a_mod(self) -> None:
         self.assertIn("BFRES auxiliaires (rapport)", self.html)
         self.assertIn('kinds.push("animation", "auxiliary")', self.js)
         self.assertIn("l'écriture BFRES 10.x n'est pas disponible", self.html)
         self.assertIn("certaines structures BFRES 9.x", self.html)
-        self.assertIn("aucun acteur jouable", self.html)
 
     def test_small_screens_keep_the_inspector_visible(self) -> None:
         self.assertIn('.inspector:not([hidden])', self.css)

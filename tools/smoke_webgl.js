@@ -366,13 +366,12 @@ async function main() {
       const audioDialog = await translated.evaluate(() => HookyI18n.translate(
         "Remplacer la copie de travail ? Le son sera converti en BWAV PCM16 expérimental. BARS et RESTBL ne seront pas mis à jour ; la compatibilité en jeu n'est pas garantie."));
       assert.match(audioDialog, /BARS/); assert.match(audioDialog, /RESTBL/);
-      const buildDialog = await translated.evaluate(() => HookyI18n.translate(
-        "Assembler ce mod ?\n\nLe nom du dossier est nettoyé : seuls les lettres, chiffres, tirets et _ sont conservés (ou HookyMod s'il ne reste rien). Si ce dossier existe déjà dans mods/, il sera entièrement remplacé, sans sauvegarde."));
-      assert.match(buildDialog, /mods\//);
+      const checkpointDialog = await translated.evaluate(() => HookyI18n.translate(
+        "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?"));
       if (lang !== "fr") {
         assert.ok(!dialog.startsWith("Remplacer"));
         assert.ok(!audioDialog.startsWith("Remplacer"));
-        assert.ok(!buildDialog.startsWith("Assembler"));
+        assert.ok(!checkpointDialog.startsWith("La session"));
         assert.ok(!(await translated.locator("#validation").innerText()).includes("vérifié"));
         const viewStatus = await translated.evaluate(() => HookyI18n.translate(
           "42 triangles · FSR 1 expérimental · 50 % · image plafonnée à 800 px / densité ×1 · plus de 16 textures : certaines non affichées · albédos limités à 1 024 px dans la vue"));

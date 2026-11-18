@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import concurrent.futures
+import errno
+import hashlib
 import http.client
 import json
 import os
@@ -26,8 +28,8 @@ def snapshot(view="models"):
                  {"type": "model", "rel": "Model/Héros.bfres"}],
         "active": "model:Model/Héros.bfres",
         "selection": ["model:Model/Héros.bfres", "texture:Model/Héros_Alb.bntx"],
-        "fields": {"search": "Héros", "mod-name": "Un brouillon", "model-shots": True},
-        "choices": {"mob-model": "Model/Héros.bfres", "mob-textures": ["Model/Héros_Alb.bntx"]},
+        "fields": {"search": "Héros", "model-target-search": "Héros", "model-shots": True},
+        "choices": {"model-target": "Model/Héros.bfres"},
         "shown": {"models": 96},
         "scroll": 123,
         "inspector": True,
@@ -52,7 +54,7 @@ class SessionStoreTests(unittest.TestCase):
         state["fields"]["future"] = "ignored"
         self.assertTrue(self.store.save("client_123", 1, state))
         restored = session.SessionStore(self.work, self.root).load()
-        self.assertEqual(restored["fields"]["mod-name"], "Un brouillon")
+        self.assertEqual(restored["choices"]["model-target"], "Model/Héros.bfres")
         self.assertNotIn("future", restored["fields"])
         self.assertEqual(restored["tabs"], state["tabs"])
         self.assertEqual(restored["selection"], state["selection"])
@@ -68,6 +70,164 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(other.load()["view"], "sounds")
         self.assertNotEqual(self.store.name, other.name)
         self.assertNotIn(str(self.root), self.store.name)
+
+    def test_retired_views_and_mob_tabs_migrate_without_losing_other_state(self):
+        for view in ("studio", "create", "mobs"):
+            for active in (f"view:{view}", "mob:MyMob"):
+                with self.subTest(view=view, active=active):
+                    old = snapshot(view)
+                    old["active"] = active
+                    old["tabs"] += [{"type": "mob", "slug": "MyMob"},
+                                    {"type": "view", "view": "import"}]
+                    old["fields"]["mod-name"] = "Un brouillon historique"
+                    old["choices"].update({"mob-model": "Model/Héros.bfres",
+                                           "mob-textures": ["Model/Héros_Alb.bntx"]})
+                    raw = json.dumps({"root": self.store.root, "state": old}, ensure_ascii=False).encode()
+                    path = self.store._path()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(raw)
+                    migrated = self.store.load()
+                    self.assertEqual(path.read_bytes(), raw)  # loading alone never rewrites files
+                    self.assertEqual(migrated["view"], "home")
+                    self.assertEqual(migrated["active"], "view:home")
+                    self.assertEqual(migrated["selection"], old["selection"])
+                    self.assertEqual(migrated["choices"]["model-target"], "Model/Héros.bfres")
+                    self.assertEqual(migrated["fields"]["search"], "Héros")
+                    self.assertIn({"type": "view", "view": "import"}, migrated["tabs"])
+                    self.assertIn({"type": "model", "rel": "Model/Héros.bfres"}, migrated["tabs"])
+                    self.assertFalse(any(t.get("type") == "mob" or t.get("view") == view
+                                         for t in migrated["tabs"]))
+
+    def test_retired_drafts_are_backed_up_before_the_first_new_checkpoint(self):
+        old = snapshot("models")
+        old["fields"]["mod-name"] = "Brouillon à ne pas perdre"
+        old["choices"]["mob-textures"] = ["Model/Héros_Alb.bntx"]
+        raw = json.dumps({"root": self.store.root, "state": old}, ensure_ascii=False).encode()
+        path = self.store._path()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(raw)
+        migrated = self.store.load()
+        self.assertTrue(self.store.save("client_123", 1, migrated))
+        backups = list(path.parent.glob("*.pre-modmaker-*.json.bak"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), raw)
+        self.assertNotIn("mod-name", self.store.load()["fields"])
+        self.assertTrue(self.store.save("client_123", 2, snapshot("sounds")))
+        self.assertEqual(backups[0].read_bytes(), raw)
+        self.assertEqual(len(list(path.parent.glob("*.pre-modmaker-*.json.bak"))), 1)
+
+    def test_failed_retired_backup_keeps_original_session_and_retries(self):
+        old = snapshot("create")
+        raw = json.dumps({"root": self.store.root, "state": old}).encode()
+        path = self.store._path()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(raw)
+        migrated = self.store.load()
+        with patch("hookycreator.session.os.link", side_effect=PermissionError(errno.EACCES, "read only")), \
+                self.assertRaisesRegex(session.SessionError, "Impossible"):
+            self.store.save("client_123", 1, migrated)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(list(path.parent.glob(".hookymod-session-*")), [])
+        self.assertTrue(self.store.save("client_123", 1, migrated))
+        self.assertEqual(next(path.parent.glob("*.pre-modmaker-*.json.bak")).read_bytes(), raw)
+
+    def test_retired_backup_works_without_hard_link_support(self):
+        old = snapshot("mobs")
+        raw = json.dumps({"root": self.store.root, "state": old}).encode()
+        path = self.store._path()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(raw)
+        with patch("hookycreator.session.os.link", side_effect=OSError(errno.EINVAL, "unsupported")):
+            self.assertTrue(self.store.save("client_123", 1, self.store.load()))
+        self.assertEqual(next(path.parent.glob("*.pre-modmaker-*.json.bak")).read_bytes(), raw)
+        self.assertEqual(list(path.parent.glob(".hookymod-session-*")), [])
+
+    def test_failed_exclusive_backup_does_not_replace_original_session(self):
+        old = snapshot("mobs")
+        raw = json.dumps({"root": self.store.root, "state": old}).encode()
+        path = self.store._path()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(raw)
+        backup = path.with_name(f"{path.stem}.pre-modmaker-{hashlib.sha256(raw).hexdigest()}.json.bak")
+        real_open = os.open
+
+        def fail_after_partial(name, flags, *args, **kwargs):
+            fd = real_open(name, flags, *args, **kwargs)
+            if Path(name) == backup:
+                os.write(fd, b"incomplete")
+                os.close(fd)
+                raise OSError(errno.ENOSPC, "disk full")
+            return fd
+
+        with patch("hookycreator.session.os.link", side_effect=OSError(errno.EINVAL, "unsupported")), \
+                patch("hookycreator.session.os.open", side_effect=fail_after_partial), \
+                self.assertRaisesRegex(session.SessionError, "Impossible"):
+            self.store.save("client_123", 1, self.store.load())
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(backup.read_bytes(), b"incomplete")
+        # An incomplete file must not be silently treated as a valid backup.
+        with self.assertRaisesRegex(session.SessionError, "différente"):
+            self.store.save("client_123", 1, self.store.load())
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(backup.read_bytes(), b"incomplete")
+
+    def test_concurrent_backup_collision_never_replaces_existing_file(self):
+        old = snapshot("studio")
+        raw = json.dumps({"root": self.store.root, "state": old}).encode()
+        path = self.store._path()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(raw)
+        backup = path.with_name(f"{path.stem}.pre-modmaker-{hashlib.sha256(raw).hexdigest()}.json.bak")
+        real_link = os.link
+
+        def collision(source, destination):
+            # Another instance creates a different file after our temporary
+            # copy is complete but before it is published.
+            backup.write_bytes(b"different, do not overwrite")
+            return real_link(source, destination)
+
+        with patch("hookycreator.session.os.link", side_effect=collision), \
+                self.assertRaisesRegex(session.SessionError, "différente"):
+            self.store.save("client_123", 1, self.store.load())
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(backup.read_bytes(), b"different, do not overwrite")
+        self.assertEqual(list(path.parent.glob(".hookymod-session-*")), [])
+
+    def test_checkpoint_failure_reuses_the_intact_backup(self):
+        old = snapshot("create")
+        raw = json.dumps({"root": self.store.root, "state": old}).encode()
+        path = self.store._path()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(raw)
+        migrated = self.store.load()
+        with patch("hookycreator.session.write_atomic", side_effect=PermissionError("read only")), \
+                self.assertRaisesRegex(session.SessionError, "Impossible"):
+            self.store.save("client_123", 1, migrated)
+        backup = next(path.parent.glob("*.pre-modmaker-*.json.bak"))
+        timestamp = backup.stat().st_mtime_ns
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertTrue(self.store.save("client_123", 1, migrated))
+        self.assertEqual(backup.read_bytes(), raw)
+        self.assertEqual(backup.stat().st_mtime_ns, timestamp)
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "liens symboliques indisponibles")
+    def test_retired_backup_cannot_follow_a_symlink(self):
+        old = snapshot("studio")
+        raw = json.dumps({"root": self.store.root, "state": old}).encode()
+        path = self.store._path()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(raw)
+        outside = self.directory / "outside"
+        outside.write_bytes(b"safe")
+        backup = path.with_name(f"{path.stem}.pre-modmaker-{hashlib.sha256(raw).hexdigest()}.json.bak")
+        try:
+            backup.symlink_to(outside)
+        except OSError as error:
+            self.skipTest(f"création des liens interdite : {error}")
+        with self.assertRaises(session.SessionError):
+            self.store.save("client_123", 1, self.store.load())
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(outside.read_bytes(), b"safe")
 
     def test_player_view_is_restored_as_a_normal_view_tab(self):
         state = snapshot("player")
@@ -100,7 +260,7 @@ class SessionStoreTests(unittest.TestCase):
             {"version": 1, "selection": ["a" * session.MAX_TEXT] * 2100},
             {"version": 1, "fields": {"model-shots": 1}},
             {"version": 1, "fields": {"search": "x" * (session.MAX_TEXT + 1)}},
-            {"version": 1, "choices": {"mob-textures": [""]}},
+            {"version": 1, "choices": {"model-target": []}},
             {"version": 1, "scroll": -1}, {"version": 1, "scroll": True},
             {"version": 1, "shown": {"models": 10_001}},
             {"version": 1, "inspector": "yes"},
@@ -133,9 +293,9 @@ class SessionStoreTests(unittest.TestCase):
     def test_failed_atomic_write_does_not_consume_the_sequence(self):
         self.store.save("client_123", 1, snapshot())
         old = self.store._path().read_bytes()
-        with patch("hookycreator.session.write_atomic", side_effect=PermissionError("read only")):
-            with self.assertRaisesRegex(session.SessionError, "Impossible"):
-                self.store.save("client_123", 2, snapshot("sounds"))
+        with patch("hookycreator.session.write_atomic", side_effect=PermissionError("read only")), \
+                self.assertRaisesRegex(session.SessionError, "Impossible"):
+            self.store.save("client_123", 2, snapshot("sounds"))
         self.assertEqual(self.store._path().read_bytes(), old)
         self.assertTrue(self.store.save("client_123", 2, snapshot("sounds")))
         self.assertEqual(self.store.load()["view"], "sounds")
@@ -206,7 +366,7 @@ class SessionHttpTests(unittest.TestCase):
             try:
                 status, _, response = request("/api/ui-state")
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(response)["state"]["fields"]["mod-name"], "Un brouillon")
+                self.assertEqual(json.loads(response)["state"]["choices"]["model-target"], "Model/Héros.bfres")
             finally:
                 server.stop()
 

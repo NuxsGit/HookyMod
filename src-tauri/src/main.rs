@@ -218,7 +218,7 @@ fn request_quit(app: AppHandle, shared: Shared) {
         } else {
             let callback_app = app.clone();
             app.dialog()
-                .message("La session, les réglages ou le projet HookyMod's n'ont pas pu être enregistrés. Quitter quand même ?")
+                .message("La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?")
                 .title("HookyCreator")
                 .kind(MessageDialogKind::Warning)
                 .buttons(MessageDialogButtons::YesNo)
@@ -632,7 +632,7 @@ fn start_project(app: AppHandle, shared: Shared, root: PathBuf) {
                 session.opening = false;
                 drop(session);
                 resume_page(&cloned_app);
-                report_error(&cloned_app, "La session ou le projet HookyMod's actuel n'a pas pu être enregistré. \
+                report_error(&cloned_app, "La session actuelle n'a pas pu être enregistrée. \
                     Le changement de projet est annulé ; réessaie après avoir vérifié le dossier de travail.");
             });
             return;

@@ -67,7 +67,7 @@
         <svg viewBox="0 0 24 24"><path d="M12 3 21 8l-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/></svg>
         <span>Ensembles</span>
       </button>
-      <button class="rail-btn" data-view="player" title="Player : personnages, tenues et objets">
+      <button class="rail-btn" data-view="player" title="Player : personnages, tenues et objets (Ctrl+4)">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="3"/><path d="M5 21v-2a7 7 0 0 1 14 0v2M9 13l3 3 3-3"/></svg>
         <span>Player</span>
       </button>
@@ -90,19 +90,6 @@
       <button class="rail-btn" data-view="import" title="Importer un modèle (Ctrl+5)">
         <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 12 21 6"/></svg>
         <span>Importer</span>
-      </button>
-      <span class="rail-label">Créer</span>
-      <button class="rail-btn" data-view="studio" title="HookyMod's : atelier de création">
-        <svg viewBox="0 0 24 24"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 3v4M17 5h4M5 17v4M3 19h4"/></svg>
-        <span>HookyMod's</span>
-      </button>
-      <button class="rail-btn" data-view="create" title="Espace création de mod">
-        <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM12 12v5M9.5 14.5h5"/></svg>
-        <span>Mon mod</span>
-      </button>
-      <button class="rail-btn" data-view="mobs" title="Fiches de mobs (Ctrl+4)">
-        <svg viewBox="0 0 24 24"><path d="M5 20v-6a7 7 0 0 1 14 0v6"/><circle cx="9.5" cy="10" r="1.3"/><circle cx="14.5" cy="10" r="1.3"/><path d="M10 14h4"/></svg>
-        <span>Mobs</span>
       </button>
       <span class="rail-label">Outils</span>
       <button class="rail-btn" data-view="settings" title="Réglages (Ctrl+6)">
@@ -132,7 +119,7 @@
             <div class="chips" id="stats"></div>
           </div>
 
-          <div class="section-title"><h3>Choisis ton espace</h3><span>Explorer, imaginer ou assembler</span></div>
+          <div class="section-title"><h3>Explorer les ressources</h3><span>Modèles, textures et animations</span></div>
           <div class="spaces">
             <button class="space-card space-edit" type="button" data-goto="edit">
               <span class="space-icon" aria-hidden="true">
@@ -142,21 +129,21 @@
                 <span>Explorer les modèles, retoucher les textures et travailler avec Blender.</span>
                 <em>Ouvrir la modification <span aria-hidden="true">→</span></em></span>
             </button>
-            <button class="space-card space-studio" type="button" data-goto="studio">
+            <button class="space-card" type="button" data-goto="models">
               <span class="space-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 3v4M17 5h4"/></svg>
+                <svg viewBox="0 0 24 24"><path d="M12 3 21 8v8l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
               </span>
-              <span class="space-copy"><small>02 / HOOKYMOD'S</small><b>Imaginer du contenu</b>
-                <span>Concevoir des éléments et des procédures visuelles dans un espace indépendant.</span>
-                <em>Ouvrir HookyMod's <span aria-hidden="true">→</span></em></span>
+              <span class="space-copy"><small>02 / MODÈLES</small><b>Explorer les modèles</b>
+                <span>Inspecter, prévisualiser et exporter la géométrie reconnue.</span>
+                <em>Voir les modèles <span aria-hidden="true">→</span></em></span>
             </button>
-            <button class="space-card space-create" type="button" data-goto="create">
+            <button class="space-card" type="button" data-goto="player">
               <span class="space-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3zM12 12v5M9.5 14.5h5"/></svg>
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="3"/><path d="M5 21v-2a7 7 0 0 1 14 0v2M9 13l3 3 3-3"/></svg>
               </span>
-              <span class="space-copy"><small>03 / ASSEMBLAGE</small><b>Assembler des modifications</b>
-                <span>Préparer des fiches et assembler les fichiers modifiés dans un dossier de mod.</span>
-                <em>Ouvrir la création <span aria-hidden="true">→</span></em></span>
+              <span class="space-copy"><small>03 / PLAYER</small><b>Ouvrir le vestiaire</b>
+                <span>Associer un personnage, ses tenues et objets pour tester des animations.</span>
+                <em>Ouvrir Player <span aria-hidden="true">→</span></em></span>
             </button>
           </div>
 
@@ -194,12 +181,11 @@
         <section class="view" id="view-edit" hidden>
           <div class="view-head workspace-head">
             <div>
-              <p class="eyebrow">ESPACE 01 / MODIFICATION</p>
+              <p class="eyebrow">ATELIER / RESSOURCES</p>
               <h2>Modifier l'existant</h2>
               <p class="muted">Explore les ressources du projet et travaille sur des copies,
                 sans écraser les fichiers source.</p>
             </div>
-            <button class="btn ghost" type="button" data-goto="create">Vers la création du mod →</button>
           </div>
           <div class="section-title"><h3>Que veux-tu modifier ou explorer ?</h3></div>
           <div class="quick tools-grid">
@@ -230,224 +216,7 @@
           </div>
           <div class="info-note">
             <strong>Les originaux restent intacts.</strong>
-            Les modifications sont enregistrées dans le dossier de travail ;
-            assemble-les ensuite depuis l'espace création de mod.
-          </div>
-        </section>
-
-        <!-- ---------------------------------------------------------- HookyMod's : conception indépendante -->
-        <section class="view" id="view-studio" hidden>
-          <div class="view-head workspace-head studio-heading">
-            <div>
-              <p class="eyebrow">HOOKYMOD'S / ATELIER VISUEL</p>
-              <h2>Imagine ton prochain contenu</h2>
-              <p class="muted">Un espace séparé de HookyCreator pour concevoir de nouveaux éléments.</p>
-            </div>
-            <button class="btn ghost" type="button" data-goto="edit">← Retour à HookyCreator</button>
-          </div>
-          <div class="studio-notice" role="note">
-            <span class="studio-notice-icon" aria-hidden="true">✦</span>
-            <div><strong>Un atelier de conception, pour commencer.</strong>
-              <p>Les éléments et les blocs décrivent tes idées : ils ne créent pas encore de contenu jouable et ne s'exécutent pas en jeu.</p></div>
-            <span class="studio-notice-badge">PROTOTYPE</span>
-          </div>
-          <details class="studio-compatibility">
-            <summary>Longshot + Link's Tool Box : compatibilité</summary>
-            <p>La cible prévue est Longshot sur PC. L'atelier exporte des projets .hooky de conception, non jouables. Depuis les sources, un outil séparé expérimental peut emballer des fichiers de mod déjà préparés.</p>
-            <p>Link's Tool Box importe des dossiers de mods contenant romfs. Aucun import direct .hooky par un lanceur n'a été validé ici. Ferme le jeu et sauvegarde tes mods et tes sauvegardes avant un essai.</p>
-          </details>
-
-          <fieldset class="studio-shell" id="studio-controls">
-            <aside class="studio-sidebar" aria-label="Espaces de travail">
-              <div class="studio-side-title"><div><span class="studio-overline">TA BIBLIOTHÈQUE</span><h3>Espaces de travail</h3></div>
-                <span class="studio-count" id="studio-project-count">0</span></div>
-              <form id="studio-create-form" class="studio-create-form">
-                <label class="field"><span>Nom du nouveau projet</span>
-                  <input type="text" id="studio-new-name" maxlength="96" placeholder="Mon idée de mod" required></label>
-                <button class="btn primary studio-create-button" type="submit"><span aria-hidden="true">+</span> Créer un projet</button>
-              </form>
-              <div class="studio-side-divider"><span>MES PROJETS</span></div>
-              <div class="studio-project-list" id="studio-project-list" aria-live="polite"></div>
-              <div class="studio-import-box">
-                <span class="studio-import-icon" aria-hidden="true">↥</span>
-                <div><strong>Un projet à reprendre ?</strong><p>Importe une archive .hooky.</p></div>
-                <button class="btn ghost tiny" id="studio-import-button" type="button">Importer .hooky</button>
-                <input type="file" id="studio-import-file" accept=".hooky,application/zip" hidden>
-              </div>
-            </aside>
-
-            <div class="studio-content">
-              <div class="studio-empty" id="studio-empty">
-                <div class="studio-empty-art" aria-hidden="true"><span>✦</span><i>◇</i><b>+</b></div>
-                <p class="studio-overline">TON ESPACE DE CRÉATION</p>
-                <h3>Tout commence par une idée.</h3>
-                <p>Crée un projet à gauche ou importe un fichier .hooky pour retrouver tes idées.</p>
-                <div class="studio-guide">
-                  <div><span>01</span><b>Imagine</b><small>Crée ton espace de travail.</small></div>
-                  <div><span>02</span><b>Compose</b><small>Ajoute des éléments et des blocs.</small></div>
-                  <div><span>03</span><b>Partage</b><small>Exporte ton projet .hooky.</small></div>
-                </div>
-              </div>
-
-              <div id="studio-workspace" hidden>
-                <div class="studio-project-head">
-                  <div><p class="studio-overline">ESPACE DE TRAVAIL</p><h3 id="studio-project-title" data-no-i18n></h3>
-                    <p class="hint">Projet de conception · non jouable</p></div>
-                  <div class="studio-project-actions">
-                    <span class="studio-save-state" id="studio-save-state" role="status"></span>
-                    <button class="btn" type="button" id="studio-save">Enregistrer</button>
-                    <button class="btn" type="button" id="studio-copy">Dupliquer</button>
-                    <button class="btn" type="button" id="studio-reload">Recharger</button>
-                    <button class="btn" type="button" id="studio-check">Vérifier</button>
-                    <button class="btn primary" type="button" id="studio-export">Exporter .hooky</button>
-                  </div>
-                </div>
-                <a class="studio-download-link" id="studio-download-link" href="#" download="hookymods.hooky" hidden>Télécharger à nouveau le .hooky</a>
-                <div class="studio-report" id="studio-report" role="status" aria-live="polite" hidden></div>
-
-                <details class="studio-details" open>
-                  <summary>Détails du projet</summary>
-                  <div class="studio-fields">
-                    <label class="field"><span>Nom du projet</span><input type="text" id="studio-name" maxlength="96" required></label>
-                    <label class="field"><span>Auteur</span><input type="text" id="studio-author" maxlength="96"></label>
-                    <label class="field"><span>Cible envisagée</span><input type="text" id="studio-target" maxlength="160" placeholder="Facultatif · non vérifié"></label>
-                    <label class="field studio-description"><span>Description</span><textarea id="studio-description" maxlength="1200" rows="2"></textarea></label>
-                  </div>
-                  <button class="btn ghost tiny studio-delete-project" type="button" id="studio-delete">Supprimer ce projet</button>
-                </details>
-
-                <section class="studio-elements" aria-labelledby="studio-elements-title">
-                  <div class="studio-section-head"><div><p class="studio-overline">01 / TES IDÉES</p><h3 id="studio-elements-title">Éléments du projet</h3>
-                    <p class="hint">Choisis une catégorie pour ajouter une nouvelle idée.</p></div>
-                    <span class="studio-count" id="studio-element-count">0</span></div>
-                  <div class="studio-kind-grid">
-                    <button type="button" data-studio-kind="item"><span aria-hidden="true">◇</span><b>Objet</b><small>Une nouvelle idée</small><i aria-hidden="true">+</i></button>
-                    <button type="button" data-studio-kind="scene"><span aria-hidden="true">▷</span><b>Cinématique</b><small>Un moment à raconter</small><i aria-hidden="true">+</i></button>
-                    <button type="button" data-studio-kind="dungeon"><span aria-hidden="true">⌑</span><b>Donjon</b><small>Un lieu à imaginer</small><i aria-hidden="true">+</i></button>
-                    <button type="button" data-studio-kind="building"><span aria-hidden="true">⌂</span><b>Bâtiment</b><small>Un espace à concevoir</small><i aria-hidden="true">+</i></button>
-                  </div>
-                  <div class="studio-element-list" id="studio-element-list" aria-live="polite"></div>
-                </section>
-
-                <section class="studio-editor" id="studio-editor" aria-labelledby="studio-editor-title" hidden>
-                  <div class="studio-section-head"><div><p class="studio-overline">02 / TON ÉLÉMENT</p><h3 id="studio-editor-title">Détails de l'élément</h3></div>
-                    <button class="btn ghost tiny studio-danger" type="button" id="studio-element-delete">Supprimer l'élément</button></div>
-                  <div class="studio-fields studio-element-fields">
-                    <label class="field"><span>Nom de l'élément</span><input type="text" id="studio-element-name" maxlength="96" required></label>
-                    <label class="field studio-description"><span>Description de l'élément</span><textarea id="studio-element-description" maxlength="1200" rows="2"></textarea></label>
-                  </div>
-                  <div class="studio-attachment"><span aria-hidden="true">▧</span><div><strong>Ressource personnelle</strong>
-                    <p class="hint">PNG, OBJ ou GLB · 2 Mio maximum par élément · 6 Mio par projet.</p>
-                    <p class="studio-asset-name" id="studio-asset-name" data-no-i18n></p></div>
-                    <button class="btn tiny" type="button" id="studio-asset-button">Joindre un fichier</button>
-                    <button class="btn ghost tiny" type="button" id="studio-asset-remove" hidden>Retirer</button>
-                    <input type="file" id="studio-asset-file" accept=".png,.obj,.glb" hidden>
-                  </div>
-                  <p class="hint">Les fichiers joints restent inchangés dans le projet ; leur compatibilité en jeu n'est pas vérifiée.</p>
-
-                  <div class="studio-section-head studio-procedure-heading"><div><p class="studio-overline">03 / TA PROCÉDURE</p><h3>Composer avec des blocs</h3>
-                    <p class="hint">Clique sur un bloc ou glisse-le dans la zone ; réorganise-le avec les flèches.</p></div>
-                    <span class="studio-prototype-tag">SIMULATION LOCALE</span></div>
-                  <div class="studio-procedure">
-                    <div class="studio-palette" aria-label="Palette de blocs">
-                      <h4>Événements</h4>
-                      <button type="button" draggable="true" data-studio-block="when_enter" data-category="event">Quand on entre</button>
-                      <button type="button" draggable="true" data-studio-block="when_interact" data-category="event">Quand on interagit</button>
-                      <button type="button" draggable="true" data-studio-block="when_use" data-category="event">Quand on utilise</button>
-                      <h4>Conditions</h4>
-                      <button type="button" draggable="true" data-studio-block="if_has_item" data-category="condition">Si possède un objet</button>
-                      <button type="button" draggable="true" data-studio-block="if_flag" data-category="condition">Si un état est actif</button>
-                      <h4>Actions</h4>
-                      <button type="button" draggable="true" data-studio-block="show_message" data-category="action">Afficher un message</button>
-                      <button type="button" draggable="true" data-studio-block="give_item" data-category="action">Donner un objet</button>
-                      <button type="button" draggable="true" data-studio-block="open_door" data-category="action">Ouvrir une porte</button>
-                      <button type="button" draggable="true" data-studio-block="play_scene" data-category="action">Jouer une scène</button>
-                      <button type="button" draggable="true" data-studio-block="wait" data-category="action">Attendre</button>
-                    </div>
-                    <div class="studio-canvas" id="studio-canvas" aria-label="Zone de procédure">
-                      <div class="studio-canvas-head"><span>PROCÉDURE VISUELLE</span><span id="studio-block-count">0 / 100</span></div>
-                      <div id="studio-block-stack"></div>
-                      <div class="studio-drop-hint">Dépose un bloc ici ou clique sur la palette.</div>
-                    </div>
-                  </div>
-                  <p class="studio-block-note">Ces blocs sont une maquette ordonnée ; seule la simulation locale les interprète. Ils ne génèrent pas de logique de jeu.</p>
-                  <section class="studio-simulation" aria-labelledby="studio-simulation-title">
-                    <div class="studio-section-head"><div><p class="studio-overline">04 / ESSAI HORS JEU</p><h4 id="studio-simulation-title">Simuler la procédure</h4></div>
-                      <span class="studio-prototype-tag">AUCUN MOD LANCÉ</span></div>
-                    <p class="hint">Les conditions filtrent les blocs suivants jusqu'au prochain événement. Les valeurs sont comparées avec les majuscules, sans les espaces en début ou fin.</p>
-                    <p class="hint">Simulation en mémoire uniquement : aucune action en jeu, aucun fichier modifié et aucune attente réelle. Les valeurs initiales ne sont pas enregistrées.</p>
-                    <div class="studio-simulation-fields">
-                      <label class="field"><span>Événement à simuler</span><select id="studio-simulation-event">
-                        <option value="when_enter">Quand on entre</option><option value="when_interact" selected>Quand on interagit</option><option value="when_use">Quand on utilise</option>
-                      </select></label>
-                      <label class="field"><span>Objets initiaux · un par ligne</span><textarea id="studio-simulation-items" rows="2" maxlength="25700" data-no-i18n></textarea></label>
-                      <label class="field"><span>États actifs · un par ligne</span><textarea id="studio-simulation-flags" rows="2" maxlength="25700" data-no-i18n></textarea></label>
-                    </div>
-                    <button class="btn tiny" id="studio-simulate" type="button">Simuler</button>
-                    <div class="studio-simulation-result" id="studio-simulation-result" role="status" aria-live="polite" hidden></div>
-                  </section>
-                </section>
-              </div>
-            </div>
-          </fieldset>
-        </section>
-
-        <!-- ---------------------------------------------------------- création de mod -->
-        <section class="view" id="view-create" hidden>
-          <div class="view-head workspace-head">
-            <div>
-              <p class="eyebrow create-accent">ESPACE 02 / CRÉATION DE MOD</p>
-              <h2>Créer un mod</h2>
-              <p class="muted">Rassemble tes modifications et prépare un dossier de mod
-                à partir du projet ouvert.</p>
-            </div>
-            <button class="btn ghost" type="button" data-goto="edit">← Vers la modification</button>
-          </div>
-          <div class="workflow-grid">
-            <section class="panel workflow-step">
-              <header class="panel-head"><h3><span class="step-number">01</span> Fichiers du projet</h3></header>
-              <div class="panel-body">
-                <p class="muted">Les copies modifiées dans l'atelier seront incluses dans l'assemblage.</p>
-                <ul class="kv-list" id="creation-status"><li class="muted">Chargement du projet…</li></ul>
-                <button class="btn ghost" type="button" data-goto="edit">Ouvrir la modification →</button>
-              </div>
-            </section>
-            <section class="panel workflow-step">
-              <header class="panel-head"><h3><span class="step-number">02</span> Fiches de mobs</h3></header>
-              <div class="panel-body">
-                <p class="muted">Prépare une fiche et copie un modèle et des textures sous un nouveau nom.</p>
-                <p class="hint">C'est une préparation de fichiers, pas la création automatique d'un acteur jouable.</p>
-                <button class="btn ghost" type="button" data-goto="mobs">Gérer les fiches →</button>
-              </div>
-            </section>
-          </div>
-          <section class="panel build-panel">
-            <header class="panel-head"><h3><span class="step-number">03</span> Assembler le mod</h3></header>
-            <div class="build-layout">
-              <form class="panel-body" id="mod-form">
-                <label class="field">
-                  <span>Nom du mod</span>
-                  <input name="name" id="mod-name" value="HookyMod" spellcheck="false" required>
-                </label>
-                <p class="hint">Le nom du dossier conserve uniquement les lettres, chiffres, tirets et
-                  caractères <code>_</code> ; les espaces sont retirés. S'il ne reste rien,
-                  le nom utilisé est <code>HookyMod</code>.</p>
-                <p class="warning-note">Attention : le dossier <code>mods/&lt;mod&gt;</code>,
-                  s'il existe déjà, sera entièrement remplacé, sans sauvegarde.</p>
-                <button class="btn primary" type="submit">Assembler dans <code>mods/</code></button>
-              </form>
-              <div class="panel-body build-result">
-                <strong>Résultat de l'assemblage</strong>
-                <p class="hint">Les copies sont rangées dans <code>romfs/</code>, avec un manifeste.
-                  L'assemblage ne met pas à jour la table RESTBL : vérifie les tailles et teste en jeu.</p>
-                <ul class="kv-list" id="mod-log" aria-live="polite"></ul>
-              </div>
-            </div>
-          </section>
-          <div class="warning-note game-limit">
-            <strong>Pour un nouveau mob, il reste du travail côté jeu.</strong>
-            La fiche ne crée ni paramètre d'acteur BYML ni placement sur la carte,
-            et ne met pas à jour RESTBL ou les noms internes du modèle.
+            Les modifications sont enregistrées dans le dossier de travail.
           </div>
         </section>
 
@@ -698,48 +467,6 @@
           <div class="more" id="video-more" hidden><button class="btn ghost" id="video-more-btn">Afficher plus</button></div>
         </section>
 
-        <!-- ---------------------------------------------------------- mobs -->
-        <section class="view" id="view-mobs" hidden>
-          <div class="view-head">
-            <div>
-              <h2>Fiches de mobs</h2>
-              <p class="muted">Prépare une fiche en copiant des ressources existantes sous un nouveau nom.</p>
-            </div>
-            <button class="btn ghost" type="button" data-goto="create">← Retour à la création du mod</button>
-          </div>
-          <div class="warning-note game-limit">
-            <strong>Fiche préparatoire uniquement.</strong> Les noms internes des ressources ne sont
-            pas modifiés et aucun acteur jouable, placement ni entrée RESTBL n'est créé automatiquement.
-          </div>
-          <div class="split">
-            <section class="panel">
-              <header class="panel-head"><h3>Nouveau mob</h3></header>
-              <form class="panel-body" id="mob-form">
-                <label class="field"><span>Nom affiché</span>
-                  <input name="name" id="mob-name" placeholder="Créature de la forêt" required></label>
-                <label class="field"><span>Parent à noter sur la fiche (facultatif)</span>
-                  <input name="parent" id="mob-parent" placeholder="Creature_Example"></label>
-                <label class="field"><span>Rechercher une ressource</span>
-                  <input type="search" id="mob-resource-search" placeholder="Nom ou chemin"></label>
-                <label class="field"><span>Modèle source</span>
-                  <select id="mob-model" name="model"></select></label>
-                <label class="field"><span>Textures (plusieurs possibles)</span>
-                  <select id="mob-textures" multiple size="6"></select></label>
-                <p class="hint">Seules les ressources décodées sont proposées, progressivement.</p>
-                <p class="hint" id="mob-validation-status" role="status"></p>
-                <p class="hint" id="mob-texture-validation-status" role="status"></p>
-                <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
-                <button class="btn ghost tiny" id="mob-validate-more" type="button" hidden>Vérifier 48 ressources de plus</button>
-                <button class="btn primary" type="submit">Créer la fiche</button>
-              </form>
-            </section>
-            <section class="panel">
-              <header class="panel-head"><h3>Fiches existantes</h3></header>
-              <div class="grid small" id="mob-grid"></div>
-            </section>
-          </div>
-        </section>
-
         <!-- ---------------------------------------------------------- import de modèle -->
         <section class="view" id="view-import" hidden>
           <div class="view-head workspace-head">
@@ -795,7 +522,7 @@
                 <button class="btn ghost tiny" type="button" data-validate-retry hidden>Réessayer</button>
                 <button class="btn ghost tiny" id="model-import-validate-more" type="button" hidden>Vérifier 48 modèles de plus</button>
                 <button class="btn primary" id="model-inject" type="button" disabled>Injecter dans la copie de travail</button>
-                <p class="hint">La source du projet reste intacte. Assemble ensuite les modifications dans « Mon mod ».</p>
+                <p class="hint">La source du projet reste intacte ; la copie modifiée est dans le dossier de travail.</p>
               </div>
             </section>
             <section class="panel wide">
@@ -1011,7 +738,6 @@
 <script src="/static/asset_checks.js"></script>
 <script src="/static/session.js"></script>
 <script src="/static/i18n.js"></script>
-<script src="/static/studio.js"></script>
 <script src="/static/model_animation.js"></script>
 <script src="/static/model_viewer.js"></script>
 <script src="/static/player.js"></script>

@@ -39,13 +39,13 @@ class BrowserServerSecurityTests(unittest.TestCase):
         self.assertIn(f"HookyCreator/{__version__}", headers["Server"])
 
     def test_get_cannot_start_an_operation_that_writes_files(self):
-        with mock.patch.object(self.server.project, "build_mod", return_value={"built": True}) as build:
-            status, _, _ = self.request("GET", "/api/mod/build")
+        with mock.patch.object(self.server.project, "scan", return_value={"count": 0}) as build:
+            status, _, _ = self.request("GET", "/api/scan")
             self.assertEqual(status, 405)
             build.assert_not_called()
 
-    def test_cross_origin_and_non_json_posts_cannot_start_a_build(self):
-        with mock.patch.object(self.server.project, "build_mod", return_value={"built": True}) as build:
+    def test_cross_origin_and_non_json_posts_cannot_start_a_scan(self):
+        with mock.patch.object(self.server.project, "scan", return_value={"count": 0}) as build:
             for headers, expected in [
                 ({"Origin": "https://attacker.invalid", "Content-Type": "application/json"}, 403),
                 ({"Origin": "null", "Content-Type": "application/json"}, 403),
@@ -53,10 +53,10 @@ class BrowserServerSecurityTests(unittest.TestCase):
                 ({"Sec-Fetch-Site": "cross-site", "Content-Type": "application/json"}, 403),
             ]:
                 with self.subTest(headers=headers):
-                    status, _, _ = self.request("POST", "/api/mod/build", headers=headers, body=b"{}")
+                    status, _, _ = self.request("POST", "/api/scan", headers=headers, body=b"{}")
                     self.assertEqual(status, expected)
             build.assert_not_called()
-            status, _, _ = self.request("POST", "/api/mod/build", headers={
+            status, _, _ = self.request("POST", "/api/scan", headers={
                 "Origin": self.origin, "Content-Type": "application/json; charset=utf-8"}, body=b"{}")
             self.assertEqual(status, 200)
             build.assert_called_once()
@@ -79,15 +79,15 @@ class BrowserServerSecurityTests(unittest.TestCase):
             "Content-Type": "application/json"}, body=b"{}")[0], 405)
 
     def test_json_cli_clients_do_not_need_to_forge_an_origin(self):
-        with mock.patch.object(self.server.project, "build_mod", return_value={"built": True}) as build:
-            self.assertEqual(self.request("POST", "/api/mod/build", headers={
+        with mock.patch.object(self.server.project, "scan", return_value={"count": 0}) as build:
+            self.assertEqual(self.request("POST", "/api/scan", headers={
                 "Content-Type": "application/json"}, body=b"{}")[0], 200)
-            self.assertEqual(self.request("POST", "/api/mod/build", headers={
+            self.assertEqual(self.request("POST", "/api/scan", headers={
                 "Content-Type": "application/json"}, body=b"[]")[0], 400)
             build.assert_called_once()
 
     def test_ambiguous_headers_are_refused_before_any_write(self):
-        with mock.patch.object(self.server.project, "build_mod", return_value={"built": True}) as build:
+        with mock.patch.object(self.server.project, "scan", return_value={"count": 0}) as build:
             for extra in (("Host", self.origin.removeprefix("http://")),
                           ("Origin", self.origin), ("Sec-Fetch-Site", "same-origin"),
                           ("Content-Type", "application/json"), ("Content-Length", "2"),
@@ -95,7 +95,7 @@ class BrowserServerSecurityTests(unittest.TestCase):
                 with self.subTest(extra=extra):
                     connection = http.client.HTTPConnection("127.0.0.1", self.server.port, timeout=5)
                     try:
-                        connection.putrequest("POST", "/api/mod/build")
+                        connection.putrequest("POST", "/api/scan")
                         connection.putheader("Origin", self.origin)
                         connection.putheader("Sec-Fetch-Site", "same-origin")
                         connection.putheader("Content-Type", "application/json")
@@ -121,8 +121,8 @@ class BrowserServerSecurityTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/state", server=server, headers=frame)[0], 403)
         local_frame = {**frame, "Host": f"127.0.0.1:{self.server.port}"}
         self.assertEqual(self.request("GET", "/", headers=local_frame)[0], 403)  # default loopback
-        with mock.patch.object(server.project, "build_mod", return_value={"built": True}) as build:
-            status, _, _ = self.request("POST", "/api/mod/build", server=server, headers={
+        with mock.patch.object(server.project, "scan", return_value={"count": 0}) as build:
+            status, _, _ = self.request("POST", "/api/scan", server=server, headers={
                 **proxy_host, "Origin": "https://8767-example.e2b.app", "Content-Type": "application/json"}, body=b"{}")
             self.assertEqual(status, 200)
             build.assert_called_once()

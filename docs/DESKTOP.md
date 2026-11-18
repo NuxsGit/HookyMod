@@ -41,9 +41,11 @@ Les formats non vérifiés ou non pris en charge ne sont pas montrés comme
 utilisables. Le remplacement des sons et des vidéos est expérimental et écrit
 uniquement une copie de travail : aucun résultat n'est validé en jeu. Voir
 [`HOOKYCREATOR.md`](HOOKYCREATOR.md) pour les formats et limites, notamment
-BARS, NDVE et RESTBL non modifiés. L'assemblage d'un mod peut remplacer sans
-sauvegarde `mods/<nom>` ; l'interface demande confirmation et ne rend pas un
-mob automatiquement jouable.
+BARS, NDVE et RESTBL non modifiés. La version source de HookyCreator ne
+propose plus la conception ni l'assemblage de mods ; les fichiers existants
+restent sur disque. Les installateurs publics 11.26.2 précèdent ce retrait et
+conservent l'ancienne fonction d'assemblage, qui remplace `mods/<nom>` sans
+sauvegarde. Voir [`HOOKYMODS.md`](HOOKYMODS.md).
 
 ## Construction Windows / Linux / macOS
 
@@ -150,6 +152,7 @@ et droits, les limites de chaque plateforme et la signature des paquets. Voir
 Pour lancer ces vérifications localement après construction :
 
 ```bash
+python tools/check_desktop_bundle.py src-tauri/binaries/hookycreator-backend-<target-triple>
 python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-<target-triple>
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 # Après installation de tauri-driver et du WebDriver natif, sous un écran ou Xvfb :

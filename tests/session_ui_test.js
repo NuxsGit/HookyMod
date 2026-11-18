@@ -23,10 +23,9 @@ function harness() {
     nodes.set(`#${id}`, node);
     return node;
   }
-  for (const id of ["search", "search-tex", "search-ens", "search-sound", "tex-role", "mod-name",
-    "mob-name", "mob-parent", "mob-resource-search", "model-axis", "model-scale",
-    "model-target-search", "model-shots", "ens-textures", "bulk-anim", "model-fit", "mob-model",
-    "model-target", "mob-textures", "views", "inspector", "console", "selection-count", "tabs"]) add(id);
+  for (const id of ["search", "search-tex", "search-ens", "search-sound", "tex-role",
+    "model-axis", "model-scale", "model-target-search", "model-shots", "ens-textures",
+    "bulk-anim", "model-fit", "model-target", "views", "inspector", "console", "selection-count", "tabs"]) add(id);
   nodes.get("#inspector").hidden = true;
   nodes.get("#console").hidden = true;
   const $ = (selector) => nodes.get(selector) || null;
@@ -36,7 +35,7 @@ function harness() {
       { kind: "model", rel: "Model/Héros.bfres", name: "Héros" },
       { kind: "texture", rel: "Model/Héros_Alb.bntx", name: "Albedo" },
       { kind: "sound", rel: "Sound/One.bwav", name: "One" },
-    ], mobs: [{ slug: "MyMob", name: "My Mob" }] },
+    ] },
     view: "home", tabs: [], tab: "view:home",
     filters: {}, selection: new Set(), shown: { models: 48, textures: 48, ensembles: 48, sounds: 48, chooser: 48 },
   };
@@ -91,7 +90,7 @@ async function restoreAndCapture() {
     selection: ["model:Model/Héros.bfres", "texture:Model/Héros_Alb.bntx", "model:missing.bfres"],
     fields: { search: " HÉROS ", "mod-name": "Mon brouillon", "model-shots": true,
               "ens-textures": false, "model-quality": "detail" },
-    choices: { "mob-model": "Model/Héros.bfres", "model-target": "missing.bfres",
+    choices: { "mob-model": "Model/Héros.bfres", "model-target": "Model/Héros.bfres",
                "mob-textures": ["Model/Héros_Alb.bntx", "missing.bntx"] },
     shown: { models: 96, textures: 72 }, scroll: 500, inspector: true, console: true,
     reduced: true, thumbnails_paused: true,
@@ -100,30 +99,26 @@ async function restoreAndCapture() {
   assert.equal(h.state.view, "models");
   assert.equal(h.state.tab, "model:Model/Héros.bfres");
   assert.equal(h.state.filters.models, "héros");
-  assert.equal(h.$("#mod-name").value, "Mon brouillon");
   assert.equal(h.$("#model-shots").checked, true);
   assert.equal(h.$("#ens-textures").checked, false);
   assert.equal(h.$("#views").scrollTop, 500);
   assert.deepEqual([...h.state.selection], ["model:Model/Héros.bfres", "texture:Model/Héros_Alb.bntx"]);
   assert.equal(h.state.tabs.some((tab) => tab.id.includes("missing") || tab.id.includes("../")), false);
-  assert.equal(h.state.tabs.some((tab) => tab.id === "mob:MyMob"), true);
+  assert.equal(h.state.tabs.some((tab) => tab.id === "mob:MyMob"), false);
   assert.equal(h.state.tabs.some((tab) => tab.id.startsWith("blend:")), false);
   assert.equal(h.state.tabs.some((tab) => tab.id === "texture:Model/Héros_Alb.bntx#1" && tab.doc.index === 1), true);
   assert.equal(h.actions.filter(([name]) => name === "openDoc").length, 1);
   assert.equal(h.document.documentElement.dataset.min, "1");
   assert.equal(h.thumb.paused, true);
   const captured = JSON.parse(JSON.stringify(vm.runInContext("captureUiSession()", h.ctx)));
-  assert.equal(captured.choices["mob-model"], "Model/Héros.bfres", "choix maintenu pendant la validation");
-  assert.deepEqual(captured.choices["mob-textures"], ["Model/Héros_Alb.bntx"]);
-  assert.equal(captured.choices["model-target"], "");
+  assert.deepEqual(Object.keys(captured.choices), ["model-target"]);
+  assert.equal(captured.choices["model-target"], "Model/Héros.bfres", "choix maintenu pendant la validation");
   assert.equal(captured.fields["model-quality"], "detail");
   assert.equal(captured.shown.models, 96);
 
-  h.$("#mob-model").options.push({ value: "Model/Héros.bfres" });
-  h.$("#mob-textures").options.push({ value: "Model/Héros_Alb.bntx", selected: false });
+  h.$("#model-target").options.push({ value: "Model/Héros.bfres" });
   vm.runInContext("applyRestoredChoices()", h.ctx);
-  assert.equal(h.$("#mob-model").value, "Model/Héros.bfres");
-  assert.equal(h.$("#mob-textures").options[0].selected, true);
+  assert.equal(h.$("#model-target").value, "Model/Héros.bfres");
 }
 
 async function userActionDuringLoadWins() {
@@ -169,20 +164,12 @@ async function nativeCheckpointAwaitsBootSettingsAndWrite() {
   assert.equal(h.navigations.length, 2, "une réponse tardive ne ferme pas après annulation");
 }
 
-async function nativeCheckpointIncludesTheStudioDraft() {
+async function nativeCheckpointDoesNotInvokeArchivedMaker() {
   const h = harness();
   vm.runInContext("wireUiSession(); uiSessionWriter.enable()", h.ctx);
-  let finish;
-  h.window.HookyStudio = { flush: () => new Promise((resolve) => { finish = resolve; }) };
-  const pending = h.window.__hookyCheckpoint(50);
-  await tick();
-  assert.deepEqual(h.navigations, [], "attend la sauvegarde du projet HookyMod's");
-  finish(false); await pending;
-  assert.deepEqual(h.navigations, ["/__hooky/checkpoint?id=50&saved=0"]);
-  h.window.__hookyResume();
-  h.window.HookyStudio.flush = async () => true;
-  await h.window.__hookyCheckpoint(51);
-  assert.equal(h.navigations[1], "/__hooky/checkpoint?id=51&saved=1");
+  h.window.HookyStudio = { flush: () => { throw new Error("maker must not run"); } };
+  await h.window.__hookyCheckpoint(50);
+  assert.deepEqual(h.navigations, ["/__hooky/checkpoint?id=50&saved=1"]);
 }
 
 async function programmaticScrollDoesNotCancelRestore() {
@@ -198,7 +185,7 @@ async function programmaticScrollDoesNotCancelRestore() {
   await restoreAndCapture();
   await userActionDuringLoadWins();
   await nativeCheckpointAwaitsBootSettingsAndWrite();
-  await nativeCheckpointIncludesTheStudioDraft();
+  await nativeCheckpointDoesNotInvokeArchivedMaker();
   await programmaticScrollDoesNotCancelRestore();
   console.log("UI session restoration: OK");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
