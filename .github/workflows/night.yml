@@ -1,97 +1,9 @@
-name: HookyCreator Nightly Build
-
-on:
-  schedule:
-    - cron: '0 2 * * *' # S'exécute automatiquement tous les jours à 2h00 UTC
-  workflow_dispatch:    # Permet aussi de le lancer manuellement depuis l'onglet Actions
-
-permissions:
-  contents: read
-
-jobs:
-  desktop:
-    name: Nightly Build / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            extension: ''
-            bundle: deb
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-            extension: .exe
-            bundle: nsis
-          - os: macos-15
-            target: aarch64-apple-darwin
-            extension: ''
-            bundle: dmg
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            extension: ''
-            bundle: dmg
-    env:
-      PYTHONUTF8: '1'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.97.0'
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            rust
-            src-tauri
-
-      - name: System libraries (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good libnss3 libnspr4
-
-      - name: Python and Tauri build dependencies
-        run: |
-          python -m pip install -r requirements-desktop-build.txt
-          npm ci
-
-      - name: Build standalone sidecar including Rust core
-        run: python .github/scripts/run_ci_command.py -- python tools/build_desktop_backend.py
-
-      - name: Smoke test the standalone sidecar
-        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-${{ matrix.target }}${{ matrix.extension }}
-
-      - name: Build native installer
-        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --bundles ${{ matrix.bundle }} -- --locked
-
-      - name: Verify packaged backend and executable
-        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_package.py
-
-      - name: Upload Nightly installer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: HookyCreator-${{ matrix.os }}
-          path: src-tauri/target/release/bundle/${{ matrix.bundle }}/
-          if-no-files-found: error
-          retention-days: 3
-
-  publish-nightly:
+publish-nightly:
     name: Publish Nightly Release
     needs: [desktop]
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
-      contents: write
+      contents: write # <-- INDISPENSABLE pour créer/modifier des releases
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -114,8 +26,8 @@ jobs:
           TAG="night"
           BUILD_DATE=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
           
-          # Supprimer l'ancienne release et le tag 'night'
-          gh release delete "$TAG" --yes --cleanup-tag || true
+          # Supprimer proprement l'ancienne release et le tag s'ils existent (sans crasher si absents)
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           
           # Créer la nouvelle release propre avec les binaires du jour
           gh release create "$TAG" nightly-dist/* \
