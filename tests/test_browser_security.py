@@ -112,10 +112,18 @@ class BrowserServerSecurityTests(unittest.TestCase):
         server = HookyCreatorServer(root, Path(self.temp.name) / "other-work", host="0.0.0.0", port=0).start()
         self.addCleanup(server.stop)
         self.assertEqual(server.url, f"http://127.0.0.1:{server.port}/")
+        proxy_host = {"Host": "8767-example.e2b.app"}
+        # A cross-site iframe navigation is how the preview embeds the app;
+        # subsequent same-origin fetches still receive the normal API checks.
+        frame = {**proxy_host, "Sec-Fetch-Site": "cross-site",
+                 "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}
+        self.assertEqual(self.request("GET", "/", server=server, headers=frame)[0], 200)
+        self.assertEqual(self.request("GET", "/api/state", server=server, headers=frame)[0], 403)
+        local_frame = {**frame, "Host": f"127.0.0.1:{self.server.port}"}
+        self.assertEqual(self.request("GET", "/", headers=local_frame)[0], 403)  # default loopback
         with mock.patch.object(server.project, "build_mod", return_value={"built": True}) as build:
             status, _, _ = self.request("POST", "/api/mod/build", server=server, headers={
-                "Host": "8767-example.e2b.app", "Origin": "https://8767-example.e2b.app",
-                "Content-Type": "application/json"}, body=b"{}")
+                **proxy_host, "Origin": "https://8767-example.e2b.app", "Content-Type": "application/json"}, body=b"{}")
             self.assertEqual(status, 200)
             build.assert_called_once()
 

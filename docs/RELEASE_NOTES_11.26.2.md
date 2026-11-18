@@ -13,7 +13,7 @@ Cette version publique rassemble les évolutions de HookyCreator et de HookyMod'
 ## Corrections
 
 - Après une perte de contexte WebGL, les commandes Player sont désactivées et **Réessayer** recharge la composition sélectionnée.
-- Le serveur navigateur écoute désormais sur `127.0.0.1` par défaut. Il refuse les requêtes inter-origines et les actions d'écriture en GET ; celles-ci nécessitent un POST JSON. **Changement pour les scripts utilisant l'ancienne API.** Une écoute non locale configurée avec `--host` reste sans authentification : ne pas l'exposer à un réseau non fiable.
+- Le serveur navigateur écoute désormais sur `127.0.0.1` par défaut. Il refuse les requêtes API inter-origines et les actions d'écriture en GET ; celles-ci nécessitent un POST JSON. **Changement pour les scripts utilisant l'ancienne API.** Une écoute non locale configurée avec `--host` reste sans authentification et permet l'intégration de la page par un autre site : ne pas l'exposer à un réseau non fiable.
 - Versions affichées par les outils harmonisées, dimensions CLI mal formées refusées et indication Blender corrigée pour l'export GLB seul.
 
 ## Installateurs et limites

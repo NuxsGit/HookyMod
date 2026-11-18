@@ -5,6 +5,7 @@
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
@@ -33,11 +34,44 @@ for age in ('Child', 'Adult'):
 # A second clip deliberately starts far from the model's rest pose; it checks
 # that the optional camera follow keeps root motion in frame.
 (model / 'Offset.anim.bfres').write_bytes(fska_fixture())
-server = HookyCreatorServer(root, base / 'work', host='127.0.0.1', port=0).start()
+server = HookyCreatorServer(root, base / 'work', host='0.0.0.0', port=0).start()
 print(json.dumps({'origin': 'http://127.0.0.1:' + str(server.port), 'root': str(root)}), flush=True)
 try: sys.stdin.read()
 finally: server.stop()
 `;
+
+async function exerciseEmbeddedPreview(browser, origin) {
+  // The preview proxy embeds the workspace in an iframe. A navigation from a
+  // different origin must load, while subsequent API requests stay same-origin.
+  const host = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<iframe src="${origin}/"></iframe>`);
+  });
+  await new Promise((resolve, reject) => { host.once("error", reject); host.listen(0, "0.0.0.0", resolve); });
+  let page;
+  try {
+    page = await browser.newPage();
+    const loaded = page.waitForResponse((response) => response.url() === `${origin}/`);
+    await page.goto(`http://localhost:${host.address().port}/`);
+    const documentResponse = await loaded;
+    assert.equal(documentResponse.status(), 200, "the embedded preview document must load");
+    assert.equal((await documentResponse.request().allHeaders())["sec-fetch-site"], "cross-site");
+    const frame = page.frames().find((item) => item.url() === `${origin}/`);
+    assert.ok(frame, "the workspace iframe must be available");
+    await frame.waitForFunction(() => document.querySelector("#home-sub")?.textContent.includes("zstd"));
+    const status = await frame.evaluate(async () => {
+      const read = await fetch("/api/state?quick=1");
+      const write = await fetch("/api/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      return [read.status, write.status];
+    });
+    assert.deepEqual(status, [200, 200], "same-origin iframe API calls must work");
+  } finally {
+    if (page) await page.close();
+    await new Promise((resolve) => host.close(resolve));
+  }
+}
 
 async function main() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "hooky-player-smoke-"));
@@ -64,6 +98,7 @@ async function main() {
     browser = await chromium.launch({ headless: true,
       ...(process.env.HOOKY_CHROMIUM ? { executablePath: process.env.HOOKY_CHROMIUM } : {}),
       args: ["--no-sandbox", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+    await exerciseEmbeddedPreview(browser, info.origin);
     const page = await browser.newPage({ viewport: { width: 1400, height: 960 } });
     page.setDefaultTimeout(25000);
     const errors = []; page.on("pageerror", (error) => errors.push(String(error)));

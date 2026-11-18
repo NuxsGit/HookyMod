@@ -659,7 +659,15 @@ def _make_handler(server: HookyCreatorServer):
             schemes = ("http",) if local else ("http", "https")
             if origins and origins[0].lower() not in {f"{scheme}://{host}" for scheme in schemes}:
                 valid = False
-            if sites and sites[0] not in ("same-origin", "none"):
+            # Une prévisualisation derrière proxy peut ouvrir la page dans une
+            # iframe d'une autre origine. Autoriser uniquement cette navigation
+            # documentaire lorsque l'écoute non locale est explicite : les API
+            # et toutes les écritures gardent les contrôles inter-origines.
+            embedded_document = (not local and method == "GET"
+                                 and route in ("/", "/index.html", "/static/index.html")
+                                 and self.headers.get_all("Sec-Fetch-Mode", []) == ["navigate"]
+                                 and self.headers.get_all("Sec-Fetch-Dest", []) == ["iframe"])
+            if sites and sites[0] not in ("same-origin", "none") and not embedded_document:
                 valid = False
             if not valid:
                 self.close_connection = True

@@ -62,7 +62,7 @@ python -m pip install -r requirements.txt
 python -m hookycreator /path/to/romfs --host 127.0.0.1 --open
 ```
 
-The workspace opens at `http://127.0.0.1:8765/` and listens only on loopback by default. The browser server checks the local host and cross-origin requests; write actions require JSON POSTs. Scripts using the old GET write routes must switch to POST. An explicitly chosen non-local `--host` exposes an **unauthenticated** server: do not use it on an untrusted network. A folder of extracted assets can be used instead of a `romfs`. Add `--work /path/to/work` to choose where working copies and caches are stored.
+The workspace opens at `http://127.0.0.1:8765/` and listens only on loopback by default. The browser server checks the local host and cross-origin API requests; write actions require JSON POSTs. Scripts using the old GET write routes must switch to POST. An explicitly chosen non-local `--host` exposes an **unauthenticated** server and allows the workspace page to be embedded by another site for proxy previews: do not use it on an untrusted network. A folder of extracted assets can be used instead of a `romfs`. Add `--work /path/to/work` to choose where working copies and caches are stored.
 
 The original explorer is available with `python AssetViewer.py`. For the native Tauri window and standalone backend, follow [docs/DESKTOP.md](docs/DESKTOP.md). These builds are not necessarily signed; platform security warnings can appear.
 
