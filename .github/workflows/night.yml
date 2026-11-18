@@ -1,16 +1,16 @@
-name: HookyCreator Nightly
+name: HookyCreator Nightly Build
 
 on:
-  push:
-    branches: [ 'main' ]
-  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *' # S'exécute automatiquement tous les jours à 2h00 UTC
+  workflow_dispatch:    # Permet aussi de le lancer manuellement depuis l'onglet Actions
 
 permissions:
   contents: read
 
 jobs:
   desktop:
-    name: Build Nightly / ${{ matrix.os }}
+    name: Nightly Build / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -86,7 +86,7 @@ jobs:
           retention-days: 3
 
   publish-nightly:
-    name: Publish Nightly Release (Win / Linux / macOS)
+    name: Publish Nightly Release
     needs: [desktop]
     runs-on: ubuntu-24.04
     permissions:
@@ -114,16 +114,16 @@ jobs:
           TAG="night"
           BUILD_DATE=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
           
-          # Supprimer l'ancienne release et l'ancien tag 'night' s'ils existent
+          # Supprimer l'ancienne release et le tag 'night'
           gh release delete "$TAG" --yes --cleanup-tag || true
           
-          # Créer la nouvelle release publiée (non-draft) avec tous les installateurs et checksums
+          # Créer la nouvelle release propre avec les binaires du jour
           gh release create "$TAG" nightly-dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "HookyMod Nightly 🌙" \
             --prerelease \
-            --notes "Automated nightly build derived from \`main\`.
+            --notes "Automated nightly build generated from \`main\`.
           - **Commit:** \`${GITHUB_SHA}\`
           - **Date:** ${BUILD_DATE}
           - **Checksums:** Verify downloads against \`SHA256SUMS.txt\`."
