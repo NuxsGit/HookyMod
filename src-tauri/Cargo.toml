@@ -1,6 +1,6 @@
 [package]
 name = "hookycreator-desktop"
-version = "0.1.0"
+version = "11.26.1"
 description = "Fenêtre native HookyCreator"
 edition = "2021"
 license-file = "../LICENSE"

@@ -21,25 +21,40 @@ signale au lieu d'afficher une géométrie fausse.
 
 from __future__ import annotations
 
+import copy
 import json
+import os
 import shutil
+import struct
+import sys
+import tempfile
 from array import array
 from pathlib import Path
+from urllib.parse import quote
 
 from .mesh import MeshData, export_obj, triangulated
 from .util import HookyError, write_atomic
+
+NO_UV_WARNING = "Certaines formes sans UV n'ont pas de texture liée dans GLB/glTF ; PNG à vérifier."
 
 #: note laissée dans le dossier exporté (utile pour un moddeur pressé)
 IMPORT_NOTE = """\
 Export HookyMod — import dans Blender
 =====================================
 
-glTF (recommandé, garde matériaux + textures) :
+GLB autonome (géométrie, matériaux et images associées intégrées) :
+  Fichier ▸ Importer ▸ glTF 2.0 → choisir {glb}
+  Les PNG non associés restent séparés dans le dossier.
+
+glTF séparé (garder le .bin et les PNG à côté) :
   Fichier ▸ Importer ▸ glTF 2.0 → choisir {gltf}
 
-OBJ (plus simple, mêmes PNG à côté) :
-  Fichier ▸ Importer ▸ Wavefront (.obj) → choisir {obj}
-  puis, si Blender demande : Forward = -Z, Up = Y (réglage par défaut).
+OBJ (statique, garder le .mtl et les PNG à côté) :
+  Fichier ▸ Importer ▸ Wavefront (.obj) → choisir {obj}, pas le .mtl.
+  Si Blender demande : Forward = -Z, Up = Y (réglage par défaut).
+  OBJ/MTL ne stockent ni squelette ni animation.
+
+{animation_note}
 
 Les cartes reconnues et disponibles peuvent être exportées en PNG. Leurs
 rôles sont déduits des noms et doivent être vérifiés :
@@ -109,7 +124,7 @@ ALBEDO_SUFFIXES = ("_Alb", "_Albedo", "_Alb_0", "_BC", "_BaseColor", "_Dif")
 
 
 def _base_name(name: str) -> str:
-    """``Weapon_Sword_Kokiri_Alb`` → ``Weapon_Sword_Kokiri`` (et variantes)."""
+    """``Weapon_Sword_Example_Alb`` → ``Weapon_Sword_Example`` (et variantes)."""
     for suffix in ALBEDO_SUFFIXES:
         if name.endswith(suffix):
             return name[: -len(suffix)]
@@ -120,7 +135,7 @@ def _normalised_textures(textures: dict[str, str] | None) -> dict[str, str]:
     """Indexe les PNG par nom de fichier **et** par nom sans suffixe.
 
     Le nom d'un matériau (``Mt_Blade``) ne contient presque jamais celui de la
-    texture (``Weapon_Sword_Kokiri_Alb``) : sans cette normalisation, le glTF
+    texture (``Weapon_Sword_Example_Alb``) : sans cette normalisation, le glTF
     sortait sans aucune texture alors que les PNG étaient bien exportés.
     """
     if not textures:
@@ -159,11 +174,11 @@ class _Buffer:
         return len(self.views) - 1
 
 
-def _write_gltf(meshes: list[MeshData], path: Path,
+def _build_gltf(meshes: list[MeshData], path: Path,
                 textures: dict[str, str] | None = None,
                 scale: float = 1.0,
                 maps: dict[str, str] | None = None,
-                material_maps: dict[str, dict[str, str]] | None = None) -> Path:
+                material_maps: dict[str, dict[str, str]] | None = None) -> tuple[dict, _Buffer]:
     """``textures`` : albédo par matériau ; ``maps`` : {rôle: fichier} du modèle.
 
     Les rôles reconnus par glTF : ``albedo`` (baseColor), ``normal``,
@@ -176,7 +191,7 @@ def _write_gltf(meshes: list[MeshData], path: Path,
     images: list[dict] = []
     gl_textures: list[dict] = []
     materials: list[dict] = []
-    material_index: dict[str, int] = {}
+    material_index: dict[tuple[str, bool], int] = {}
     nodes: list[dict] = []
     gl_meshes: list[dict] = []
     copied: dict[str, str] = {}
@@ -245,12 +260,13 @@ def _write_gltf(meshes: list[MeshData], path: Path,
     if material_maps is None and len({str(path) for path in textures.values()}) == 1:
         single_albedo = next(iter(textures.values()))
 
-    def material_for(name: str, albedo: str | None) -> int:
-        key = name or "Material"
+    def material_for(name: str, albedo: str | None, has_uv: bool) -> int:
+        material_name = name or "Material"
+        key = (material_name, has_uv)
         if key in material_index:
             return material_index[key]
         entry: dict = {
-            "name": key,
+            "name": material_name,
             "doubleSided": True,
             "pbrMetallicRoughness": {
                 "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
@@ -258,12 +274,15 @@ def _write_gltf(meshes: list[MeshData], path: Path,
                 "roughnessFactor": 0.8,
             },
         }
-        chosen = per_material.get(key, {}) if material_maps is not None else map_index
+        # Une primitive sans UV ne peut pas utiliser TEXCOORD_0 : conserver un
+        # matériau distinct sans texture plutôt que produire un glTF invalide.
+        chosen = ((per_material.get(material_name, {}) if material_maps is not None else map_index)
+                  if has_uv else {})
         if material_maps is not None and "albedo" in chosen:
             entry["pbrMetallicRoughness"]["baseColorTexture"] = {"index": chosen["albedo"]}
-        elif material_maps is None:
+        elif material_maps is None and has_uv:
             if albedo is None:
-                albedo = textures.get(key) or textures.get(_base_name(key)) or single_albedo
+                albedo = textures.get(material_name) or textures.get(_base_name(material_name)) or single_albedo
             if albedo and Path(albedo).name in copied:
                 texture_name = Path(albedo).name
                 for index, image in enumerate(images):
@@ -294,7 +313,7 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         # positions deux fois et appelait _bounds() deux fois par maillage
         flat = array("f", [value * scale for point in mesh.positions
                            for value in point])
-        positions_bytes = flat.tobytes()
+        positions_bytes = _little_bytes(flat)
         view = binary.add(positions_bytes, 34962)
         lo, hi = mesh.bounds()
         accessors.append({
@@ -310,7 +329,7 @@ def _write_gltf(meshes: list[MeshData], path: Path,
 
         if mesh.normals:
             flat = array("f", [value for normal in mesh.normals for value in normal])
-            view = binary.add(flat.tobytes(), 34962)
+            view = binary.add(_little_bytes(flat), 34962)
             accessors.append({"bufferView": view, "componentType": 5126,
                               "count": len(mesh.normals), "type": "VEC3"})
             attributes["NORMAL"] = len(accessors) - 1
@@ -325,7 +344,7 @@ def _write_gltf(meshes: list[MeshData], path: Path,
             for u, v in mesh.uvs:
                 flat.append(u)
                 flat.append(v)
-            view = binary.add(flat.tobytes(), 34962)
+            view = binary.add(_little_bytes(flat), 34962)
             accessors.append({"bufferView": view, "componentType": 5126,
                               "count": len(mesh.uvs), "type": "VEC2"})
             attributes["TEXCOORD_0"] = len(accessors) - 1
@@ -339,7 +358,7 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         wide = largest >= 0xFFFF
         indices = array("I" if wide else "H",
                         [value for tri in triangles for value in tri])
-        view = binary.add(indices.tobytes(), 34963)
+        view = binary.add(_little_bytes(indices), 34963)
         accessors.append({
             "bufferView": view,
             "componentType": 5125 if wide else 5123,
@@ -350,7 +369,7 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         primitive = {
             "attributes": attributes,
             "indices": len(accessors) - 1,
-            "material": material_for(mesh.material or mesh.name, albedo),
+            "material": material_for(mesh.material or mesh.name, albedo, bool(mesh.uvs)),
             "mode": 4,
         }
         gl_meshes.append({"name": mesh.name, "primitives": [primitive]})
@@ -377,11 +396,92 @@ def _write_gltf(meshes: list[MeshData], path: Path,
         document["textures"] = gl_textures
         document["samplers"] = [{"magFilter": 9729, "minFilter": 9987,
                                  "wrapS": 10497, "wrapT": 10497}]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(path, json.dumps(document, indent=1).encode("utf-8"))
-    binary_path = path.parent / bin_name
-    binary_path.write_bytes(bytes(binary.data))
-    return path
+    return document, binary
+
+
+def _little_bytes(values: array) -> bytes:
+    """glTF est toujours little-endian, quelle que soit la plateforme hôte."""
+    if sys.byteorder != "little":
+        values.byteswap()
+    return values.tobytes()
+
+
+def _write_gltf_files(document: dict, binary: _Buffer, path: Path) -> None:
+    # Les URI glTF sont des URI, non des noms bruts : les accents, espaces,
+    # « # » et « % » doivent survivre au chargement dans d'autres logiciels.
+    external = copy.deepcopy(document)
+    external["buffers"][0]["uri"] = quote(gltf_bin_path(path).name, safe="-._~")
+    external["buffers"][0]["byteLength"] = len(binary.data)
+    for image in external.get("images", []):
+        image["uri"] = quote(image["uri"], safe="-._~")
+    write_atomic(path, json.dumps(external, indent=1, allow_nan=False).encode("utf-8"))
+    write_atomic(gltf_bin_path(path), bytes(binary.data))
+
+
+def _write_glb(document: dict, binary: _Buffer, path: Path) -> None:
+    """GLB 2.0 autonome : un tampon unique, images incluses et alignées sur 4."""
+    embedded = copy.deepcopy(document)
+    embedded["buffers"][0].pop("uri", None)
+    size = len(binary.data)
+    images = []
+    for image in embedded.get("images", []):
+        source = path.parent / image.pop("uri")
+        with source.open("rb") as stream:
+            signature = stream.read(8)
+        if signature.startswith(b"\x89PNG\r\n\x1a\n"):
+            mime = "image/png"
+        elif signature.startswith(b"\xff\xd8\xff"):
+            mime = "image/jpeg"
+        else:
+            raise HookyError(f"Image GLB non prise en charge : {source.name} (PNG ou JPEG attendu).")
+        length = source.stat().st_size
+        if not length:
+            raise HookyError(f"Image GLB vide : {source.name}.")
+        size += -size % 4
+        view = {"buffer": 0, "byteOffset": size, "byteLength": length}
+        image.update({"name": source.name, "bufferView": len(embedded["bufferViews"]), "mimeType": mime})
+        embedded["bufferViews"].append(view)
+        images.append((source, size, length))
+        size += length
+    embedded["buffers"][0]["byteLength"] = size
+    json_bytes = json.dumps(embedded, ensure_ascii=True, separators=(",", ":"),
+                            allow_nan=False).encode("utf-8")
+    json_bytes += b" " * (-len(json_bytes) % 4)
+    bin_size = size + (-size % 4)
+    total = 12 + 8 + len(json_bytes) + 8 + bin_size
+    if total > 0xFFFFFFFF:
+        raise HookyError("GLB trop volumineux (limite du format : 4 Gio).")
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=".hookymod-glb-")
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(struct.pack("<4sII", b"glTF", 2, total))
+            output.write(struct.pack("<I4s", len(json_bytes), b"JSON"))
+            output.write(json_bytes)
+            output.write(struct.pack("<I4s", bin_size, b"BIN\0"))
+            output.write(binary.data)
+            cursor = len(binary.data)
+            for source, offset, length in images:
+                output.write(b"\0" * (offset - cursor))
+                with source.open("rb") as stream:
+                    remaining = length
+                    while remaining:
+                        chunk = stream.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise HookyError(f"Image modifiée pendant l'export GLB : {source.name}.")
+                        output.write(chunk)
+                        remaining -= len(chunk)
+                    if stream.read(1):
+                        raise HookyError(f"Image modifiée pendant l'export GLB : {source.name}.")
+                cursor = offset + length
+            output.write(b"\0" * (bin_size - cursor))
+        from .util import _replace_atomic
+        _replace_atomic(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def gltf_bin_path(path) -> Path:
@@ -396,7 +496,9 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
                   scale: float = 1.0, formats: tuple[str, ...] = ("gltf", "obj"),
                   maps: dict[str, str] | None = None,
                   material_maps: dict[str, dict[str, str]] | None = None,
-                  warnings: list[str] | None = None) -> dict[str, Path]:
+                  warnings: list[str] | None = None,
+                  animation: dict | None = None,
+                  animations=None) -> dict[str, Path]:
     """Écrit un dossier prêt pour Blender et renvoie les fichiers créés.
 
     :param meshes: maillages à exporter (positions, faces, UV, normales).
@@ -404,19 +506,36 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
     :param scale: facteur appliqué à la géométrie (1.0 = unités du jeu).
     :param maps: ``{rôle: nom du PNG}`` pour les autres cartes (normale,
         metallicRoughness, occlusion, émission) — branchées sur les matériaux.
+    :param animations: itérable de bindings partageant le même skin ; exclusif
+        avec ``animation``. Les clips sont consommés un par un.
     """
     meshes = _finish_meshes(list(meshes))
     folder = Path(directory)
     folder.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
 
-    if "gltf" in formats:
-        gltf = _write_gltf(meshes, folder / f"{name}.gltf", textures, scale,
-                           maps=maps, material_maps=material_maps)
-        written["gltf"] = gltf
-        binary = gltf_bin_path(gltf)
-        if binary.is_file():
-            written["bin"] = binary
+    if animation is not None and animations is not None:
+        raise HookyError("Choisis un clip ou un ensemble de clips, pas les deux.")
+    animated = animation is not None or animations is not None
+    if animated and not ({"gltf", "glb"} & set(formats)):
+        raise HookyError("Un clip animé nécessite un export glTF ou GLB ; OBJ reste statique.")
+    if {"gltf", "glb"} & set(formats):
+        gltf = folder / f"{name}.gltf"
+        document, binary = _build_gltf(meshes, gltf, textures, scale,
+                                       maps=maps, material_maps=material_maps)
+        if animated:
+            from . import gltf_animation
+            if animations is not None:
+                gltf_animation.add_animations_to_gltf(document, binary, meshes, animations, scale)
+            else:
+                gltf_animation.add_to_gltf(document, binary, meshes, animation, scale)
+        if "glb" in formats:
+            written["glb"] = folder / f"{name}.glb"
+            _write_glb(document, binary, written["glb"])
+        if "gltf" in formats:
+            _write_gltf_files(document, binary, gltf)
+            written["gltf"] = gltf
+            written["bin"] = gltf_bin_path(gltf)
 
     if "obj" in formats:
         albedos = ({name: roles["albedo"] for name, roles in material_maps.items() if roles.get("albedo")}
@@ -427,6 +546,7 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
         written["obj"] = export_obj(meshes, folder / f"{name}.obj", scale=scale,
                                     albedo_map=albedos, normal_map=normals,
                                     strict_materials=material_maps is not None)
+        written["mtl"] = written["obj"].with_suffix(".mtl")
 
     for material_name, source in (textures or {}).items():
         if source and Path(source).is_file():
@@ -436,15 +556,32 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
                 pass
 
     written["note"] = folder / "IMPORT_BLENDER.txt"
+    animation_note = (
+        ("Les clips exportés et leur squelette commun sont présents dans GLB/glTF. "
+         if animations is not None else "Le clip sélectionné et le squelette sont présents dans GLB/glTF. ")
+        + "Conversion expérimentale à 30 images/s par convention : courbes cubiques "
+        "échantillonnées et rotations Euler converties en quaternions ; vérifier le mouvement dans l'outil cible. "
+        "La boucle se règle dans le logiciel de lecture."
+        if animated else
+        "Aucun clip n'a été demandé : GLB et glTF sont statiques pour cet export.")
+    if animation is not None and animation.get("repeated_keys"):
+        animation_note += (" Des images-clés partagent un même instant ; un saut éventuel "
+                           "est approché par une très courte transition en glTF. Certains logiciels "
+                           "peuvent fusionner des clés trop proches.")
     write_atomic(written["note"], IMPORT_NOTE.format(
+        glb=f"{name}.glb" if "glb" in formats else "(non exporté)",
         gltf=f"{name}.gltf" if "gltf" in formats else "(non exporté)",
         obj=f"{name}.obj" if "obj" in formats else "(non exporté)",
+        animation_note=animation_note,
     ).encode("utf-8"))
     if warnings is not None:
         # Le ZIP doit conserver les limites de décodage après téléchargement.
         notes = list(warnings[:100])
         if len(warnings) > 100:
             notes.append(f"{len(warnings) - 100} remarque(s) supplémentaires omises.")
+        if (any(not mesh.uvs for mesh in meshes) and (textures or maps or material_maps)
+                and NO_UV_WARNING not in notes):
+            notes.append(NO_UV_WARNING)
         lines = ["Rapport de l'export du modèle", "",
                  "Vérifier les matériaux, la géométrie et le résultat dans l'application cible.",
                  "La réussite de l'export ne garantit pas la fidélité ni le fonctionnement en jeu.", ""]

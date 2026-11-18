@@ -45,14 +45,15 @@ BARS, NDVE et RESTBL non modifiés. L'assemblage d'un mod peut remplacer sans
 sauvegarde `mods/<nom>` ; l'interface demande confirmation et ne rend pas un
 mob automatiquement jouable.
 
-## Construction Windows / Linux
+## Construction Windows / Linux / macOS
 
 Construire **sur le système et l'architecture visés** : PyInstaller ne
 cross-compile pas le sidecar. Il faut Python 3.11 64 bits avec sa bibliothèque
 partagée, les outils C/C++ de la plateforme, Rust/Cargo 1.97 ou plus récent,
 Node.js et npm. Sous Windows, installer aussi les outils C++ de Visual Studio et
-le runtime WebView2. Sous Linux, Tauri demande GTK3, WebKitGTK 4.1 et les
-bibliothèques système associées. Exemple Debian/Ubuntu :
+le runtime WebView2. Sous macOS, installer les outils Xcode et construire
+séparément pour Apple Silicon et Intel. Sous Linux, Tauri demande GTK3, WebKitGTK
+4.1 et les bibliothèques système associées. Exemple Debian/Ubuntu :
 
 ```bash
 sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
@@ -71,12 +72,14 @@ npm run tauri -- build -- --locked
 Sous Windows, `py -3` peut remplacer `python`. Le script compile d'abord le noyau
 Rust existant puis le sidecar avec PyInstaller et le place dans
 `src-tauri/binaries/` avec le suffixe de la plateforme. La CLI Tauri produit les
-paquets dans `src-tauri/target/release/bundle/` (par exemple NSIS sous Windows,
-`.deb` sous Linux). La CI cible Windows x64 et Ubuntu 24.04 x64 ; le paquet Linux
-n'est pas garanti sur les autres distributions ou versions de glibc. Ces builds
-de test ne sont pas signés et Windows peut afficher un avertissement. Ces sorties
-et les données de jeu restent hors Git. Ne pas empaqueter ni distribuer de dump
-du jeu. Les bibliothèques et crates de Tauri nécessitent leur propre téléchargement ;
+paquets dans `src-tauri/target/release/bundle/` (NSIS sous Windows, `.deb` sous
+Linux et `.dmg` sous macOS). La CI cible Windows x64, Ubuntu 24.04 x64 et macOS
+Apple Silicon et Intel. Le paquet Linux n'est pas garanti sur les autres
+distributions ou versions de glibc. Les paquets ne sont pas signés par un
+certificat de développeur fiable et ceux de macOS ne sont pas notariés :
+SmartScreen ou Gatekeeper peuvent les bloquer. Ces sorties et les données de
+jeu restent hors Git. Ne pas empaqueter ni distribuer de dump du jeu. Les
+bibliothèques et crates de Tauri nécessitent leur propre téléchargement ;
 le fichier `src-tauri/Cargo.lock` fige leurs versions, mais seul le noyau `rust/`
 dispose de crates vendorizées.
 
@@ -103,8 +106,8 @@ npm run tauri -- build --debug --no-bundle
 
 Le dossier `target/debug/` doit conserver à côté de l'exécutable la copie du
 sidecar créée par Tauri. Reconstruis le sidecar après une modification Python ou
-Rust. Une version macOS peut nécessiter les outils Apple et n'a pas été validée
-par la CI décrite ici.
+Rust. Sur macOS, la CI vérifie le DMG, les notices et le sidecar ; elle ne teste
+pas encore la fenêtre en interaction.
 
 ## Fonctionnement local et vérifications
 
@@ -119,17 +122,26 @@ natives NumPy utilisées par la conversion audio. La page chargée ne reçoit pa
 permission Tauri pour ouvrir arbitrairement des dossiers ou exécuter des commandes.
 
 Le workflow `.github/workflows/desktop.yml` construit le sidecar et la fenêtre
-sur Linux et Windows, puis exécute un parcours WebDriver avec des données
-synthétiques (session, fichiers masqués, export ZIP, sélection, audio converti,
-vidéo, courbes d'animation, fermeture et reprise du projet). La disponibilité
-des codecs vidéo dépend de la WebView ; un refus explicite reste acceptable.
-Elle extrait le `.deb` ou installe silencieusement le NSIS, vérifie la présence des
-exécutables et reteste le backend livré. Les installateurs de test sont conservés
-comme artefacts de CI lorsque le workflow réussit. Le dialogue de choix lui-même
+sur Linux, Windows et les deux architectures macOS. Sur Linux et Windows, il
+exécute un parcours WebDriver avec des données synthétiques (session, fichiers
+masqués, export ZIP, sélection, audio converti, vidéo, courbes d'animation,
+fermeture et reprise du projet). La disponibilité des codecs vidéo dépend de la
+WebView ; un refus explicite reste acceptable. Il extrait le `.deb`, installe
+silencieusement le NSIS ou monte le DMG en lecture seule, puis vérifie les
+exécutables, les notices et le backend livré. Les installateurs de test sont
+conservés comme artefacts de CI lorsque le workflow réussit. Le dialogue de choix lui-même
 n'est pas automatisé : le mode debug
 accepte une racine de fixture par variable d'environnement pour ce test, option
-absente des builds release. Un autre job teste les formats standards et ouvre
-les exports glTF/OBJ avec Blender comme logiciel consommateur sous Linux.
+absente des builds release. Un autre job valide des GLB/glTF statiques et
+animés avec le validateur Khronos, puis ouvre des exports GLB/glTF/OBJ dans
+Blender sous Linux, y compris une animation et des poids synthétiques.
+
+Un push dont le message contient `[prepare-beta]` prépare un **brouillon non
+publié**, uniquement si ces jobs réussissent. Il regroupe les quatre
+installateurs et `SHA256SUMS.txt` sous le tag `v<version>-beta`. Le workflow ne
+publie pas automatiquement ce brouillon. Avant de le publier, contrôler aussi
+le workflow de parité Rust séparé, les notices et droits, les limites de chaque
+plateforme et la signature des paquets. Voir [PUBLICATION.md](PUBLICATION.md).
 
 Pour lancer ces vérifications localement après construction :
 

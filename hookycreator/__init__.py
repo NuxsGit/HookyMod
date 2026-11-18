@@ -1,10 +1,10 @@
-"""HookyCreator — atelier de contenu pour le remake (mobs, textures, modèles).
+"""HookyCreator — atelier local pour modèles, textures et autres ressources.
 
 L'interface est une application web locale : ``python -m hookycreator`` puis le
-navigateur. Aucun code Nintendo, aucune dépendance obligatoire hors HookyMod.
+navigateur. Les ressources à traiter sont fournies par l'utilisateur.
 """
 
 from .project import Project, ProjectError, open_project
 
 __all__ = ["Project", "ProjectError", "open_project"]
-__version__ = "1.0.0"
+__version__ = "11.26.1"

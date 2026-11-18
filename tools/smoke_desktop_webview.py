@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -22,8 +23,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from desktop_fixture import make_desktop_fixture  # noqa: E402
+from synth_animation import fska_two_clips_with_jump, named_rigid_model  # noqa: E402
 
 
 def free_port() -> int:
@@ -87,10 +90,34 @@ class Driver:
     def script(self, script: str, *args):
         return self.call("POST", f"/session/{self.session}/execute/sync", {"script": script, "args": args})
 
+    def query(self, script: str, *args):
+        """Lecture seule : réessayer une coupure de connexion, jamais une action."""
+        for attempt in range(3):
+            try:
+                return self.script(script, *args)
+            except ConnectionResetError as exc:
+                if attempt == 2:
+                    raise
+                print(f"Lecture WebDriver interrompue, nouvelle tentative : {exc}",
+                      file=sys.stderr, flush=True)
+                time.sleep(0.5)
+        raise AssertionError("Nombre de tentatives inattendu")
+
     def click(self, selector: str) -> None:
         element = self.call("POST", f"/session/{self.session}/element", {"using": "css selector", "value": selector})
         identity = element["element-6066-11e4-a52e-4f735466cecf"]
         self.call("POST", f"/session/{self.session}/element/{identity}/click", {})
+
+    def click_scrolled(self, selector: str) -> None:
+        # Les commandes Studio vivent dans #views, un conteneur défilant.
+        # WebKitWebDriver ne le fait pas toujours défiler avant son clic natif.
+        # Le clic reste un vrai clic WebDriver, pas un element.click() simulé.
+        self.script("""
+            const element = document.querySelector(arguments[0]);
+            if (!element) throw new Error('Élément absent : ' + arguments[0]);
+            element.scrollIntoView({block: 'center', inline: 'nearest'});
+        """, selector)
+        self.click(selector)
 
     def wait(self, description: str, script: str, timeout=45):
         return wait_for(description, lambda: self.script(script), timeout)
@@ -115,7 +142,7 @@ def completed_download(driver: Driver, previous: str = "") -> Path:
 def close_panels(driver: Driver) -> None:
     for panel, button in (("native-download-result", "native-download-dismiss"),
                           ("export-result", "export-dismiss")):
-        if driver.script("const el = document.getElementById(arguments[0]); return !!el && !el.hidden", panel):
+        if driver.query("const el = document.getElementById(arguments[0]); return !!el && !el.hidden", panel):
             driver.click("#" + button)
 
 
@@ -170,18 +197,18 @@ def run(application: Path) -> None:
                     return !!(window.__HOOKY_DESKTOP__ && el && !el.textContent.includes('Chargement'));
                 """, timeout=120)
                 print(f"Démarrage fenêtre + WebDriver (fixture synthétique) : {time.perf_counter() - driver.started:.3f} s")
-                origin = driver.script("return location.origin")
+                origin = driver.query("return location.origin")
                 backend_port = urlparse(origin).port
                 assert urlparse(origin).hostname == "127.0.0.1" and backend_port
-                assert not driver.script("return location.hash")
-                assert "hooky_session" not in driver.script("return document.cookie")
+                assert not driver.query("return location.hash")
+                assert "hooky_session" not in driver.query("return document.cookie")
 
                 driver.click('button[data-view="models"]')
                 driver.wait("validation des modèles", """
                     const count = document.querySelector('#model-count').textContent;
                     return count.includes('1 modèle(s) vérifié(s)') && count.includes('1 non pris en charge');
                 """)
-                assert driver.script("return document.querySelectorAll('#model-grid .tile:not([hidden])').length") == 1
+                assert driver.query("return document.querySelectorAll('#model-grid .tile:not([hidden])').length") == 1
                 driver.click('#model-grid .tile:not([hidden])')
                 driver.wait("fiche du modèle", "return !!document.querySelector('#btn-export-model')")
                 # Environnement sans WebGL2 : le repli PNG doit rester visible.
@@ -191,8 +218,8 @@ def run(application: Path) -> None:
                     const status = document.querySelector('#model-view-status')?.textContent || '';
                     return status.includes('triangles') || status.includes('Vue 3D indisponible');
                 """, timeout=60)
-                if driver.script("return !!modelViewport && modelViewport.ready"):
-                    assert driver.script("return modelViewport.model.triangles") == 1
+                if driver.query("return !!modelViewport && modelViewport.ready"):
+                    assert driver.query("return modelViewport.model.triangles") == 1
                     driver.script("""
                         const select = document.querySelector('#model-upscale');
                         select.value = 'fsr'; select.dispatchEvent(new Event('change', {bubbles: true}));
@@ -202,14 +229,14 @@ def run(application: Path) -> None:
                         return (!!modelViewport && modelViewport.mode === 'fsr' && !!modelViewport.targets)
                           || status.includes('FSR 1 indisponible');
                     """, timeout=60)
-                    print('Vue native : ' + driver.script("return document.querySelector('#model-view-status').textContent"))
+                    print('Vue native : ' + driver.query("return document.querySelector('#model-view-status').textContent"))
                 else:
-                    assert driver.script("return !document.querySelector('#model-shot').hidden")
+                    assert driver.query("return !document.querySelector('#model-shot').hidden")
                     print('Vue native : repli PNG (WebGL indisponible)')
                 driver.click('#btn-export-model')
                 first = completed_download(driver)
                 downloads.append(first)
-                folder = Path(driver.script("return document.querySelector('#export-result-folder').textContent"))
+                folder = Path(driver.query("return document.querySelector('#export-result-folder').textContent"))
                 assert folder.is_absolute() and (folder / 'Heros.gltf').is_file(), folder
                 with zipfile.ZipFile(first) as archive:
                     names = archive.namelist()
@@ -252,22 +279,22 @@ def run(application: Path) -> None:
                     const count = document.querySelector('#texture-count').textContent;
                     return count.includes('2 texture(s) vérifié(s)') && count.includes('1 non pris en charge');
                 """)
-                assert driver.script("return document.querySelectorAll('#texture-grid .tile:not([hidden])').length") == 2
+                assert driver.query("return document.querySelectorAll('#texture-grid .tile:not([hidden])').length") == 2
                 driver.click('button[data-view="sounds"]')
                 driver.wait("validation des sons", """
                     const count = document.querySelector('#sound-count').textContent;
                     return count.includes('1 son(s) vérifié(s)') && count.includes('1 non pris en charge');
                 """)
-                assert driver.script("return document.querySelectorAll('#sound-grid .tile:not([hidden])').length") == 1
+                assert driver.query("return document.querySelectorAll('#sound-grid .tile:not([hidden])').length") == 1
                 driver.click('#sound-grid .tile:not([hidden])')
                 driver.wait("lecteur de son", "return !!document.querySelector('#sound-player')")
-                assert driver.script("return !!document.querySelector('#sound-player').canPlayType('audio/ogg; codecs=opus')")
+                assert driver.query("return !!document.querySelector('#sound-player').canPlayType('audio/ogg; codecs=opus')")
                 driver.script("const p = document.querySelector('#sound-player'); p.preload = 'auto'; p.load()")
                 driver.wait("décodage des métadonnées audio", """
                     const p = document.querySelector('#sound-player');
                     return p && (p.readyState >= 1 || p.error);
                 """)
-                assert not driver.script("return !!document.querySelector('#sound-player').error")
+                assert not driver.query("return !!document.querySelector('#sound-player').error")
                 driver.click('#inspector-body a[href*="/api/sound/convert"][href*="format=opus"]')
                 audio = completed_download(driver, str(selected))
                 downloads.append(audio)
@@ -290,14 +317,14 @@ def run(application: Path) -> None:
                     const p = document.querySelector('#video-player');
                     return p && (p.readyState >= 1 || p.error);
                 """)
-                if driver.script("return !!document.querySelector('#video-player').error"):
+                if driver.query("return !!document.querySelector('#video-player').error"):
                     driver.wait("message de codec non pris en charge", """
                         return document.querySelector('#video-status').textContent.includes('Lecture impossible');
                     """)
                     print("WebM : codec indisponible dans cette WebView ; message de repli affiché")
                 else:
-                    assert driver.script("return document.querySelector('#video-player').videoWidth") == 32
-                    assert driver.script("return document.querySelector('#video-player').videoHeight") == 32
+                    assert driver.query("return document.querySelector('#video-player').videoWidth") == 32
+                    assert driver.query("return document.querySelector('#video-player').videoHeight") == 32
                 driver.click('#inspector-body a[href*="/api/video/stream"][download]')
                 movie = completed_download(driver, str(wav))
                 downloads.append(movie)
@@ -314,7 +341,83 @@ def run(application: Path) -> None:
                 downloads.append(clip)
                 assert clip.name.startswith('Heros--') and clip.suffix == '.json'
                 assert json.loads(clip.read_text(encoding='utf-8'))['name'] == 'Walk'
-                print("Webview native : session, filtres, ZIP, sélection, audio, vidéo et JSON d'animation OK")
+
+                # Ajouter un modèle skinné sans changer les comptes du scan testé
+                # ci-dessus. Le fichier sélectionné explicitement fait partie de
+                # l'export groupé même s'il n'est pas dans l'index par nom.
+                (root / 'Model' / 'Rigid.bfres').write_bytes(named_rigid_model())
+                (root / 'Model' / 'Rigid.anim.bfres').write_bytes(fska_two_clips_with_jump())
+                close_panels(driver)
+                driver.script("void openModel('Model/Rigid.bfres', {animationRel: 'Model/Rigid.anim.bfres', animationIndex: 0})")
+                driver.wait("modèle animé ouvert", """
+                    return !!document.querySelector('#btn-export-animations')
+                      && document.querySelector('#model-animation-file')?.value === 'Model/Rigid.anim.bfres';
+                """, timeout=60)
+                driver.click_scrolled('#btn-export-animations')
+                grouped = completed_download(driver, str(clip))
+                downloads.append(grouped)
+                assert grouped.name.startswith('hookycreator-animations--') and grouped.suffix == '.glb'
+                data = grouped.read_bytes()
+                magic, version, total = struct.unpack_from('<4sII', data)
+                assert (magic, version, total) == (b'glTF', 2, len(data))
+                size, kind = struct.unpack_from('<I4s', data, 12)
+                assert kind == b'JSON'
+                document = json.loads(data[20:20 + size])
+                assert [item['name'] for item in document['animations']] == ['Walk', 'Run']
+                assert len(document['skins']) == 1
+                print("Webview native : session, ZIP, audio, vidéo, JSON et GLB multi-clips OK")
+
+                # L'archive .hooky utilise le véritable gestionnaire de
+                # téléchargement Tauri, pas seulement le backend HTTP.
+                close_panels(driver)
+                driver.click('button[data-view="studio"]')
+                driver.script("""
+                    const name = document.querySelector('#studio-new-name');
+                    name.value = 'Création synthétique';
+                    document.querySelector('#studio-create-form').requestSubmit();
+                """)
+                driver.wait("projet HookyMod's prêt", """
+                    return !document.querySelector('#studio-workspace').hidden
+                      && !document.querySelector('#studio-controls').disabled;
+                """)
+                driver.click_scrolled('[data-studio-kind="item"]')
+                driver.script("""
+                    const name = document.querySelector('#studio-element-name');
+                    name.value = 'Objet synthétique';
+                    name.dispatchEvent(new Event('input', { bubbles: true }));
+                """)
+                driver.click_scrolled('[data-studio-block="when_use"]')
+                driver.click_scrolled('[data-studio-block="give_item"]')
+                driver.script("""
+                    const value = document.querySelector('[data-block-value="1"]');
+                    value.value = 'Clé imaginaire';
+                    value.dispatchEvent(new Event('input', { bubbles: true }));
+                    const event = document.querySelector('#studio-simulation-event');
+                    event.value = 'when_use';
+                    event.dispatchEvent(new Event('change', { bubbles: true }));
+                """)
+                driver.click_scrolled('#studio-simulate')
+                driver.wait("simulation hors jeu", """
+                    const result = document.querySelector('#studio-simulation-result');
+                    return result && !result.hidden && result.textContent.includes('Action simulée')
+                      && result.textContent.includes('Clé imaginaire');
+                """)
+                driver.click_scrolled('#studio-export')
+                design = completed_download(driver, str(grouped))
+                downloads.append(design)
+                assert design.name.startswith('hookymods--') and design.suffix == '.hooky'
+                with zipfile.ZipFile(design) as archive:
+                    assert set(archive.namelist()) == {'manifest.json', 'workspace.json'}
+                    assert json.loads(archive.read('manifest.json'))['playable'] is False
+                    assert json.loads(archive.read('workspace.json'))['elements'][0]['name'] == 'Objet synthétique'
+                close_panels(driver)
+                # Laisser un brouillon non enregistré : le checkpoint natif
+                # doit le sauver même après avoir changé de vue.
+                driver.script("""
+                    const description = document.querySelector('#studio-description');
+                    description.value = 'Brouillon HookyMod conservé';
+                    description.dispatchEvent(new Event('input', { bubbles: true }));
+                """)
 
                 # Une sauvegarde finale > 64 Kio et artificiellement retardée
                 # doit être confirmée avant l'arrêt, pas confiée à keepalive.
@@ -354,6 +457,8 @@ def run(application: Path) -> None:
                 assert saved["fields"]["mod-name"] == "Brouillon conservé"
                 assert saved["fields"]["search"] == "Heros"
                 assert "model:Model/Heros.bfres" in saved["selection"]
+                designs = list((root / "hookycreator_work" / "hookymods").glob("*.json"))
+                assert len(designs) == 1 and json.loads(designs[0].read_text(encoding="utf-8"))["description"] == "Brouillon HookyMod conservé"
                 recent = json.loads((Path(tmp) / "config" / "recent-project.json").read_text(encoding="utf-8"))
                 assert Path(recent["project"]) == root
 
@@ -369,9 +474,9 @@ def run(application: Path) -> None:
                       && document.querySelector('#search').value === 'Heros'
                       && document.querySelector('#mod-name').value === 'Brouillon conservé');
                 """, timeout=120)
-                assert driver.script("return [...state.selection]") == ["model:Model/Heros.bfres"]
-                assert driver.script("return !document.querySelector('#inspector').hidden")
-                new_origin = driver.script("return location.origin")
+                assert driver.query("return [...state.selection]") == ["model:Model/Heros.bfres"]
+                assert driver.query("return !document.querySelector('#inspector').hidden")
+                new_origin = driver.query("return location.origin")
                 new_port = urlparse(new_origin).port
                 assert urlparse(new_origin).hostname == "127.0.0.1" and new_port
 
@@ -413,6 +518,14 @@ def run(application: Path) -> None:
                               exportFolder: text('export-result-folder'),
                               nativeVisible: !!node('native-download-result') && !node('native-download-result').hidden,
                               nativeTitle: text('native-download-title'), nativePath: text('native-download-path'),
+                              studioDisabled: !!node('studio-controls')?.disabled,
+                              studioItem: (() => {
+                                const el = document.querySelector('[data-studio-kind="item"]');
+                                if (!el) return null;
+                                const r = el.getBoundingClientRect();
+                                return {x: r.x, y: r.y, width: r.width, height: r.height,
+                                        hit: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 200)};
+                              })(),
                               toasts: text('toasts'), log: text('console-log').slice(-3000),
                             };
                         """)

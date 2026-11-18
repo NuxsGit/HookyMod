@@ -193,3 +193,34 @@ def _encode(data: bytes, meshes, *, structured: bool) -> bytes:
     for block in blocks:
         output.extend(block)
     return bytes(output)
+
+
+def decode(packet: bytes, meshes) -> dict:
+    """Expose le paquet H3S1 produit ci-dessus à l'exporteur glTF sans copie des blocs."""
+    if len(packet) < 12 or len(packet) > MAX_OUTPUT or packet[:4] != MAGIC:
+        raise SkinError("Paquet de skin invalide.")
+    size, = struct.unpack_from("<I", packet, 4)
+    if size > 4 * 1024 * 1024 or size + 8 > len(packet):
+        raise SkinError("En-tête de skin invalide.")
+    try:
+        header = json.loads(packet[8:8 + size].decode("ascii"))
+        entries = header["meshes"]
+        if header["version"] != 1 or not isinstance(header["bones"], list) or len(entries) != len(meshes):
+            raise ValueError("tables incompatibles")
+        cursor = (8 + size + 3) & ~3
+        blocks = []
+        view = memoryview(packet)
+        for entry, mesh in zip(entries, meshes):
+            count = len(mesh.positions)
+            if entry["name"] != mesh.name or entry["vertices"] != count or cursor + 24 * count > len(packet):
+                raise ValueError("maillages incompatibles")
+            joints = view[cursor:cursor + 16 * count]
+            cursor += 16 * count
+            weights = view[cursor:cursor + 8 * count]
+            cursor += 8 * count
+            blocks.append({"name": mesh.name, "vertices": count, "joints": joints, "weights": weights})
+        if cursor != len(packet):
+            raise ValueError("taille incohérente")
+        return {"bones": header["bones"], "meshes": blocks}
+    except (KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SkinError(f"Paquet de skin illisible : {exc}") from exc

@@ -166,7 +166,7 @@ class StructuralV10Tests(unittest.TestCase):
         struct.pack_into("<Q", data, 0x218, 0x1000)  # pointeur de squelette
         data[0x45c] = 1
         _meshes, report = bfres_v10.parse(bytes(data))
-        self.assertTrue(any("Squelette" in warning for warning in report.warnings))
+        self.assertTrue(any("squelette et animation à associer" in warning for warning in report.warnings))
         self.assertTrue(any("déformation" in warning for warning in report.warnings))
 
     def test_corrupt_declared_tables_never_fall_back_to_heuristic_geometry(self):

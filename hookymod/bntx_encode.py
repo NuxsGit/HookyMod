@@ -437,8 +437,8 @@ def build_bntx(name: str, width: int, height: int, rgba: bytes,
     mod, préfère :func:`replace_texture` quand la texture existe déjà : les
     en-têtes du jeu (version, drapeaux, alignement) restent alors intacts.
 
-    ``orin=True`` produit un fichier Switch 2 (version 0.4.x, disposition Orin) ;
-    par défaut le fichier est en disposition Switch 1 (version 0.3).
+    ``orin=True`` produit un fichier 0.4.x en disposition Orin ;
+    par défaut le fichier est en disposition X1 (version 0.3).
     """
     if version is None:
         version = 0x00040100 if orin else 0x00030000
@@ -566,7 +566,7 @@ def png_to_bntx(png: bytes, template: bytes | None = None, texture: str = "",
                 orin: bool = False) -> tuple[bytes, ReplaceReport]:
     """Convertit un PNG en BNTX (remplacement si ``template`` est fourni).
 
-    Sans gabarit, ``orin=True`` produit un fichier Switch 2 (0.4.x, Orin) ;
+    Sans gabarit, ``orin=True`` produit un fichier 0.4.x en disposition Orin ;
     avec un gabarit, c'est la disposition du fichier d'origine qui s'applique.
     """
     try:

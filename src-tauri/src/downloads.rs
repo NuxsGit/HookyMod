@@ -48,17 +48,15 @@ pub(crate) fn download_target(
     route: &str,
     source: &str,
     format: &str,
-    selection: bool,
+    kind: &str,
 ) -> Option<(String, &'static str)> {
     match route {
-        "/api/export/download" => Some((
-            if selection {
-                "hookycreator-selection".into()
-            } else {
-                "hookycreator-modele".into()
-            },
-            "zip",
-        )),
+        "/api/export/download" => match kind {
+            "" => Some(("hookycreator-modele".into(), "zip")),
+            "selection" => Some(("hookycreator-selection".into(), "zip")),
+            "glb" => Some(("hookycreator-animations".into(), "glb")),
+            _ => None,
+        },
         "/api/sound/ogg" => Some((safe_stem(source), "opus")),
         "/api/sound/convert" => {
             let extension = match format.to_ascii_lowercase().as_str() {
@@ -73,6 +71,8 @@ pub(crate) fn download_target(
         }
         "/api/video/stream" => Some((safe_stem(source), "webm")),
         "/api/animation/clip" => Some((safe_stem(source), "json")),
+        // Design archive only; do not derive the extension from the URL.
+        "/api/studio/export" => Some(("hookymods".into(), "hooky")),
         _ => None,
     }
 }
@@ -127,25 +127,46 @@ mod tests {
     #[test]
     fn media_downloads_use_fixed_safe_extensions() {
         assert_eq!(
-            download_target("/api/video/stream", "../../Movie.webm", "", false),
+            download_target("/api/video/stream", "../../Movie.webm", "", ""),
             Some(("Movie".into(), "webm"))
         );
         assert_eq!(
-            download_target("/api/animation/clip", "Heros.anim.bfres.zs", "", false),
+            download_target("/api/animation/clip", "Heros.anim.bfres.zs", "", ""),
             Some(("Heros".into(), "json"))
         );
         assert_eq!(
-            download_target("/api/animation/clip", "Heros.animation.bfres", "", false),
+            download_target("/api/animation/clip", "Heros.animation.bfres", "", ""),
             Some(("Heros".into(), "json"))
         );
         for format in ["wav", "flac", "mp3", "ogg", "opus"] {
             assert_eq!(
-                download_target("/api/sound/convert", "Voix.bwav.zs", format, false),
+                download_target("/api/sound/convert", "Voix.bwav.zs", format, ""),
                 Some(("Voix".into(), format))
             );
         }
-        assert!(download_target("/api/sound/convert", "x.bwav", "../../exe", false).is_none());
-        assert!(download_target("/api/unknown", "x", "wav", false).is_none());
+        assert!(download_target("/api/sound/convert", "x.bwav", "../../exe", "").is_none());
+        assert_eq!(
+            download_target("/api/studio/export", "../../evil.exe", "exe", ""),
+            Some(("hookymods".into(), "hooky"))
+        );
+        assert!(download_target("/api/unknown", "x", "wav", "").is_none());
+    }
+
+    #[test]
+    fn model_downloads_use_fixed_extensions_for_each_kind() {
+        assert_eq!(
+            download_target("/api/export/download", "../../bad.exe", "", ""),
+            Some(("hookycreator-modele".into(), "zip"))
+        );
+        assert_eq!(
+            download_target("/api/export/download", "", "", "selection"),
+            Some(("hookycreator-selection".into(), "zip"))
+        );
+        assert_eq!(
+            download_target("/api/export/download", "../../bad.exe", "exe", "glb"),
+            Some(("hookycreator-animations".into(), "glb"))
+        );
+        assert!(download_target("/api/export/download", "", "", "../../exe").is_none());
     }
 
     #[test]

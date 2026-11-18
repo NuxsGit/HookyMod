@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import bisect
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -54,6 +55,15 @@ MAX_SCAN_FILES = 200_000
 EXPORT_CACHE_BYTES = 64 * 1024 * 1024
 # Des instances Project distinctes peuvent partager un dossier de travail.
 _EXPORT_FLIGHTS = cache_mod.KeyedLocks()
+# Un seul export multi-clips à la fois : chaque fichier est lu une fois et
+# chaque clip est libéré après conversion ; ces plafonds restent explicites.
+_ANIMATION_EXPORT_SLOT = threading.BoundedSemaphore(1)
+MAX_ANIMATION_EXPORT_FILES = 1024
+MAX_ANIMATION_EXPORT_CLIPS = 4096
+MAX_ANIMATION_EXPORT_BYTES = 512 * 1024 * 1024
+MAX_ANIMATION_EXPORT_KEYS = 1_000_000
+MAX_ANIMATION_EXPORT_TRACKS = 1_000_000
+MAX_ANIMATION_EXPORT_METADATA = 16 * 1024 * 1024
 
 
 @dataclass
@@ -121,7 +131,7 @@ ANIMATION_SUFFIXES = ("_player_animation", "_animation", "_anim")
 
 
 def _animation_key(name: str) -> str:
-    """``Animal_Cat_Animation.anim.bfres.zs`` → ``animal_cat``."""
+    """``Creature_Alpha_Animation.anim.bfres.zs`` → ``creature_alpha``."""
     base = name.split(".")[0].lower()
     for suffix in ANIMATION_SUFFIXES:
         if base.endswith(suffix):
@@ -143,7 +153,7 @@ def _tokens(text: str) -> list[str]:
 def _texture_base(name: str, role: str | None = None) -> str:
     """Nom d'une texture **sans** son espace de noms ni son suffixe de rôle.
 
-    ``Mt_Weapon_Sword_Biggoron_Alb`` → ``weapon_sword_biggoron`` : c'est la clé
+    ``Mt_Weapon_Sword_Example_Alb`` → ``weapon_sword_example`` : c'est la clé
     qui doit rencontrer le nom du modèle, et elle se calcule une seule fois par
     fichier au lieu d'être recalculée pour chaque modèle.
     """
@@ -230,7 +240,7 @@ def _png_stem(stem: str) -> str:
 
 
 def _display_name(stem: str) -> str:
-    """``Animal_Cat.Animal_Cat`` → ``Animal_Cat`` (le jeu double souvent le nom)."""
+    """``Creature_Alpha.Creature_Alpha`` → ``Creature_Alpha`` (certains fichiers doublent le nom)."""
     head, _, tail = stem.partition(".")
     return head if head and head == tail else stem
 
@@ -1432,6 +1442,7 @@ class Project:
         lowest = [min(point[i] for point in points) for i in range(3)]
         highest = [max(point[i] for point in points) for i in range(3)]
         references = meta.get("material_textures") or {}
+        animations = self.animations_for(rel)
         listing = []
         reference_warnings = []
         if references:
@@ -1468,9 +1479,11 @@ class Project:
             "warnings": (meta.get("warnings", []) + reference_warnings)[:24],
             "textures": listing[:128],
             "texture_match": "références du matériau" if references else "candidats par nom",
+            # Seul l'aperçu est limité à 32. L'export groupé consulte l'index
+            # complet et ne dépend jamais de cette tranche d'interface.
+            "animation_count": len(animations),
             "animations": [{"rel": asset.rel, "name": asset.stem,
-                            "size": asset.size}
-                           for asset in self.animations_for(rel)][:32],
+                            "size": asset.size} for asset in animations[:32]],
             "textured": bool(self._albedo_bindings(rel)
                              and self.settings.textured_previews),
         }
@@ -1539,6 +1552,12 @@ class Project:
         cached = geo_mod.read(path) if path.is_file() else None
         if cached is not None:
             meshes, meta = cached
+            # Les caches GEO antérieurs contenaient un avertissement devenu
+            # faux lorsque l'export reconstruit explicitement un clip compatible.
+            legacy = "Squelette et animation non exportés : géométrie en pose statique non garantie."
+            current = "Décodage géométrique seul : pose statique non garantie ; squelette et animation à associer séparément."
+            if legacy in meta.get("warnings", []):
+                meta = {**meta, "warnings": [current if note == legacy else note for note in meta["warnings"]]}
             with self._cache_lock:
                 self.geo_hits += 1
             self._store_mesh(key, meshes, meta)
@@ -1707,7 +1726,7 @@ class Project:
     def _ranked_names(self, index: "_PrefixIndex", rel: str):
         """Assets qui portent le nom du modèle, du plus sûr au plus large.
 
-        Trois rangs, comme avant : le nom complet (``Weapon_Sword_Biggoron``),
+        Trois rangs, comme avant : le nom complet (``Weapon_Sword_Example``),
         la famille (``Weapon_Sword``), puis le préfixe (``Weapon``). Le premier
         rang non vide gagne — jamais de mélange entre deux rangs.
 
@@ -1768,11 +1787,11 @@ class Project:
     def animations_for(self, rel: str) -> list:
         """Animations (``*.anim.bfres``) qui vont avec ce modèle.
 
-        Le jeu ne nomme pas ses animations comme ses modèles : à côté de
-        ``Animal_Cat.Animal_Cat.bfres`` vit ``Animal_Cat_Animation.anim.bfres``.
+        Certaines animations ont un nom différent de celui du modèle : à côté de
+        ``Creature_Alpha.Creature_Alpha.bfres`` vit ``Creature_Alpha_Animation.anim.bfres``.
         On enlève donc le suffixe ``_Animation`` / ``_Player_Animation`` avant de
-        comparer, puis on accepte les variantes préfixées (``Animal_Dog_Wild``
-        pour ``Animal_Dog``) : c'est le seul appariement possible sans ouvrir
+        comparer, puis on accepte les variantes préfixées (``Creature_Beta_Variant``
+        pour ``Creature_Beta``) : c'est le seul appariement possible sans ouvrir
         chaque fichier, et il reste instantané.
         """
         with self._cache_lock:
@@ -2241,15 +2260,346 @@ class Project:
             self._export_cache[key] = (files, copy.deepcopy(found), zipped, actual)
             self._export_cache_bytes += actual
 
-    def export_model(self, rel: str, textures: bool = True, *, archive: bool = False) -> dict:
-        """Exporte la géométrie et les cartes ; le ZIP optionnel ne contient que cet export."""
-        return self._export_model_bundle(rel, textures, archive=archive)
+    def export_model(self, rel: str, textures: bool = True, *, archive: bool = False,
+                     animation_rel: str | None = None, animation_index: int | None = None,
+                     all_animations: bool = False) -> dict:
+        """Export classique en ZIP, ou GLB autonome groupant les clips détectés.
 
-    def _export_model_bundle(self, rel: str, textures: bool, *, archive: bool) -> dict:
+        En mode groupé, ``animation_rel`` ajoute éventuellement le fichier de
+        l'aperçu aux candidats par nom ; ``archive`` demande un téléchargement
+        temporaire, qui est alors un GLB et non une archive ZIP.
+        """
+        if type(all_animations) is not bool:
+            raise ProjectError("Mode d'export d'animations invalide.")
+        if all_animations:
+            if animation_index is not None or (animation_rel is not None
+                                               and (not isinstance(animation_rel, str) or not animation_rel)):
+                raise ProjectError("L'export groupé accepte un fichier d'animation, sans index de clip.")
+            return self._export_model_all_animations(rel, textures, download=archive,
+                                                     extra_animation=animation_rel)
+        if ((animation_rel is None) != (animation_index is None)
+                or (animation_rel is not None and (not isinstance(animation_rel, str) or not animation_rel
+                                                   or type(animation_index) is not int or animation_index < 0))):
+            raise ProjectError("Choisis un fichier d'animation et un index de clip valides, ou aucun des deux.")
+        return self._export_model_bundle(rel, textures, archive=archive,
+                                         animation_rel=animation_rel, animation_index=animation_index)
+
+    def _group_animation_bindings(self, paths: list[str], skin: dict, result: dict,
+                                  versions: dict[str, tuple]):
+        """Lit chaque source une fois et fournit les clips valides au fur et à mesure."""
+        from hookymod import gltf_animation
+
+        seen: dict[bytes, dict] = {}
+        names: set[str] = set()
+        key_budget = animation_mod.KeyBudget(MAX_ANIMATION_EXPORT_KEYS)
+        input_bytes = bytes_read = clip_count = track_count = metadata_bytes = 0
+
+        def account_metadata(*values: str) -> None:
+            nonlocal metadata_bytes
+            metadata_bytes += sum(len(value.encode("utf-8")) for value in values)
+            if metadata_bytes > MAX_ANIMATION_EXPORT_METADATA:
+                raise ProjectError("Trop de noms ou de diagnostics d'animation pour un seul GLB "
+                                   f"(maximum : {MAX_ANIMATION_EXPORT_METADATA // 1024**2} Mio).")
+
+        def skip_file(path: str, stamp: tuple, exc: Exception) -> None:
+            try:
+                unchanged = self._version(path) == stamp
+            except (ProjectError, OSError):
+                unchanged = False
+            if not unchanged:
+                raise ProjectError(f"L'animation {path} a changé pendant l'export ; recommence.") from exc
+            account_metadata(path, str(exc))
+            result["skipped"].append({"path": path, "index": None, "name": "", "reason": str(exc)})
+
+        for path in paths:
+            account_metadata(path)
+            if path not in versions:
+                continue  # fichier inaccessible déjà signalé avant le décodage
+            stamp = versions[path]
+            try:
+                unchanged = self._version(path) == stamp
+            except (ProjectError, OSError):
+                unchanged = False
+            if not unchanged:
+                raise ProjectError(f"L'animation {path} a changé pendant l'export ; recommence.")
+            # Le plafond couvre aussi les entrées comprimées ou illisibles ;
+            # sinon de nombreux fichiers refusés pourraient coûter sans borne.
+            input_bytes += stamp[0]
+            if input_bytes > MAX_ANIMATION_EXPORT_BYTES:
+                raise ProjectError("Trop de données d'animation sources pour un seul GLB "
+                                   f"({MAX_ANIMATION_EXPORT_BYTES // 1024**2} Mio maximum).")
+            try:
+                data = self._read_animation(path)
+            except (ProjectError, HookyError, OSError) as exc:
+                skip_file(path, stamp, exc)
+                continue
+            # Compter même une table illisible, avant d'essayer de la décoder.
+            bytes_read += len(data)
+            if bytes_read > MAX_ANIMATION_EXPORT_BYTES:
+                raise ProjectError("Trop de données d'animation pour un seul GLB "
+                                   f"({MAX_ANIMATION_EXPORT_BYTES // 1024**2} Mio décompressés maximum).")
+            try:
+                headers = animation_mod.list_clips(data)
+            except HookyError as exc:
+                skip_file(path, stamp, exc)
+                continue
+            if self._version(path) != stamp:
+                raise ProjectError(f"L'animation {path} a changé pendant l'export ; recommence.")
+            clip_count += len(headers)
+            if clip_count > MAX_ANIMATION_EXPORT_CLIPS:
+                raise ProjectError(f"Trop de clips candidats pour un seul GLB (maximum : {MAX_ANIMATION_EXPORT_CLIPS}).")
+            if not headers:
+                result["skipped"].append({"path": path, "index": None, "name": "",
+                                          "reason": "Aucun clip squelettique FSKA dans ce fichier."})
+            for header in headers:
+                identity = {"path": path, "index": header["index"], "name": header["name"]}
+                account_metadata(path, header["name"], header["name"])
+                # Compter aussi les pistes et clés d'un clip qui sera refusé :
+                # beaucoup d'en-têtes peuvent pointer vers les mêmes octets.
+                track_count += header["bone_count"]
+                if track_count > MAX_ANIMATION_EXPORT_TRACKS:
+                    raise ProjectError(f"Trop de pistes source pour un seul GLB (maximum : {MAX_ANIMATION_EXPORT_TRACKS}).")
+                try:
+                    clip = {"rel": path, **animation_mod.read_clip(data, header["index"], budget=key_budget)}
+                    binding = gltf_animation.bind(skin, clip)
+                except animation_mod.AnimationBudgetExceeded as exc:
+                    raise ProjectError(f"Trop d'images-clés source pour un seul GLB "
+                                       f"(maximum : {MAX_ANIMATION_EXPORT_KEYS}).") from exc
+                except HookyError as exc:
+                    account_metadata(str(exc))
+                    result["skipped"].append({**identity, "reason": str(exc)})
+                    continue
+                account_metadata(*binding["missing"])
+
+                # Deux occurrences identiques (nom, durée, boucle et toutes les
+                # pistes) ne créent qu'une action. Un homonyme différent reste
+                # distinct ; son nom glTF est rendu unique sans perdre la source.
+                semantic = {key: clip[key] for key in ("name", "frames", "fps", "loop", "bones")}
+                fingerprint = hashlib.sha256(json.dumps(semantic, sort_keys=True, ensure_ascii=False,
+                                                         separators=(",", ":"), allow_nan=False)
+                                             .encode("utf-8")).digest()
+                if fingerprint in seen:
+                    result["duplicates"].append({**identity, "same_as": seen[fingerprint]})
+                    continue
+                name = clip["name"]
+                unique, number = name, 2
+                while unique.casefold() in names:
+                    unique, number = f"{name} ({number})", number + 1
+                names.add(unique.casefold())
+                binding["export_name"] = unique
+                item = {**identity, "export_name": unique, "frames": clip["frames"], "fps": clip["fps"],
+                        "matched": binding["matched"], "missing": list(binding["missing"]),
+                        "repeated_keys": binding["repeated_keys"]}
+                seen[fingerprint] = {"path": path, "index": header["index"], "name": unique}
+                result["exported"].append(item)
+                yield binding
+
+        result["source_clips"] = clip_count
+        if not result["exported"]:
+            details = "\n".join(
+                f"- {item['path']}" + (f" · {item['name']} (index {item['index']})" if item["index"] is not None else "")
+                + f" : {item['reason']}" for item in result["skipped"])
+            raise ProjectError("Aucun clip compatible à exporter ; aucun GLB n'a été produit."
+                               + ("\n" + details if details else ""))
+
+    def _export_model_all_animations(self, rel: str, textures: bool, *, download: bool,
+                                     extra_animation: str | None) -> dict:
+        """Un GLB autonome, un squelette et chaque clip candidat valide une fois."""
+        import tempfile
+        from . import model_skin
+
+        source = self.asset(rel).relative_to(self.root).as_posix()
+        extra = None
+        if extra_animation is not None:
+            if not is_animation_bfres(extra_animation):
+                raise ProjectError("Le fichier supplémentaire doit être un BFRES d'animation.")
+            extra = self.asset(extra_animation).relative_to(self.root).as_posix()
+        folder = self._model_export_folder(rel)
+        # La limite globale borne également les exports simultanés de modèles
+        # différents. Le verrou de dossier protège la publication et le rapport.
+        with _ANIMATION_EXPORT_SLOT, self._export_flights.hold(os.path.normcase(str(folder.resolve()))):
+            meshes, meta, model_stamp = self._model_mesh_entry(rel)
+            with self._cache_lock:
+                generation = self._generation
+                incomplete_scan = not self.scanned_at or self.scan_truncated or bool(self.scan_errors)
+                paths = {asset.rel for asset in self.animations_for(source)}
+            if extra:
+                paths.add(extra)
+            paths = sorted(paths)
+            if not paths:
+                raise ProjectError("Aucun fichier d'animation proposé pour ce modèle. "
+                                   "Ouvre-en un depuis la vue Animations puis choisis ce modèle.")
+            if len(paths) > MAX_ANIMATION_EXPORT_FILES:
+                raise ProjectError(f"Trop de fichiers d'animation candidats (maximum : {MAX_ANIMATION_EXPORT_FILES}).")
+            group = {"source_files": paths, "source_clips": 0, "exported": [], "skipped": [],
+                     "duplicates": [], "scan_incomplete": bool(incomplete_scan)}
+            # Fixer toutes les versions avant de décoder le moindre clip, même
+            # pour les fichiers rencontrés tard dans l'itérateur.
+            versions: dict[str, tuple] = {}
+            for path in paths:
+                try:
+                    versions[path] = self._version(path)
+                except (ProjectError, OSError) as exc:
+                    group["skipped"].append({"path": path, "index": None, "name": "",
+                                             "reason": f"Fichier inaccessible : {exc}"})
+            skin = model_skin.decode(self.model_skin(rel), meshes)
+            if self._version(rel) != model_stamp:
+                raise ProjectError("Le modèle a changé pendant l'export ; recommence.")
+
+            def check_sources() -> None:
+                try:
+                    unchanged = (self._version(rel) == model_stamp
+                                 and all(self._version(path) == version for path, version in versions.items()))
+                except (ProjectError, OSError):
+                    unchanged = False
+                with self._cache_lock:
+                    unchanged = unchanged and self._generation == generation
+                if not unchanged:
+                    raise ProjectError("Le modèle, une animation ou l'inventaire a changé pendant l'export ; recommence.")
+
+            try:
+                with tempfile.TemporaryDirectory(prefix="animation-export-", dir=self.work / "cache") as tmp:
+                    stage = Path(tmp) / folder.name
+                    stage.mkdir()
+                    if textures:
+                        found = self.export_maps_for(rel, stage)
+                    else:
+                        found = {"material_maps": {}, "files": [], "textures": 0,
+                                 "warnings": ["Export des textures désactivé."]}
+                    name = f"{folder.name}-animations"
+                    bindings = self._group_animation_bindings(paths, skin, group, versions)
+                    written = blender.export_bundle(meshes, stage, name, formats=("glb",),
+                                                    material_maps=found.get("material_maps", {}),
+                                                    animations=bindings)
+                    glb = written["glb"]
+                    if not glb.is_file():
+                        raise ProjectError("Export incomplet : le GLB animé est absent.")
+                    check_sources()
+
+                    missing = sum(bool(item["missing"]) for item in group["exported"])
+                    jumps = sum(item["repeated_keys"] for item in group["exported"])
+                    group["partial"] = bool(group["skipped"] or missing or incomplete_scan)
+                    warnings = [
+                        f"{len(group['exported'])} clip(s) dans un seul GLB ; candidats par nom "
+                        "au rang le plus précis, plus le fichier d'aperçu sélectionné le cas échéant. "
+                        "Cette association est heuristique : d'autres fichiers peuvent ne pas être repérés.",
+                        "30 images/s par convention ; conversion expérimentale, résultat à vérifier dans le logiciel cible."]
+                    if group["skipped"]:
+                        warnings.append(f"Export partiel : {len(group['skipped'])} clip(s) ou fichier(s) "
+                                        "non exporté(s), détaillés ci-dessous et dans RAPPORT_ANIMATIONS.txt.")
+                    if missing:
+                        warnings.append(f"{missing} clip(s) ont des pistes sans os correspondant ; "
+                                        "ces pistes ne sont pas exportées (voir RAPPORT_ANIMATIONS.txt).")
+                    if group["duplicates"]:
+                        warnings.append(f"{len(group['duplicates'])} occurrence(s) identique(s) regroupée(s) ; "
+                                        "les homonymes différents restent distincts (voir RAPPORT_ANIMATIONS.txt).")
+                    if jumps:
+                        warnings.append(f"{jumps} image(s)-clé(s) au même instant : un éventuel saut est approché "
+                                        "par une très courte transition ; certains logiciels peuvent fusionner des clés proches.")
+                    if incomplete_scan:
+                        warnings.append("Inventaire incomplet : d'autres fichiers d'animation peuvent manquer.")
+                    warnings += meta.get("warnings", []) + found["warnings"]
+                    if found["textures"] and any(not mesh.uvs for mesh in meshes):
+                        warnings.append(blender.NO_UV_WARNING)
+
+                    lines = ["Export groupé d'animations HookyCreator", "",
+                             f"Modèle : {source}", f"Fichiers candidats : {len(paths)}",
+                             f"Clips candidats : {group['source_clips']}",
+                             f"Clips exportés : {len(group['exported'])}",
+                             f"Résultat : {'PARTIEL' if group['partial'] else 'candidats reconnus exportés'}",
+                             "", "Remarques :"]
+                    lines.extend(f"- {warning}" for warning in warnings)
+                    lines += ["", "Clips exportés (un cycle chacun) :"]
+                    for item in group["exported"]:
+                        lines.append(f"- {item['export_name']} ← {item['path']} · {item['name']} "
+                                     f"(index {item['index']}, {item['frames']} images, {item['matched']} os)")
+                        if item["missing"]:
+                            lines.append("  Pistes sans os correspondant : " + ", ".join(item["missing"]))
+                    if group["skipped"]:
+                        lines += ["", "Clips ou fichiers non exportés :"]
+                        for item in group["skipped"]:
+                            label = (f" · {item['name']} (index {item['index']})" if item["index"] is not None else "")
+                            lines.append(f"- {item['path']}{label} : {item['reason']}")
+                    if group["duplicates"]:
+                        lines += ["", "Occurrences identiques regroupées :"]
+                        for item in group["duplicates"]:
+                            original = item["same_as"]
+                            lines.append(f"- {item['path']} · {item['name']} (index {item['index']}) = "
+                                         f"{original['path']} (index {original['index']})")
+                    lines += ["", "Le GLB est autonome ; seules les images liées y sont intégrées.",
+                              "Pour les autres cartes et formats statiques, utiliser l'export GLB / glTF / OBJ.",
+                              "La boucle se règle dans le lecteur ; physique, matériaux du jeu et fidélité réelle non garantis."]
+                    report = stage / "RAPPORT_ANIMATIONS.txt"
+                    write_atomic(report, ("\n".join(lines) + "\n").encode("utf-8"))
+                    token = uuid.uuid4().hex if download else ""
+                    staged_download = Path(tmp) / "result.glb"
+                    if download:
+                        shutil.copyfile(glb, staged_download)
+                    # Vérifier les sources immédiatement avant de publier les fichiers.
+                    check_sources()
+                    base = (self.work / "export").resolve()
+                    if (base == self.work or not base.is_relative_to(self.work)
+                            or not folder.resolve().is_relative_to(base)
+                            or self._model_export_folders is None
+                            or not self._model_export_folders.owns(folder, source)):
+                        raise ProjectError("Le dossier d'export a changé ou n'appartient plus à ce modèle.")
+                    for output in (glb, report):
+                        os.replace(output, folder / output.name)
+                    if download:
+                        downloads = (self.work / "cache" / "downloads").resolve()
+                        if not downloads.is_relative_to(self.work):
+                            raise ProjectError("Dossier de téléchargement hors du travail.")
+                        with self._downloads_lock:
+                            downloads.mkdir(parents=True, exist_ok=True)
+                            os.replace(staged_download, downloads / f"{token}.glb")
+                            self._prune_export_downloads(downloads, keep=token)
+            except OSError as exc:
+                raise ProjectError(f"Impossible d'écrire l'export dans {folder} : {exc}") from exc
+
+        response = {"folder": self.shown_path(folder), "absolute_folder": str(folder),
+                    "files": [f"{folder.name}-animations.glb", "RAPPORT_ANIMATIONS.txt"],
+                    "textures": found["textures"], "maps": found["files"],
+                    "faces": sum(len(mesh.faces) for mesh in meshes), "submeshes": len(meshes),
+                    "animation": None, "animations": group, "warnings": warnings}
+        if token:
+            response.update({"download_url": f"/api/export/download?id={token}&kind=glb",
+                             "download_name": f"{folder.name}-animations.glb", "download_format": "glb"})
+        return response
+
+    def _export_model_bundle(self, rel: str, textures: bool, *, archive: bool,
+                             animation_rel: str | None, animation_index: int | None) -> dict:
         import tempfile
         import zipfile
 
         meshes, meta, stamp = self._model_mesh_entry(rel)
+        binding = None
+        animation_stamp = None
+        animation_info = None
+        animation_notes = ["Aucun clip sélectionné : GLB, glTF et OBJ sont statiques."]
+        if animation_rel is not None:
+            from . import model_skin
+            from hookymod import gltf_animation
+
+            animation_stamp = self._version(animation_rel)
+            clip = self.animation_clip(animation_rel, animation_index)
+            skin = model_skin.decode(self.model_skin(rel), meshes)
+            if self._version(rel) != stamp or self._version(animation_rel) != animation_stamp:
+                raise ProjectError("Le modèle ou l'animation a changé pendant l'export ; recommence.")
+            binding = gltf_animation.bind(skin, clip)
+            animation_info = {"path": animation_rel, "index": animation_index, "name": clip["name"],
+                              "frames": clip["frames"], "fps": clip["fps"],
+                              "matched": binding["matched"], "missing": len(binding["missing"])}
+            animation_notes = [
+                f"Clip « {clip['name']} » : {binding['matched']} os associés par nom ; "
+                "30 images/s par convention, courbes et rotations échantillonnées, résultat expérimental.",
+                "OBJ/MTL restent statiques ; l'animation est dans GLB et glTF."]
+            if binding["repeated_keys"]:
+                animation_notes.append(
+                    f"{binding['repeated_keys']} image(s)-clé(s) au même instant : les courbes sont évaluées "
+                    "de chaque côté ; un éventuel saut est approché par une très courte transition dans GLB/glTF. "
+                    "Certains logiciels peuvent fusionner des clés trop proches.")
+            if binding["missing"]:
+                animation_notes.append(f"{len(binding['missing'])} piste(s) absente(s) du squelette : non exportées.")
         source = self.asset(rel).relative_to(self.root).as_posix()
         folder = self._model_export_folder(rel)
         # Un autre export du même dossier ne peut pas mélanger ses fichiers avec
@@ -2259,7 +2609,10 @@ class Project:
                 with tempfile.TemporaryDirectory(prefix="model-export-", dir=self.work / "cache") as tmp:
                     stage = Path(tmp) / folder.name
                     stage.mkdir()
-                    key = self._export_signature(rel, textures, stamp, folder.name, archive)
+                    # Un clip dépend d'une deuxième source : ne jamais réutiliser
+                    # le cache statique pour une autre animation ou version.
+                    key = (self._export_signature(rel, textures, stamp, folder.name, archive)
+                           if binding is None else None)
                     cached = self._cached_export(key)
                     if cached is not None:
                         files, found, cached_zip = cached
@@ -2274,15 +2627,20 @@ class Project:
                                      "warnings": ["Export des textures désactivé."]}
                             self._write_textures_note(stage, folder.name, rel, [], found["warnings"])
                         blender.export_bundle(meshes, stage, folder.name,
+                                              formats=("gltf", "glb", "obj"),
                                               material_maps=found.get("material_maps", {}),
-                                              warnings=meta.get("warnings", []) + found["warnings"])
+                                              warnings=animation_notes + meta.get("warnings", []) + found["warnings"],
+                                              animation=binding)
 
                     # Lister les fichiers physiques, dont MTL et PNG, et non
-                    # seulement ceux renvoyés par le générateur glTF/OBJ.
+                    # seulement ceux renvoyés par le générateur de formats.
                     produced = sorted(path for path in stage.iterdir() if path.is_file())
-                    if not produced or not (stage / f"{folder.name}.gltf").is_file() \
-                            or not (stage / f"{folder.name}.bin").is_file():
-                        raise ProjectError("Export incomplet : le glTF ou son fichier .bin manque.")
+                    required = (".gltf", ".bin", ".glb", ".obj", ".mtl")
+                    if any(not (stage / f"{folder.name}{suffix}").is_file() for suffix in required):
+                        raise ProjectError("Export incomplet : GLB, glTF, BIN, OBJ ou MTL manquant.")
+                    if animation_rel is not None and (self._version(rel) != stamp
+                                                      or self._version(animation_rel) != animation_stamp):
+                        raise ProjectError("Le modèle ou l'animation a changé pendant l'export ; recommence.")
                     archive_id = uuid.uuid4().hex if archive else ""
                     staged_zip = Path(tmp) / "result.zip"
                     if archive and cached_zip is not None:
@@ -2328,7 +2686,9 @@ class Project:
                     "textures": found["textures"], "maps": found["files"],
                     "faces": sum(len(mesh.faces) for mesh in meshes),
                     "submeshes": len(meshes), "stale_files": stale_files,
-                    "warnings": meta.get("warnings", []) + found["warnings"]
+                    "animation": animation_info,
+                    "warnings": animation_notes + meta.get("warnings", []) + found["warnings"]
+                    + ([blender.NO_UV_WARNING] if found["textures"] and any(not mesh.uvs for mesh in meshes) else [])
                     + (["Le dossier contient aussi des fichiers plus anciens ; "
                         "le ZIP ne contient que cet export."] if stale_files else [])}
         if archive_id:
@@ -2338,16 +2698,17 @@ class Project:
 
     @staticmethod
     def _prune_export_downloads(folder: Path, *, keep: str) -> None:
-        """Limite les seuls ZIP temporaires à 24 fichiers / 2 Gio / 7 jours.
+        """Limite les ZIP et GLB temporaires à 24 fichiers / 2 Gio / 7 jours.
 
         Jamais de suppression dans le dossier d'export utilisateur. Le nouveau
-        ZIP est conservé même s'il dépasse le budget ; un téléchargement déjà
+        fichier est conservé même s'il dépasse le budget ; un téléchargement déjà
         ouvert peut empêcher l'effacement sous Windows, ce qui n'est pas fatal.
         """
         candidates = []
-        for path in folder.glob("*.zip"):
+        for path in folder.iterdir():
             token = path.stem
-            if (len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token)
+            if (path.suffix not in (".zip", ".glb")
+                    or len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token)
                     or path.is_symlink()):
                 continue
             try:
@@ -2402,13 +2763,16 @@ class Project:
                 "download_name": "hookycreator-selection.zip",
                 "absolute_folder": str(downloads), "temporary_archive": True}
 
-    def export_download(self, token: str) -> Path:
-        """Résout uniquement une archive créée par cet atelier, pas un chemin fourni."""
-        if len(token) != 32 or any(char not in "0123456789abcdef" for char in token):
+    def export_download(self, token: str, kind: str = "zip") -> Path:
+        """Résout uniquement un fichier temporaire créé par cet atelier."""
+        if (kind not in ("zip", "glb") or len(token) != 32
+                or any(char not in "0123456789abcdef" for char in token)):
             raise ProjectError("Téléchargement introuvable.")
         base = (self.work / "cache" / "downloads").resolve()
-        path = (base / f"{token}.zip").resolve()
-        if not base.is_relative_to(self.work) or path.parent != base or not path.is_file():
+        candidate = base / f"{token}.{kind}"
+        path = candidate.resolve()
+        if (not base.is_relative_to(self.work) or candidate.is_symlink()
+                or path.parent != base or not path.is_file()):
             raise ProjectError("Téléchargement introuvable ou expiré : relance l'export.")
         return path
 
@@ -2502,7 +2866,7 @@ class Project:
 
     # ------------------------------------------------------------------ export
     def export_selection(self, items: list[dict]) -> bytes:
-        """ZIP de la sélection : OBJ + glTF pour les modèles, PNG pour les textures."""
+        """ZIP de la sélection : GLB/glTF et OBJ statiques, PNG pour les textures."""
         import io
         import tempfile
         import zipfile
@@ -2551,8 +2915,10 @@ class Project:
                 meshes, meta, _ = self._model_mesh_entry(rel)
                 maps = self.export_maps_for(rel, target)
                 written = blender.export_bundle(
-                    meshes, target, stem, material_maps=maps.get("material_maps", {}),
-                    warnings=meta.get("warnings", []) + maps["warnings"])
+                    meshes, target, stem, formats=("gltf", "glb", "obj"),
+                    material_maps=maps.get("material_maps", {}),
+                    warnings=["Export de sélection statique : aucun clip n'a été sélectionné."]
+                    + meta.get("warnings", []) + maps["warnings"])
                 # tout ce que l'export a produit : le .bin du glTF et les PNG
                 # compris (sans le .bin, Blender refuse le glTF)
                 for produced in sorted(target.rglob("*")):

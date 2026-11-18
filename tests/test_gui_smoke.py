@@ -834,28 +834,38 @@ class AppearanceTests(unittest.TestCase):
         self.assertEqual(self.app._swizzle_choice(), "Auto")
         self.assertIsNone(self.app._orin_setting())
 
-        self.app._set_swizzle_choice("Switch 2 (Orin)")
+        self.app._set_swizzle_choice("Orin (T239)")
         self.assertEqual(self.app.config_data["texture_orin"], "orin")
         self.assertIs(self.app._orin_setting(), True)
-        self.assertEqual(self.app._swizzle_choice(), "Switch 2 (Orin)")
+        self.assertEqual(self.app._swizzle_choice(), "Orin (T239)")
 
-        self.app._set_swizzle_choice("Switch 1 (X1)")
+        self.app._set_swizzle_choice("X1")
         self.assertIs(self.app._orin_setting(), False)
         self.app._set_swizzle_choice("Auto")
         self.assertIsNone(self.app._orin_setting())
 
-    def test_swizzle_setting_makes_switch2_texture_readable(self):
+    def test_legacy_swizzle_settings_keep_their_layout_and_label(self):
+        for previous, expected, label in (("switch1", False, "X1"),
+                                          ("switch 1", False, "X1"),
+                                          ("switch2", True, "Orin (T239)"),
+                                          ("switch 2", True, "Orin (T239)")):
+            with self.subTest(previous=previous):
+                self.app.config_data["texture_orin"] = previous
+                self.assertIs(self.app._orin_setting(), expected)
+                self.assertEqual(self.app._swizzle_choice(), label)
+
+    def test_swizzle_setting_makes_orin_texture_readable(self):
         import synth as synth_mod
         from hookymod import bntx_encode, util as util_mod
         rgba = synth_mod.rgba8_pixels(16, 16, seed=4)
         # BC1 : pixels block-linear, donc la disposition Orin s'applique vraiment
         data, _ = bntx_encode.png_to_bntx(util_mod.png_bytes(16, 16, rgba),
                                           format_name="BC1", orin=True)
-        self.app._load_textures_from_data(data, key="switch2")
+        self.app._load_textures_from_data(data, key="orin")
         self.assertIn("0.4.1", self.app.texture_info_var.get())
         self.assertIn("Orin", self.app.texture_info_var.get())
-        self.app._set_swizzle_choice("Switch 1 (X1)")
-        self.app._load_textures_from_data(data, key="switch2")
+        self.app._set_swizzle_choice("X1")
+        self.app._load_textures_from_data(data, key="orin")
         self.assertIn("X1", self.app.texture_info_var.get())
 
     def test_environment_report_lists_modules(self):

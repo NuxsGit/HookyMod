@@ -169,6 +169,22 @@ async function nativeCheckpointAwaitsBootSettingsAndWrite() {
   assert.equal(h.navigations.length, 2, "une réponse tardive ne ferme pas après annulation");
 }
 
+async function nativeCheckpointIncludesTheStudioDraft() {
+  const h = harness();
+  vm.runInContext("wireUiSession(); uiSessionWriter.enable()", h.ctx);
+  let finish;
+  h.window.HookyStudio = { flush: () => new Promise((resolve) => { finish = resolve; }) };
+  const pending = h.window.__hookyCheckpoint(50);
+  await tick();
+  assert.deepEqual(h.navigations, [], "attend la sauvegarde du projet HookyMod's");
+  finish(false); await pending;
+  assert.deepEqual(h.navigations, ["/__hooky/checkpoint?id=50&saved=0"]);
+  h.window.__hookyResume();
+  h.window.HookyStudio.flush = async () => true;
+  await h.window.__hookyCheckpoint(51);
+  assert.equal(h.navigations[1], "/__hooky/checkpoint?id=51&saved=1");
+}
+
 async function programmaticScrollDoesNotCancelRestore() {
   const h = harness();
   vm.runInContext("wireUiSession()", h.ctx);
@@ -182,6 +198,7 @@ async function programmaticScrollDoesNotCancelRestore() {
   await restoreAndCapture();
   await userActionDuringLoadWins();
   await nativeCheckpointAwaitsBootSettingsAndWrite();
+  await nativeCheckpointIncludesTheStudioDraft();
   await programmaticScrollDoesNotCancelRestore();
   console.log("UI session restoration: OK");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

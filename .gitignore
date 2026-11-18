@@ -13,23 +13,55 @@ dist/
 /extract/
 /out/
 /mod/
+/mods/
+/export_all/
 *.whl
 # Aperçus générés à partir d'assets du jeu (jamais versionnés)
 previews/
 
-# Dumps du jeu (assets Nintendo) : hors dépôt. `.gitignore` n'retire pas les
-# fichiers déjà suivis : ceux qui sont là restent là, mais rien de nouveau
-# n'entre. Voir docs/PROVENANCE.md.
+# Ressources et paquets utilisateur : éviter les ajouts accidentels. Cette
+# liste est incomplète et ne retire pas les fichiers déjà suivis par Git.
 *.zs
+*.zst
+*.szs
+*.sarc
+*.pack
 *.bfres
 *.bntx
-*.bntx.zs
+*.bftex
+*.bnsh
+*.byml
+*.bgyml
+*.aamp
 *.zsdic
 *.nup
+*.nso
+*.npdm
+romfs/
+exefs/
+*.exe
+*.dll
+*.so
+*.dylib
 *.bwav
 *.bars
 *.bfstm
 *.bfsar
+*.nsp
+*.xci
+*.nca
+# Clés et secrets courants ; d'autres noms restent possibles.
+*.key
+*.keys
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+.netrc
+id_rsa
+id_ed25519
+id_ecdsa
 # Exports sonores et sources utilisateur : éviter de versionner des données du jeu.
 *.opus
 *.ogg
@@ -42,6 +74,9 @@ previews/
 # HookyCreator (démo locale, dossier de travail)
 demo/
 hookycreator_work/
+# Projets de conception et archives pouvant contenir des ressources privées.
+hookymods/
+*.hooky
 # Archives temporaires préparées pour une publication après vérification.
 /release-preparation/
 
@@ -54,3 +89,4 @@ hookycreator_work/
 /src-tauri/gen/
 /node_modules/
 /tools/webgl/node_modules/
+/tools/gltf-validator/node_modules/

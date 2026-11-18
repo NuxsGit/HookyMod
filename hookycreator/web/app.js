@@ -205,7 +205,7 @@ function showView(view, options = {}) {
     if (scroll) scroll.scrollTop = 0;
     // Les espaces d'accueil doivent rester lisibles, surtout sur mobile où
     // l'inspecteur est superposé. L'onglet du document reste disponible.
-    if (view === "edit" || view === "create" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
+    if (view === "edit" || view === "create" || view === "studio" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
       hideInspector();
     }
   }
@@ -222,6 +222,7 @@ function showView(view, options = {}) {
   }
   if (view === "home") renderHome();
   if (view === "create") renderCreation();
+  if (view === "studio") window.HookyStudio?.show();
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
   if (view === "textures") renderTextures();
@@ -237,6 +238,7 @@ const VIEW_LABELS = {
   home: "Accueil",
   edit: "Modification",
   create: "Création de mod",
+  studio: "HookyMod's",
   models: "Modèles",
   ensembles: "Ensembles",
   textures: "Textures",
@@ -617,6 +619,7 @@ async function openModel(rel, options = {}) {
   if (request !== inspectionSequence) return;
 
   const name = info.models[0] || rel.split("/").pop();
+  const animationCount = Number.isInteger(info.animation_count) ? info.animation_count : info.animations.length;
   const animationFiles = [...info.animations];
   if (options.animationRel && !animationFiles.some((item) => item.rel === options.animationRel)) {
     animationFiles.push({ rel: options.animationRel, name: options.animationRel.split("/").pop() });
@@ -668,7 +671,7 @@ async function openModel(rel, options = {}) {
       <dt>Dimensions</dt><dd>${info.bounds.map((value) => value.toFixed(3)).join(" × ")}</dd>
       <dt>Matériaux</dt><dd data-no-i18n>${info.materials.length ? info.materials.map(esc).join(", ") : "—"}</dd>
       <dt>Textures</dt><dd>${info.textures.length ? esc(info.texture_match || "candidats à vérifier") : "aucune repérée"}</dd>
-      <dt>Animations</dt><dd>${info.animations.length ? `${info.animations.length} fichier(s)` : "aucune repérée"}</dd>
+      <dt>Animations</dt><dd>${animationCount ? `${animationCount} fichier(s) suggéré(s) par nom` : "aucune repérée"}</dd>
       <dt>Budget</dt><dd id="model-budget" class="muted">calcul…</dd>
     </dl>
     ${info.warnings.length ? `<details class="warns"><summary>${info.warnings.length} remarque(s) de décodage</summary>
@@ -682,16 +685,19 @@ async function openModel(rel, options = {}) {
           <span class="strip-role">${ROLE_BADGE(t.role)}</span>
         </button>`).join("")}</div>
     </div>` : ""}
-    ${info.animations.length ? `<details class="warns anims"><summary>${info.animations.length} animation(s) liée(s)</summary>
+    ${info.animations.length ? `<details class="warns anims"><summary>${animationCount} fichier(s) d'animation suggéré(s)${animationCount > info.animations.length ? ` · ${info.animations.length} affichés` : ""}</summary>
       <ul class="todo">${info.animations.map((a) => `<li><span data-no-i18n>${esc(a.name)}</span> <span class="muted">${humanSize(a.size)}</span></li>`).join("")}</ul>
-      <p class="hint">Les animations restent des fichiers séparés du jeu : elles ne sont pas
-        encore injectées dans le modèle exporté.</p></details>` : ""}
+      <p class="hint">Les fichiers d'animation du jeu restent inchangés.</p></details>` : ""}
     <div class="actions">
       <button class="btn" id="btn-uv">Vérifier les UV</button>
-      <button class="btn primary" id="btn-export-model">Exporter en glTF / OBJ</button>
+      <button class="btn primary" id="btn-export-animations" ${animationFiles.length ? "" : "disabled"}>Télécharger 1 GLB · toutes les animations détectées</button>
+      <button class="btn" id="btn-export-model">Exporter en GLB / glTF / OBJ</button>
       <button class="btn ghost" id="btn-turntable">Planche PNG</button>
       <button class="btn ghost" id="btn-translate-model">Importer un modèle…</button>
     </div>
+    <p class="hint">Le GLB groupé inclut les clips des fichiers suggérés par nom et le fichier d'aperçu sélectionné. L'association est indicative : d'autres fichiers peuvent manquer ; les clips incompatibles sont signalés.</p>
+    ${!animationFiles.length ? `<p class="hint">Aucune animation suggérée : ouvre un fichier depuis Animations et choisis ce modèle.</p>` : ""}
+    <p class="hint">Le clip sélectionné est exporté dans GLB/glTF si son squelette est compatible. Sans clip, l'export est statique. OBJ/MTL restent toujours statiques.</p>
     <p class="hint" id="model-budget-note">Estimation de l'aperçu PNG complet…</p>`);
 
   ensureTab({ id: `model:${rel}`, kind: "model", label: name, doc: { type: "model", rel } });
@@ -731,6 +737,9 @@ async function openModel(rel, options = {}) {
   const loadSelectedClip = async () => {
     if (!animFile?.value || !animClip?.value) return;
     const serial = ++animationRequest, file = animFile.value, index = Number(animClip.value);
+    // Invalider immédiatement un éventuel setAnimation en attente de skin :
+    // une sélection plus récente ne doit pas afficher l'ancien clip.
+    modelViewport?.stopAnimation();
     animStatus.textContent = "Chargement du clip et du squelette…";
     animFrame.disabled = true; animPlay.disabled = true;
     try {
@@ -843,6 +852,7 @@ async function openModel(rel, options = {}) {
     viewStatus.textContent = "Planche PNG fixe · toutes les faces décodées";
   };
   $("#btn-export-model").onclick = () => exportModel(rel);
+  $("#btn-export-animations").onclick = () => exportAllAnimations(rel);
   $("#btn-uv").onclick = () => showUv(rel);
   $$("[data-open-texture]", document).forEach((node) => {
     node.onclick = () => openTexture(node.dataset.openTexture, Number(node.dataset.openTextureIndex) || 0);
@@ -904,8 +914,7 @@ async function openAnimation(rel) {
     <div class="actions"><button class="btn primary" type="button" id="animation-open-model" ${clips.length && models.length ? "" : "disabled"}>
       Ouvrir le modèle et lire</button>
       <a class="btn" id="animation-download" download="animation.json">Exporter les courbes JSON</a></div>
-    <p class="hint">Association par nom proposée à titre indicatif. L'aperçu associe les os par leur nom et utilise 30 images/s par convention.
-      Les animations ne sont pas injectées ni exportées dans glTF / OBJ.</p>`);
+    <p class="hint">Association par nom proposée à titre indicatif. Ouvre un modèle : le bouton de GLB groupé inclura tous les clips de ce fichier et ceux suggérés pour le modèle. OBJ/MTL restent statiques et les fichiers du jeu ne sont pas modifiés.</p>`);
   const clipSelect = $("#animation-clip"), download = $("#animation-download");
   const updateDownload = () => {
     download.hidden = !clipSelect.value;
@@ -1496,7 +1505,7 @@ function renderSettings() {
     `<li><span class="k">Anticrénelage adaptatif</span>${settings.adaptive
       ? "actif" : "désactivé (refus net)"}</li>`,
     `<li><span class="k">Faces</span>toutes les faces décodées ou refus</li>`,
-    `<li><span class="k">Export glTF / OBJ</span>${settings.export_textures !== false
+    `<li><span class="k">Export GLB / glTF / OBJ</span>${settings.export_textures !== false
       ? "avec les PNG" : "géométrie seule"}</li>`,
   ].join("");
 }
@@ -1728,15 +1737,51 @@ function markTile(kind, rel) {
 }
 
 /* ------------------------------------------------------------------ actions */
-async function exportModel(rel) {
-  const button = $("#btn-export-model");
+async function exportAllAnimations(rel) {
+  const button = $("#btn-export-animations");
+  const file = state.tab === `model:${rel}` ? $("#model-animation-file")?.value : "";
+  const oldResult = $("#export-result");
+  if (oldResult) oldResult.hidden = true;
   if (button) { button.disabled = true; button.textContent = "Export en cours…"; }
   try {
+    const payload = { path: rel, textures: state.settings?.export_textures !== false, all_animations: true };
+    if (file) payload.animation_file = file;
+    const result = await api("/api/model/export", { method: "POST", body: JSON.stringify(payload) });
+    const group = result.animations;
+    const count = group.exported.length;
+    showExportResult(result, group.partial ? "GLB prêt · export partiel" : `GLB prêt · ${count} clip(s)`);
+    toast(group.partial
+      ? `GLB partiel : ${count} clip(s) exporté(s). Consulte les omissions ci-dessous.`
+      : `Un GLB prêt : ${count} clip(s), un cycle chacun.`, group.partial ? "error" : "ok");
+    log("ok", `GLB → ${result.absolute_folder || result.folder}`);
+    (result.warnings || []).forEach((warning) => log("warn", warning));
+  } catch (error) {
+    const message = String(error.message || "Export animé impossible.");
+    showAnimationExportError(message);
+    toast(message.split("\n")[0], "error");
+    log("error", message);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "Télécharger 1 GLB · toutes les animations détectées"; }
+  }
+}
+
+async function exportModel(rel) {
+  const button = $("#btn-export-model");
+  const file = state.tab === `model:${rel}` ? $("#model-animation-file")?.value : "";
+  const clip = state.tab === `model:${rel}` ? $("#model-animation-clip")?.value : "";
+  if (file && (!clip || !/^\d+$/.test(clip))) {
+    toast("Choisis un clip compatible ou reviens à la pose statique.", "error");
+    return;
+  }
+  if (button) { button.disabled = true; button.textContent = "Export en cours…"; }
+  try {
+    const payload = { path: rel, textures: state.settings?.export_textures !== false };
+    if (file) payload.animation = { path: file, index: Number(clip) };
     const result = await api("/api/model/export", {
       method: "POST",
-      body: JSON.stringify({ path: rel, textures: state.settings?.export_textures !== false }),
+      body: JSON.stringify(payload),
     });
-    showExportResult(result, "Export glTF / OBJ prêt");
+    showExportResult(result, "Export GLB / glTF / OBJ prêt");
     toast(`Export prêt : ${result.files.length} fichier(s), ${result.faces.toLocaleString("fr-FR")} faces`);
     log("ok", `export → ${result.absolute_folder || result.folder}`);
     log("info", `fichiers : ${result.files.join(", ")}`);
@@ -1759,7 +1804,7 @@ async function exportModel(rel) {
     toast(error.message, "error");
     log("error", error.message);
   } finally {
-    if (button) { button.disabled = false; button.textContent = "Exporter en glTF / OBJ"; }
+    if (button) { button.disabled = false; button.textContent = "Exporter en GLB / glTF / OBJ"; }
   }
 }
 
@@ -1825,34 +1870,61 @@ async function showUv(rel) {
   $("#uv-back").onclick = () => openModel(rel);
 }
 
-// Le dossier reste visible même après disparition des notifications. L'archive
-// est facultativement téléchargée par le navigateur ; le lien permet de réessayer.
+// Le dossier reste visible après les notifications ; le lien permet de
+// retélécharger le fichier temporaire (ZIP classique ou GLB groupé autonome).
 function showExportResult(result, title) {
   if (!result.download_url || !result.download_url.startsWith("/api/export/download?id=")) return;
   const panel = $("#export-result");
   const link = $("#export-download");
   if (!panel || !link) return;
+  const glb = result.download_format === "glb";
   $("#export-result-title").textContent = title;
   $("#export-result-folder").textContent = result.absolute_folder || result.folder || "";
   const note = $("#export-result-note");
-  if (note) note.textContent = result.temporary_archive
-    ? "Archive temporaire : télécharge-la maintenant ; consulte les rapports de modèle inclus."
-    : (result.stale_files || []).length
-      ? "Ce dossier contient aussi d'anciens fichiers. Le ZIP contient uniquement cet export."
-      : "Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.";
+  if (note) note.textContent = glb
+    ? "Un seul GLB est téléchargé. Le détail des clips et des omissions se trouve aussi dans RAPPORT_ANIMATIONS.txt du dossier."
+    : result.temporary_archive
+      ? "Archive temporaire : télécharge-la maintenant ; consulte les rapports de modèle inclus."
+      : (result.stale_files || []).length
+        ? "Ce dossier contient aussi d'anciens fichiers. Le ZIP contient uniquement cet export."
+        : "Si le téléchargement ne démarre pas, utilise le bouton ou ouvre ce dossier.";
   const warningBox = $("#export-result-warnings");
   const warnings = Array.isArray(result.warnings) ? result.warnings.filter((w) => typeof w === "string") : [];
+  const group = glb ? result.animations : null;
+  const skipped = Array.isArray(group?.skipped) ? group.skipped : [];
+  const missing = Array.isArray(group?.exported) ? group.exported.filter((item) => item.missing?.length) : [];
   if (warningBox) {
-    warningBox.hidden = !warnings.length;
-    warningBox.textContent = warnings.length
-      ? "À vérifier :\n" + warnings.slice(0, 12).map((warning) => `• ${warning}`).join("\n")
-        + (warnings.length > 12 ? "\nAutres remarques dans le journal et RAPPORT_MODELE.txt." : "")
-      : "";
+    const lines = warnings.slice(0, 12).map((warning) => `• ${warning}`);
+    if (warnings.length > 12) lines.push(`Autres remarques dans le journal et ${glb ? "RAPPORT_ANIMATIONS.txt" : "RAPPORT_MODELE.txt"}.`);
+    if (skipped.length) {
+      lines.push(`Clips ou fichiers non exportés (${skipped.length}) :`);
+      skipped.forEach((item) => lines.push(`• ${item.path}${item.index === null ? "" : ` · ${item.name} (index ${item.index})`} : ${item.reason}`));
+    }
+    if (missing.length) {
+      lines.push(`Pistes sans os correspondant (${missing.length} clip(s)) :`);
+      missing.forEach((item) => lines.push(`• ${item.path} · ${item.name} (index ${item.index}) : ${item.missing.join(", ")}`));
+    }
+    warningBox.hidden = !lines.length;
+    warningBox.textContent = lines.length ? "À vérifier :\n" + lines.join("\n") : "";
   }
   link.href = result.download_url;
-  link.download = result.download_name || "hookycreator-modeles.zip";
+  link.download = result.download_name || (glb ? "hookycreator-animations.glb" : "hookycreator-modeles.zip");
+  link.textContent = glb ? "Télécharger le GLB" : "Télécharger le ZIP";
+  link.hidden = false;
   panel.hidden = false;
   if (typeof link.click === "function") link.click();
+}
+
+function showAnimationExportError(message) {
+  const panel = $("#export-result"), link = $("#export-download"), warnings = $("#export-result-warnings");
+  if (!panel || !link || !warnings) return;
+  $("#export-result-title").textContent = "Export animé refusé";
+  $("#export-result-folder").textContent = "—";
+  $("#export-result-note").textContent = "Aucun nouveau GLB n'a été téléchargé.";
+  warnings.textContent = message;
+  warnings.hidden = false;
+  link.hidden = true;
+  panel.hidden = false;
 }
 
 async function startBulk() {
@@ -1984,8 +2056,8 @@ const MENUS = {
   modele: [
     { label: "Vue des modèles", hint: "Ctrl+2", run: () => showView("models") },
     { label: "Vue des ensembles (modèle + textures + animations)", run: () => showView("ensembles") },
-    { label: "Exporter le modèle sélectionné en glTF / OBJ", run: () => {
-      const rel = state.tabs.find((tab) => tab.doc?.type === "model")?.doc?.rel;
+    { label: "Exporter le modèle sélectionné en GLB / glTF / OBJ", run: () => {
+      const rel = state.tabs.find((tab) => tab.id === state.tab && tab.doc?.type === "model")?.doc?.rel;
       if (rel) exportModel(rel); else toast("Ouvre d'abord un modèle", "error");
     } },
     { label: "Importer un modèle…", hint: "Ctrl+5", run: () => showView("import") },
@@ -2008,6 +2080,7 @@ const MENUS = {
   affichage: [
     { label: "Accueil", hint: "Ctrl+1", run: () => showView("home") },
     { label: "Espace modification", run: () => showView("edit") },
+    { label: "HookyMod's", run: () => showView("studio") },
     { label: "Espace création de mod", run: () => showView("create") },
     { label: "Réglages", hint: "Ctrl+6", run: () => showView("settings") },
     { sep: true },
@@ -2062,6 +2135,7 @@ function paletteCommands() {
   const commands = [
     { label: "Aller à l'accueil", group: "vue", run: () => showView("home") },
     { label: "Espace modification", group: "vue", run: () => showView("edit") },
+    { label: "HookyMod's", group: "vue", run: () => showView("studio") },
     { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
     { label: "Aller aux animations", group: "vue", run: () => showView("animations") },
@@ -2361,7 +2435,7 @@ async function quitApp() {
   ]);
   clearTimeout(timeout);
   if (!saved && !window.confirm(tr(
-    "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?"))) {
+    "La session, les réglages ou le projet HookyMod's n'ont pas pu être enregistrés. Quitter quand même ?"))) {
     document.body.inert = false;
     return;
   }
@@ -2510,6 +2584,7 @@ function handleTileNavigation(event) {
 }
 
 function wire() {
+  window.HookyStudio?.wire({ api, toast });
   let paused = false;
   try { paused = localStorage.getItem("hooky-thumbnails-paused") === "1"; }
   catch (_) { /* stockage facultatif */ }
@@ -2929,7 +3004,10 @@ async function saveUiCheckpoint() {
     const settingsSaved = await finishPendingSettings();
     const sessionSaved = uiSessionWriter?.enabled
       ? await uiSessionWriter.flush() : !sessionTouchedDuringBoot;
-    return settingsSaved && sessionSaved;
+    // La fermeture et le changement de projet natifs attendent aussi les
+    // brouillons HookyMod's ; une erreur ne doit pas les perdre silencieusement.
+    const studioSaved = await (window.HookyStudio?.flush() ?? Promise.resolve(true));
+    return settingsSaved && sessionSaved && studioSaved;
   } catch (error) {
     toast(`Sauvegarde de session impossible : ${error.message}`, "error");
     return false;

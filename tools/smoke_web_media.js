@@ -144,7 +144,7 @@ async function main() {
     }
     await page.locator('[data-view="settings"]').click();
     const colours = [];
-    for (const theme of ["light", "dark", "newgenoldtendo"]) {
+    for (const theme of ["light", "dark", "aurora"]) {
       await page.locator("#set-theme").selectOption(theme);
       assert.equal(await page.evaluate(() => finishPendingSettings()), true);
       colours.push(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()));
@@ -154,7 +154,7 @@ async function main() {
     assert.equal(await page.evaluate(() => finishPendingSettings()), true);
     await page.reload();
     await page.waitForFunction(() => document.documentElement.lang === "en"
-      && document.documentElement.dataset.theme === "newgenoldtendo");
+      && document.documentElement.dataset.theme === "aurora");
 
     async function downloaded(selector) {
       const [download] = await Promise.all([page.waitForEvent("download"), page.locator(selector).click()]);

@@ -150,7 +150,7 @@ def make_nup(tree: dict[str, Any], pack: frozenset[str] = frozenset(),
 
 
 def make_sample_nup(compress_members: bool = True) -> bytes:
-    """Petit paquet type Switch 2 : exefs + romfs avec BFRES, BNTX.zs, SARC."""
+    """Petit paquet synthétique : exefs + romfs avec BFRES, BNTX.zs, SARC."""
     import synth as _synth
 
     bfres = _synth.make_bfres()

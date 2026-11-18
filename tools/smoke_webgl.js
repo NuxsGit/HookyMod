@@ -10,6 +10,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require(process.env.HOOKY_PLAYWRIGHT || "playwright-core");
 const web = path.resolve(__dirname, "../hookycreator/web");
+// Synthetic 4x4 RGBA PNGs: png_bytes(4, 4, red*8 + blue*8) and green*16.
 const redBlue = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR4nGP4z8DwHxkzYAig8TEFACxQH+H1DG8tAAAAAElFTkSuQmCC", "base64");
 const green = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAD0lEQVR4nGNg+I8GSRcAACxQH+H81I9XAAAAAElFTkSuQmCC", "base64");
 

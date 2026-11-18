@@ -76,7 +76,7 @@ class RigidPoseTests(unittest.TestCase):
         self.assert_vec(meshes[1].positions[1], (3., 3., .125))
         self.assert_vec(meshes[1].normals[1], (0., 1., 0.))
         self.assertTrue(any("2 forme(s) rigide(s) replacée(s)" in w for w in report.warnings))
-        self.assertTrue(any("animation non exportés" in w for w in report.warnings))
+        self.assertTrue(any("squelette et animation à associer" in w for w in report.warnings))
 
     def test_gltf_and_obj_export_the_same_placed_geometry_and_triangles(self):
         meshes, report = bfres_v10.parse(rigid_model())

@@ -218,7 +218,7 @@ fn request_quit(app: AppHandle, shared: Shared) {
         } else {
             let callback_app = app.clone();
             app.dialog()
-                .message("La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?")
+                .message("La session, les réglages ou le projet HookyMod's n'ont pas pu être enregistrés. Quitter quand même ?")
                 .title("HookyCreator")
                 .kind(MessageDialogKind::Warning)
                 .buttons(MessageDialogButtons::YesNo)
@@ -395,11 +395,13 @@ fn on_download(
                 .find(|(k, _)| k == "format")
                 .map(|(_, v)| v.into_owned())
                 .unwrap_or_default();
-            let selection = url
+            let kind = url
                 .query_pairs()
-                .any(|(k, v)| k == "kind" && v == "selection");
+                .find(|(k, _)| k == "kind")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
             let Some((stem, extension)) =
-                downloads::download_target(url.path(), &source, &format, selection)
+                downloads::download_target(url.path(), &source, &format, &kind)
             else {
                 notify_download(
                     &webview,
@@ -630,7 +632,7 @@ fn start_project(app: AppHandle, shared: Shared, root: PathBuf) {
                 session.opening = false;
                 drop(session);
                 resume_page(&cloned_app);
-                report_error(&cloned_app, "La session du projet actuel n'a pas pu être enregistrée. \
+                report_error(&cloned_app, "La session ou le projet HookyMod's actuel n'a pas pu être enregistré. \
                     Le changement de projet est annulé ; réessaie après avoir vérifié le dossier de travail.");
             });
             return;

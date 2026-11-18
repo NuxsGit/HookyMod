@@ -3,7 +3,8 @@
 Une forme à zéro influence utilise l'os de FSHP ; à une influence, chaque
 sommet utilise une entrée de la table de matrices rigides FSKL. Les formes à
 plusieurs influences restent dans leur espace de référence et ne sont pas
-animées. On ne reconstruit ni rig ni animation pour l'export.
+animées par ce lecteur. L'export animé expérimental utilise séparément les
+informations validées de skin et de clip.
 
 Pour ne pas inventer une pose avec les variantes non maîtrisées, ce lecteur
 n'accepte que les chaînes d'os à échelle unitaire, sans billboard. Lorsque des

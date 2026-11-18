@@ -184,14 +184,15 @@ class RustZstdBridgeTests(unittest.TestCase):
             self.assertTrue(called.called)
 
     def test_reserved_sequence_bits_are_rejected_even_with_a_valid_checksum(self):
-        # Trame synthétique valide dont le byte 53 décrit les modes de
-        # séquence. Les deux bits de poids faible sont réservés par RFC 8878.
+        # Trame générée avec zstandard 0.25.0 à partir de bytes(range(41))
+        # répétés (niveau 3, checksum, sans taille de contenu). L'octet 53
+        # décrit les modes de séquence ; ses deux bits bas sont réservés.
         frame = bytes.fromhex(
-            "28b52ffd042095010094026ff138a0d2d22d5112d23cd1d29e3df99b826c882f"
-            "b692a19bfd7af3f55aca3bed96317362769da19b0100d9388c5765c9063152")
+            "28b52ffd04209501009402000102030405060708090a0b0c0d0e0f1011121314"
+            "15161718191a1b1c1d1e1f2021222324252627280100d9388c5765b5e41ad3")
         self.assertTrue(zstd.get_frame_parameters(frame).has_checksum)
         expected = zs.ZstdDicts().decompress(frame)
-        self.assertEqual(len(expected), 10055)
+        self.assertEqual(expected, (bytes(range(41)) * 246)[:10055])
         self.assertEqual(frame[53], 0)
         for reserved in (1, 2, 3):
             broken = bytearray(frame)
