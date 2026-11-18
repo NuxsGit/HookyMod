@@ -86,9 +86,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           CHROMIUM=$(node --input-type=module -e "import c from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await c.executablePath())")
-          HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}" HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
-          HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}" HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_animated_export.js
-          HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}" HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_studio.js
+          export HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}"
+          export HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core"
+          python .github/scripts/run_ci_command.py -- node tools/smoke_web_media.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_animated_export.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_studio.js
       - name: Format and test Tauri Rust
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
@@ -140,11 +142,12 @@ jobs:
       - name: Exercise synthetic WebGL, animation and media workflows
         run: |
           CHROMIUM=$(node --input-type=module -e "import chromium from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await chromium.executablePath())")
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_webgl.js
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_player.js
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_animated_export.js
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_studio.js
+          export HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core"
+          python .github/scripts/run_ci_command.py -- node tools/smoke_webgl.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_player.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_animated_export.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_web_media.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_studio.js
 
   model-formats:
     name: Formats OBJ / glTF et interopérabilité / Linux
