@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -15,9 +16,43 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import synth  # noqa: E402
 
-from hookymod import cli, zs  # noqa: E402
+from hookymod import __version__ as core_version, cli, zs  # noqa: E402
+from hookycreator import __version__ as creator_version, __main__ as creator_main  # noqa: E402
 
 HAS_ZSTD = zs.zstd_available()
+
+
+class VersionTests(unittest.TestCase):
+    def test_core_cli_reports_the_package_version(self):
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit) as result:
+            cli.main(["--version"])
+        self.assertEqual(result.exception.code, 0)
+        self.assertEqual(out.getvalue().strip(), f"HookyMod {core_version}")
+
+    def test_creator_cli_reports_the_package_version(self):
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit) as result:
+            creator_main.main(["--version"])
+        self.assertEqual(result.exception.code, 0)
+        self.assertEqual(out.getvalue().strip(), f"HookyCreator {creator_version}")
+
+    def test_creator_startup_is_local_by_default_and_warns_for_public_binding(self):
+        for options, expected_host, warning in (([], "127.0.0.1", False),
+                                                 (["--host", "0.0.0.0"], "0.0.0.0", True)):
+            with self.subTest(options=options):
+                fake = mock.MagicMock()
+                fake.scan_summary = {"count": 0, "textures": 0, "models": 0,
+                                     "bytecode": 0, "root": "."}
+                fake.stopped = False
+                fake.url = "http://127.0.0.1:8765/"
+                out = io.StringIO()
+                with mock.patch.object(creator_main, "HookyCreatorServer", return_value=fake) as factory, \
+                     mock.patch("time.sleep", side_effect=KeyboardInterrupt), redirect_stdout(out):
+                    self.assertEqual(creator_main.main(options), 0)
+                self.assertEqual(factory.call_args.args[2], expected_host)
+                self.assertIn(f"HookyCreator {creator_version}", out.getvalue())
+                self.assertEqual("sans authentification" in out.getvalue(), warning)
 
 
 @unittest.skipUnless(HAS_ZSTD, "module zstandard requis")

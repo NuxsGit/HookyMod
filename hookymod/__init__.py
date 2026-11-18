@@ -5,5 +5,5 @@ Le paquet est utilisable sans interface graphique (voir :mod:`hookymod.cli`) :
 toute la logique de formats vit dans des modules indépendants de Tkinter.
 """
 
-__version__ = "11.26.1"
+__version__ = "11.26.2"
 __all__ = ["__version__"]

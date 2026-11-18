@@ -1,7 +1,7 @@
 {
   "name": "hookycreator-desktop",
   "private": true,
-  "version": "11.26.1",
+  "version": "11.26.2",
   "description": "An experimental local toolkit for exploring user-supplied assets and preparing working copies.",
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {

@@ -126,8 +126,8 @@ class DesktopBackendTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "application/octet-stream")
         self.assertTrue(body.startswith(b"H3D1"))
         self.assertEqual(self.request(route, headers={"Cookie": cookie, "Sec-Fetch-Site": "cross-site"})[0], 403)
-        for name in ("model_viewer.js", "shaders/common.glsl", "shaders/easu.frag.glsl",
-                     "shaders/rcas.frag.glsl", "shaders/fullscreen.vert.glsl"):
+        for name in ("model_viewer.js", "model_animation.js", "player.js", "shaders/common.glsl",
+                     "shaders/easu.frag.glsl", "shaders/rcas.frag.glsl", "shaders/fullscreen.vert.glsl"):
             status, _, content = self.request("/static/" + name, headers={"Cookie": cookie})
             self.assertEqual(status, 200, name)
             self.assertGreater(len(content), 100)

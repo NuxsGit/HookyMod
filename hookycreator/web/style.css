@@ -1690,3 +1690,59 @@ html[data-theme="aurora"] .studio-prototype-tag { color: #c0c9ff; }
   .studio-fields .studio-description { grid-column: auto; }.studio-project-actions { justify-content: flex-start; }
   .studio-prototype-tag { display: none; }
 }
+
+/* ------------------------------------------------------------------ Player : scène et composition */
+#view-player [hidden] { display: none !important; }
+.player-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .8fr); gap: 16px; align-items: start; }
+.player-layout > *, .player-sidebar > * { min-width: 0; }
+.player-sidebar { display: grid; gap: 14px; }
+.player-stage .panel-head small, .player-sidebar .panel-head small, .player-block-title > span {
+  display: block; color: var(--accent); font: 700 9px var(--mono); letter-spacing: .1em; margin-bottom: 5px;
+}
+.player-stage-body { display: grid; gap: 10px; padding: 16px; }
+.player-canvas-wrap { position: relative; min-width: 0; overflow: hidden; border: 1px solid #344255;
+  border-radius: 16px; background: #141923; aspect-ratio: 4 / 3; }
+.player-canvas { width: 100%; height: 100%; aspect-ratio: auto; border: 0; border-radius: 0; }
+.player-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 8px; padding: 20px; text-align: center; color: #dae5f4;
+  background: radial-gradient(circle at 50% 42%, #253851, #151c2a 70%); }
+.player-placeholder > span { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 4px;
+  border: 1px solid #5c7794; border-radius: 18px; color: #a3d5ed; font-size: 32px; }
+.player-placeholder strong { font-size: 14px; }.player-placeholder p { color: #b4c3d5; font-size: 12px; }
+.player-stage-actions { margin-top: 2px; }
+.player-animation { display: grid; gap: 10px; margin-top: 7px; padding: 15px;
+  border: 1px solid var(--line); border-radius: 15px; background: var(--panel-2); }
+.player-block-title h3 { font-size: 14px; }
+.player-animation-selects { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.player-view .field, .player-view select, .player-view input { min-width: 0; max-width: 100%; }
+.player-view select, .player-view input[type="search"], .player-view input[type="number"] { width: 100%; }
+.player-playback input[type="range"] { min-width: 65px; flex: 1; }
+.player-transform { border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; }
+.player-transform summary { color: var(--text); font-size: 11.5px; font-weight: 650; cursor: pointer; }
+.player-transform p { margin: 9px 0; }
+.player-transform-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
+.player-equipped { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.player-equipped li { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; padding: 7px 8px;
+  border-radius: 8px; background: var(--panel-2); color: var(--muted); font-size: 11px; }
+.player-equipped li strong { color: var(--text); }.player-equipped li span { overflow-wrap: anywhere; }
+.player-equipped li small { grid-column: 1 / -1; color: var(--warn); overflow-wrap: anywhere; }
+@media (max-width: 900px) { .player-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 550px) {
+  .player-stage-body { padding: 10px; }
+  .player-animation-selects { grid-template-columns: minmax(0, 1fr); }
+  .player-transform-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+
+/* Recherche inversée : animation → modèles dont les noms sont proches. */
+.ensemble-lookup { margin-bottom: 18px; }
+.ensemble-lookup > summary { cursor: pointer; padding: 14px 16px; color: var(--text); font-weight: 700; }
+.ensemble-lookup-body { display: grid; gap: 10px; border-top: 1px solid var(--line); padding: 14px 16px; }
+.ensemble-lookup-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ensemble-lookup-fields input, .ensemble-lookup-fields select { width: 100%; min-width: 0; }
+.ensemble-associations { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; }
+.ensemble-associations li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2, transparent); }
+.ensemble-associations .association-name { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.ensemble-associations small { display: block; color: var(--muted); margin-top: 2px; }
+.ensemble-associations .actions { margin: 0; }
+@media (max-width: 600px) { .ensemble-lookup-fields { grid-template-columns: minmax(0, 1fr); } }

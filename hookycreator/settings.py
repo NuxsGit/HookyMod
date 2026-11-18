@@ -1,14 +1,10 @@
 """Réglages de l'atelier : budget mémoire, qualité de rendu, culling.
 
-Le rendu se fait sur le processeur (aucune dépendance GPU), mais il consomme
-quand même de la mémoire : chaque sommet et chaque face est copié dans une
-structure de rendu, et l'image garde un tampon de couleurs plus un tampon de
-profondeur. Sur un très gros modèle, cela suffit à faire tomber la machine.
-
-D'où ce module : un **budget** exprimé en gigaoctets (6 Go par défaut, jusqu'à
-25 Go dans les réglages) et une politique de dégradation qui reste visible :
-on réduit d'abord l'anticrénelage, puis le nombre de faces dessinées, et si
-rien ne rentre on refuse en expliquant combien il faudrait.
+Les aperçus PNG sont rendus sur le processeur et consomment de la mémoire :
+chaque sommet et chaque face est copié et l'image conserve des tampons de
+couleurs et de profondeur. Le budget CPU et ses dégradations restent visibles.
+La vue interactive WebGL2 utilise séparément le GPU et ses propres limites ;
+ses préférences FSR 1 ne modifient ni les PNG ni les exports.
 """
 
 from __future__ import annotations
@@ -34,6 +30,14 @@ THEMES = ("light", "dark", "aurora")
 # Accept the previously saved theme identifier without exposing it in the UI.
 _LEGACY_THEMES = {"newgenoldtendo": "aurora"}
 LANGUAGES = ("fr", "en", "ru", "zh")
+
+# Paramètres de la vue WebGL (indépendants du rendu PNG sur le CPU).
+VIEWER_UPSCALERS = ("native", "fsr")
+FSR_QUALITIES = ("ultra", "quality", "balanced", "performance")
+VIEWER_MSAA = ("off", "2", "4")
+VIEWER_DPRS = ("1", "2")
+VIEWER_FPS = ("15", "30", "60")
+VIEWER_LIMITS = ("800", "1200", "1600")
 
 #: plafond du cache de vignettes sur disque (Mo)
 CACHE_MIN_MB, CACHE_MAX_MB, CACHE_DEFAULT_MB = 0, 4096, 256
@@ -88,6 +92,14 @@ class Settings:
     preview_faces: int = 0                     # 0 = toutes les faces ou refus explicite
     textured_previews: bool = True            # vignettes colorées par les textures
     cache_mb: int = CACHE_DEFAULT_MB          # cache de vignettes sur disque
+    # -- vue 3D interactive, également utilisée pour les animations et Player
+    viewer_upscale: str = "native"             # native | FSR 1 (pas FSR 4)
+    fsr_quality: str = "quality"               # ultra | quality | balanced | performance
+    fsr_sharpness: float = 0.65                # intensité RCAS
+    viewer_msaa: str = "4"                     # échantillons FSR : off | 2 | 4
+    viewer_dpr: str = "2"                      # limite de densité de pixels
+    viewer_fps: str = "60"                     # plafond de rafraîchissement
+    viewer_limit: str = "1600"                 # côté maximal du canvas
 
     # ------------------------------------------------------------------ état
     def clamp(self) -> "Settings":
@@ -115,6 +127,13 @@ class Settings:
                                           FACES_MIN, FACES_MAX))),
             cache_mb=int(_number(self.cache_mb, "cache_mb",
                                  CACHE_MIN_MB, CACHE_MAX_MB)),
+            viewer_upscale=_choice(self.viewer_upscale, "viewer_upscale", VIEWER_UPSCALERS),
+            fsr_quality=_choice(self.fsr_quality, "fsr_quality", FSR_QUALITIES),
+            fsr_sharpness=round(_number(self.fsr_sharpness, "fsr_sharpness", 0, 1), 2),
+            viewer_msaa=_choice(self.viewer_msaa, "viewer_msaa", VIEWER_MSAA),
+            viewer_dpr=_choice(self.viewer_dpr, "viewer_dpr", VIEWER_DPRS),
+            viewer_fps=_choice(self.viewer_fps, "viewer_fps", VIEWER_FPS),
+            viewer_limit=_choice(self.viewer_limit, "viewer_limit", VIEWER_LIMITS),
         )
 
     @property
@@ -142,6 +161,13 @@ class Settings:
             "preview_faces": self.preview_faces,
             "textured_previews": bool(self.textured_previews),
             "cache_mb": self.cache_mb,
+            "viewer_upscale": self.viewer_upscale,
+            "fsr_quality": self.fsr_quality,
+            "fsr_sharpness": self.fsr_sharpness,
+            "viewer_msaa": self.viewer_msaa,
+            "viewer_dpr": self.viewer_dpr,
+            "viewer_fps": self.viewer_fps,
+            "viewer_limit": self.viewer_limit,
             "cache_min_mb": CACHE_MIN_MB,
             "cache_max_mb": CACHE_MAX_MB,
             "accents": list(ACCENTS),
@@ -173,6 +199,13 @@ class Settings:
             "textured_previews": bool(payload.get("textured_previews",
                                                   base.textured_previews)),
             "cache_mb": payload.get("cache_mb", base.cache_mb),
+            "viewer_upscale": payload.get("viewer_upscale", base.viewer_upscale),
+            "fsr_quality": payload.get("fsr_quality", base.fsr_quality),
+            "fsr_sharpness": payload.get("fsr_sharpness", base.fsr_sharpness),
+            "viewer_msaa": payload.get("viewer_msaa", base.viewer_msaa),
+            "viewer_dpr": payload.get("viewer_dpr", base.viewer_dpr),
+            "viewer_fps": payload.get("viewer_fps", base.viewer_fps),
+            "viewer_limit": payload.get("viewer_limit", base.viewer_limit),
         }
         for name in ("cull", "frustum", "adaptive", "export_textures"):
             values[name] = _flag(values[name], name)

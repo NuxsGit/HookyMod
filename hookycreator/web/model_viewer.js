@@ -9,6 +9,80 @@ const VIEW_MAX_VERTICES = 2_000_000;
 const VIEW_MAX_TRIANGLES = 4_000_000;
 const VIEW_MAX_TEXTURES = 16;
 const VIEW_WIRE_BYTES = 64 * 1024 * 1024;
+const FSR_SCALES = Object.freeze({ ultra: 0.77, quality: 0.67, balanced: 0.59, performance: 0.5 });
+const VIEW_LAYER_SLOTS = Object.freeze(["head", "body", "legs", "right", "left"]);
+
+// Keep the camera centred on the animated root without changing any model or
+// attachment transforms. Ambiguous multi-root skeletons keep the static frame.
+function uniqueRootIndex(bones) {
+  let root = -1;
+  for (let index = 0; index < bones.length; index += 1) {
+    if (bones[index].parent !== -1) continue;
+    if (root !== -1) return -1;
+    root = index;
+  }
+  return root;
+}
+function followedCenter(center, rootIndex, pose) {
+  if (!Number.isInteger(rootIndex) || rootIndex < 0 || !pose) return center;
+  const m = pose.palette, at = rootIndex * 24;
+  if (!m || m.length < at + 12) return center;
+  const result = [0, 1, 2].map((row) => {
+    const i = at + row * 4;
+    return m[i] * center[0] + m[i+1] * center[1] + m[i+2] * center[2] + m[i+3];
+  });
+  return result.every(Number.isFinite) ? result : center;
+}
+
+// Validate again at the rendering boundary: old sessions and direct callers
+// must never allocate arbitrary framebuffer sizes or silently call FSR 4.
+function normalizeRenderSettings(settings = {}) {
+  const pick = (value, choices, fallback) => choices.includes(String(value)) ? String(value) : fallback;
+  const sharpness = Number(settings.fsr_sharpness);
+  return {
+    viewer_upscale: pick(settings.viewer_upscale, ["native", "fsr"], "native"),
+    fsr_quality: pick(settings.fsr_quality, Object.keys(FSR_SCALES), "quality"),
+    fsr_sharpness: Number.isFinite(sharpness) ? Math.max(0, Math.min(1, sharpness)) : 0.65,
+    viewer_msaa: pick(settings.viewer_msaa, ["off", "2", "4"], "4"),
+    viewer_dpr: Number(pick(settings.viewer_dpr, ["1", "2"], "2")),
+    viewer_fps: Number(pick(settings.viewer_fps, ["15", "30", "60"], "60")),
+    viewer_limit: Number(pick(settings.viewer_limit, ["800", "1200", "1600"], "1600")),
+  };
+}
+
+// Bone world (row-major 3x4) × local translation/uniform scale, converted to
+// WebGL's column-major matrices. No guessed game-specific attachment points.
+function attachmentMatrices(world, transform = {}) {
+  const offset = Array.isArray(transform.offset) ? transform.offset : [0, 0, 0];
+  const rotation = Array.isArray(transform.rotation) ? transform.rotation : [0, 0, 0];
+  const scale = transform.scale === undefined ? 1 : Number(transform.scale);
+  if (!Array.isArray(world) || world.length !== 12 || !world.every(Number.isFinite)
+      || offset.length !== 3 || !offset.every((x) => Number.isFinite(x) && Math.abs(x) <= 10000)
+      || rotation.length !== 3 || !rotation.every((x) => Number.isFinite(x) && Math.abs(x) <= 3600)
+      || !Number.isFinite(scale) || scale < 0.001 || scale > 1000) {
+    throw new Error("Transformation d'équipement invalide.");
+  }
+  const [x,y,z] = rotation.map((angle) => angle * Math.PI / 180);
+  const cx = Math.cos(x), sx = Math.sin(x), cy = Math.cos(y), sy = Math.sin(y), cz = Math.cos(z), sz = Math.sin(z);
+  const r = [cz*cy, cz*sy*sx - sz*cx, cz*sy*cx + sz*sx,
+    sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx, -sy, cy*sx, cy*cx];
+  const m = new Array(12);
+  for (let row = 0; row < 3; row += 1) {
+    for (let col = 0; col < 3; col += 1)
+      m[row*4+col] = scale * (world[row*4]*r[col] + world[row*4+1]*r[3+col] + world[row*4+2]*r[6+col]);
+    m[row*4+3] = world[row*4+3] + world[row*4]*offset[0] + world[row*4+1]*offset[1] + world[row*4+2]*offset[2];
+  }
+  const [a,b,c,,d,e,f,,g,h,i] = m;
+  const det = a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) throw new Error("Os d'attache à échelle nulle.");
+  const q = 1 / det;
+  // Columns of the inverse transpose, not the original transform.
+  const normal = new Float32Array([(e*i-f*h)*q, (c*h-b*i)*q, (b*f-c*e)*q,
+    (f*g-d*i)*q, (a*i-c*g)*q, (c*d-a*f)*q,
+    (d*h-e*g)*q, (b*g-a*h)*q, (a*e-b*d)*q]);
+  return { matrix: new Float32Array([m[0],m[4],m[8],0, m[1],m[5],m[9],0,
+    m[2],m[6],m[10],0, m[3],m[7],m[11],1]), normal };
+}
 
 function parseModelGeometry(buffer) {
   if (new Uint8Array(new Uint32Array([1]).buffer)[0] !== 1) {
@@ -83,6 +157,9 @@ layout(location=5) in vec4 a_weights0;
 layout(location=6) in vec4 a_weights1;
 uniform bool u_animated;
 uniform highp sampler2D u_skin;
+uniform bool u_attached;
+uniform mat4 u_attachment;
+uniform mat3 u_attachmentNormal;
 uniform vec3 u_center;
 uniform float u_radius;
 uniform vec2 u_angles;
@@ -116,6 +193,10 @@ void main() {
       influence(a_joints1[i],a_weights1[i],position,normal); total+=a_weights1[i];
     }
     position/=max(total,0.00001); normal/=max(total,0.00001);
+  }
+  if (u_attached) {
+    position=(u_attachment*vec4(position,1.0)).xyz;
+    normal=u_attachmentNormal*normal;
   }
   v_position=turn((position-u_center)/u_radius);
   v_normal=turn(normal);
@@ -183,16 +264,20 @@ class ModelViewport {
     this.ready = false;
     this.mode = "native";
     this.modeSerial = 0;
+    this.renderSettings = normalizeRenderSettings(options.renderSettings);
+    this.lastDraw = null;
     this.flat = false; this.wire = false; this.textured = options.textured !== false;
     this.yaw = 0.7; this.pitch = -0.35; this.zoom = 1;
     this.parts = []; this.textureMap = new Map(); this.pendingImages = [];
+    this.layers = new Map(); this.pendingLayers = new Set(); this.layerSerial = new Map();
+    this.layerRequests = new Map(); this.baseVisible = true; this.followRoot = false; this.rootIndex = -1;
     this.notes = [];
     this.scene = viewProgram(this.gl, VIEW_VERTEX, VIEW_FRAGMENT);
     this.fullscreenVao = this.gl.createVertexArray();
     if (!this.fullscreenVao) { this.gl.deleteProgram(this.scene); throw new Error("WebGL2 indisponible."); }
     this.listen(canvas, "webglcontextlost", (event) => {
       event.preventDefault();
-      if (!this.disposed) this.options.onFailure?.("Contexte WebGL perdu ; aperçu PNG disponible.");
+      if (!this.disposed) this.options.onFailure?.("Contexte WebGL perdu.");
     });
     this.listen(canvas, "pointerdown", (event) => {
       if (event.button !== 0) return;
@@ -239,53 +324,84 @@ class ModelViewport {
     this.listeners.push([node, name, handler, options]);
   }
 
-  async load(url) {
-    const response = await fetch(url, { signal: this.abort.signal, cache: "no-store" });
+  async fetchGeometry(url, signal = this.abort.signal) {
+    const response = await fetch(url, { signal, cache: "no-store" });
     if (!response.ok) {
       let error = "Chargement de la géométrie impossible.";
       try { error = (await response.json()).error || error; } catch (_) { /* réponse non JSON */ }
       throw new Error(error);
     }
-    const length = Number(response.headers.get("Content-Length"));
-    if (length > VIEW_MAX_BYTES) throw new Error("Géométrie supérieure à 128 Mio ; aucune face supprimée.");
-    const model = parseModelGeometry(await response.arrayBuffer());
-    if (this.disposed) return;
-    this.model = model;
+    if (Number(response.headers.get("Content-Length")) > VIEW_MAX_BYTES)
+      throw new Error("Géométrie supérieure à 128 Mio ; aucune face supprimée.");
+    const buffer = await response.arrayBuffer();
+    return { model: parseModelGeometry(buffer), bytes: buffer.byteLength };
+  }
+
+  uploadGeometry(layer, model, bytes) {
+    layer.model = model; layer.geometryBytes = bytes; layer.parts = [];
     const gl = this.gl, slots = new Map();
     const colors = [[.78,.81,.86], [.85,.72,.45], [.56,.78,.62], [.72,.59,.82], [.54,.72,.88], [.88,.62,.58]];
-    for (const mesh of model.meshes) {
-      const vao = gl.createVertexArray();
-      if (!vao) throw new Error("Mémoire WebGL insuffisante.");
-      const part = { vao, buffers: [], mesh, color: colors[(slots.has(mesh.material)
-        ? slots.get(mesh.material) : (slots.set(mesh.material, slots.size), slots.size - 1)) % colors.length] };
-      this.parts.push(part);
-      gl.bindVertexArray(vao);
-      const attribute = (location, data, width) => {
-        if (!data) { gl.disableVertexAttribArray(location); return; }
-        const buffer = gl.createBuffer();
-        if (!buffer) throw new Error("Mémoire WebGL insuffisante.");
-        part.buffers.push(buffer); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(location); gl.vertexAttribPointer(location, width, gl.FLOAT, false, 0, 0);
-      };
-      attribute(0, mesh.positions, 3); attribute(1, mesh.normals, 3); attribute(2, mesh.uvs, 2);
-      const indices = gl.createBuffer();
-      if (!indices) throw new Error("Mémoire WebGL insuffisante.");
-      part.indexBuffer = indices; part.buffers.push(indices);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indices); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
-      if (gl.getError() !== gl.NO_ERROR) throw new Error("Mémoire WebGL insuffisante pour le modèle entier.");
-    }
-    gl.bindVertexArray(null);
-    this.ready = true;
+    try {
+      for (const mesh of model.meshes) {
+        const vao = gl.createVertexArray();
+        if (!vao) throw new Error("Mémoire WebGL insuffisante.");
+        const part = { vao, buffers: [], mesh, color: colors[(slots.has(mesh.material)
+          ? slots.get(mesh.material) : (slots.set(mesh.material, slots.size), slots.size - 1)) % colors.length] };
+        layer.parts.push(part);
+        gl.bindVertexArray(vao);
+        const attribute = (location, data, width) => {
+          if (!data) { gl.disableVertexAttribArray(location); return; }
+          const buffer = gl.createBuffer();
+          if (!buffer) throw new Error("Mémoire WebGL insuffisante.");
+          part.buffers.push(buffer); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+          gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(location); gl.vertexAttribPointer(location, width, gl.FLOAT, false, 0, 0);
+        };
+        attribute(0, mesh.positions, 3); attribute(1, mesh.normals, 3); attribute(2, mesh.uvs, 2);
+        const indices = gl.createBuffer();
+        if (!indices) throw new Error("Mémoire WebGL insuffisante.");
+        part.indexBuffer = indices; part.buffers.push(indices);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indices); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+        if (gl.getError() !== gl.NO_ERROR) throw new Error("Mémoire WebGL insuffisante pour le modèle entier.");
+      }
+      layer.ready = true;
+    } catch (error) {
+      this.deleteLayerResources(layer);
+      throw error;
+    } finally { gl.bindVertexArray(null); }
+  }
+
+  async load(url) {
+    if (this.ready) throw new Error("Cette vue contient déjà un modèle.");
+    const { model, bytes } = await this.fetchGeometry(url);
+    if (this.disposed) return;
+    this.uploadGeometry(this, model, bytes);
     if (this.textured) this.loadTextures();
     this.updateStatus(); this.schedule();
   }
 
+  allLayers() { return [this, ...this.layers.values()]; }
+
+  deleteLayerResources(layer) {
+    layer.removed = true;
+    const gl = this.gl;
+    for (const part of layer.parts || []) {
+      for (const buffer of part.buffers) gl.deleteBuffer(buffer);
+      gl.deleteVertexArray(part.vao);
+    }
+    layer.parts = [];
+    if (layer.skinTexture) gl.deleteTexture(layer.skinTexture);
+    layer.skinTexture = null; layer.skin = null; layer.binding = null; layer.ready = false;
+  }
+
   updateStatus() {
     if (!this.ready || this.disposed) return;
-    const mode = this.mode === "fsr" ? "FSR 1 expérimental" : "WebGL2 · résolution native";
-    this.options.onStatus?.(`${this.model.triangles.toLocaleString("fr-FR")} triangles · ${mode}`
-      + (this.outputClamped ? " · image plafonnée à 1 600 px / densité ×2" : "")
+    const mode = this.mode === "fsr"
+      ? `FSR 1 expérimental · ${Math.round(FSR_SCALES[this.renderSettings.fsr_quality] * 100)} %`
+      : "WebGL2 · résolution native";
+    const triangles = this.allLayers().reduce((sum, layer) => sum + layer.model.triangles, 0);
+    this.options.onStatus?.(`${triangles.toLocaleString("fr-FR")} triangles · ${mode}`
+      + (this.outputClamped ? ` · image plafonnée à ${this.renderSettings.viewer_limit} px / densité ×${this.renderSettings.viewer_dpr}` : "")
       + (this.notes.length ? ` · ${this.notes.join(" · ")}` : ""));
   }
 
@@ -296,7 +412,7 @@ class ModelViewport {
 
   loadTextures() {
     if (this.disposed || !this.ready || !this.textured) return;
-    for (const part of this.parts) {
+    for (const part of this.allLayers().flatMap((layer) => layer.parts)) {
       const binding = part.mesh.texture;
       if (!binding || !part.mesh.uvs) continue;
       const key = `${binding.path}\n${binding.index}`;
@@ -304,12 +420,13 @@ class ModelViewport {
       if (this.textureMap.size >= VIEW_MAX_TEXTURES) {
         this.addNote(`plus de ${VIEW_MAX_TEXTURES} textures : certaines non affichées`); break;
       }
-      const item = { texture: null };
+      const image = new Image(), item = { texture: null, image };
       this.textureMap.set(key, item);
-      const image = new Image(); this.pendingImages.push(image);
+      this.pendingImages.push(image);
       image.onload = () => {
         this.pendingImages = this.pendingImages.filter((entry) => entry !== image);
-        if (this.disposed || this.gl.isContextLost()) return;
+        item.image = null;
+        if (this.disposed || this.textureMap.get(key) !== item || this.gl.isContextLost()) return;
         const gl = this.gl, texture = gl.createTexture();
         if (!texture) { this.addNote("mémoire texture insuffisante"); return; }
         try {
@@ -326,7 +443,8 @@ class ModelViewport {
       };
       image.onerror = () => {
         this.pendingImages = this.pendingImages.filter((entry) => entry !== image);
-        if (!this.disposed) this.addNote("texture indisponible");
+        item.image = null;
+        if (!this.disposed && this.textureMap.get(key) === item) this.addNote("texture indisponible");
       };
       const query = new URLSearchParams({ path: binding.path, index: String(binding.index), max: "1024",
         rev: String(this.options.revision || "") });
@@ -335,26 +453,45 @@ class ModelViewport {
     if (this.textureMap.size) this.addNote("albédos limités à 1 024 px dans la vue");
   }
 
-  async prepareSkin(url) {
-    if (this.skin) return this.skin;
-    if (this.skinLoading) return this.skinLoading;
-    if (!this.ready) throw new Error("La géométrie 3D n'est pas encore chargée.");
-    this.skinLoading = (async () => {
-      const response = await fetch(url, { signal: this.abort.signal, cache: "no-store" });
+  pruneTextures() {
+    const needed = new Set(this.allLayers().flatMap((layer) => layer.parts)
+      .filter((part) => part.mesh.texture && part.mesh.uvs)
+      .map((part) => `${part.mesh.texture.path}\n${part.mesh.texture.index}`));
+    for (const [key, item] of this.textureMap) {
+      if (needed.has(key)) continue;
+      if (item.texture) this.gl.deleteTexture(item.texture);
+      if (item.image) {
+        item.image.onload = item.image.onerror = null; item.image.src = "";
+        this.pendingImages = this.pendingImages.filter((image) => image !== item.image);
+      }
+      this.textureMap.delete(key);
+    }
+  }
+
+  async prepareSkin(url, layer = this) {
+    if (layer.skin) return layer.skin;
+    if (layer.skinLoading) return layer.skinLoading;
+    if (!layer.ready) throw new Error("La géométrie 3D n'est pas encore chargée.");
+    layer.skinLoading = (async () => {
+      const response = await fetch(url, { signal: layer.controller?.signal || this.abort.signal, cache: "no-store" });
       if (!response.ok) {
         let message = "Skin du modèle indisponible.";
         try { message = (await response.json()).error || message; } catch (_) { /* non JSON */ }
         throw new Error(message);
       }
       if (Number(response.headers.get("Content-Length")) > 64 * 1024 * 1024) throw new Error("Skin trop volumineux.");
-      const skin = HookyAnimation.parseSkin(await response.arrayBuffer(), this.model);
-      if (this.disposed) throw new Error("Vue 3D fermée.");
+      const buffer = await response.arrayBuffer();
+      if (this.disposed || layer.removed) throw new Error("Vue 3D fermée.");
+      const groups = new Set([...this.allLayers(), ...this.pendingLayers]);
+      const used = [...groups].reduce((sum, group) => sum + (group === layer ? 0 : (group.skinBytes || 0)), 0);
+      if (used + buffer.byteLength > 64 * 1024 * 1024) throw new Error("Skins de la composition supérieurs à 64 Mio.");
+      const skin = HookyAnimation.parseSkin(buffer, layer.model);
       const gl = this.gl, created = [];
       let texture = null;
       try {
         if (skin.bones.length > gl.getParameter(gl.MAX_TEXTURE_SIZE)) throw new Error("Squelette trop grand pour WebGL.");
-        for (let i = 0; i < this.parts.length; i += 1) {
-          const part = this.parts[i], data = skin.meshes[i];
+        for (let i = 0; i < layer.parts.length; i += 1) {
+          const part = layer.parts[i], data = skin.meshes[i];
           gl.bindVertexArray(part.vao);
           const joints = gl.createBuffer(), weights = gl.createBuffer();
           if (joints) created.push(joints);
@@ -378,11 +515,12 @@ class ModelViewport {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 6, skin.bones.length, 0, gl.RGBA, gl.FLOAT,
           new Float32Array(skin.bones.length * 24));
         if (gl.getError() !== gl.NO_ERROR) throw new Error("Allocation GPU du skin impossible.");
-        for (const part of this.parts) part.buffers.push(...part.skinBuffers);
-        this.skinTexture = texture; this.skin = skin;
+        for (const part of layer.parts) part.buffers.push(...part.skinBuffers);
+        layer.rootIndex = uniqueRootIndex(skin.bones);
+        layer.skinTexture = texture; layer.skin = skin; layer.skinBytes = buffer.byteLength;
         return skin;
       } catch (error) {
-        for (const part of this.parts) {
+        for (const part of layer.parts) {
           gl.bindVertexArray(part.vao);
           for (let i = 3; i <= 6; i += 1) gl.disableVertexAttribArray(i);
           delete part.skinBuffers;
@@ -392,9 +530,95 @@ class ModelViewport {
         throw error;
       } finally { gl.bindVertexArray(null); gl.activeTexture(gl.TEXTURE0); }
     })();
-    try { return await this.skinLoading; }
-    finally { this.skinLoading = null; }
+    try { return await layer.skinLoading; }
+    finally { layer.skinLoading = null; }
   }
+
+  layerReports() {
+    return [...this.layers.values()].map((layer) => ({
+      slot: layer.slot, mode: layer.mode, bone: layer.bone || "", warning: layer.runtimeWarning || layer.warning || "",
+      matched: layer.binding?.matched || 0, missing: layer.binding?.missing || 0,
+    }));
+  }
+
+  updateLayerBinding(layer, clip) {
+    layer.binding = null; layer.warning = "";
+    if (layer.mode !== "skin" || !clip) return;
+    try {
+      const binding = HookyAnimation.bind(layer.skin, clip);
+      HookyAnimation.palette(binding, 0);
+      layer.binding = binding;
+      if (binding.missing) layer.warning = `${binding.missing} piste(s) sans os correspondant`;
+    } catch (error) {
+      layer.warning = `Tenue statique : ${error.message}`;
+    }
+  }
+
+  async setLayer(slot, { geometryUrl, skinUrl, mode = "skin", bone = "", offset = [0,0,0], rotation = [0,0,0], scale = 1 }) {
+    if (!this.ready || this.disposed) throw new Error("Ouvre d'abord un modèle de base.");
+    if (!VIEW_LAYER_SLOTS.includes(slot)) throw new Error("Emplacement d'équipement invalide.");
+    // Even an invalid new selection cancels an older in-flight replacement;
+    // otherwise that older result could silently win after showing an error.
+    const serial = (this.layerSerial.get(slot) || 0) + 1;
+    this.layerSerial.set(slot, serial);
+    this.layerRequests.get(slot)?.abort();
+    const controller = new AbortController(); this.layerRequests.set(slot, controller);
+    let layer = null, committed = false;
+    const current = () => !this.disposed && !controller.signal.aborted && this.layerSerial.get(slot) === serial;
+    try {
+      if (!["skin", "bone", "static"].includes(mode) || typeof geometryUrl !== "string"
+          || !geometryUrl || (mode === "skin" && !skinUrl)) throw new Error("Équipement invalide.");
+      if (mode === "bone" && (!this.skin || !this.skin.bones.some((item) => item.name === bone)))
+        throw new Error("Choisis un os reconnu du modèle de base.");
+      // Validate before network work; the transform may later use an animated bone.
+      attachmentMatrices([1,0,0,0, 0,1,0,0, 0,0,1,0], { offset, rotation, scale });
+      const { model, bytes } = await this.fetchGeometry(geometryUrl, controller.signal);
+      if (!current()) return null;
+      const groups = new Set([...this.allLayers(), ...this.pendingLayers]);
+      const totals = [...groups].reduce((acc, group) => {
+        acc.bytes += group.geometryBytes || 0; acc.vertices += group.model?.vertices || 0;
+        acc.triangles += group.model?.triangles || 0; return acc;
+      }, { bytes, vertices: model.vertices, triangles: model.triangles });
+      if (totals.bytes > VIEW_MAX_BYTES || totals.vertices > VIEW_MAX_VERTICES || totals.triangles > VIEW_MAX_TRIANGLES)
+        throw new Error("Composition trop volumineuse : aucune géométrie n'a été supprimée.");
+      layer = { slot, mode, bone, offset: [...offset], rotation: [...rotation], scale, controller, parts: [] };
+      this.uploadGeometry(layer, model, bytes); this.pendingLayers.add(layer);
+      if (mode === "skin") await this.prepareSkin(skinUrl, layer);
+      if (!current()) return null;
+      this.updateLayerBinding(layer, this.animation?.binding.clip);
+      const old = this.layers.get(slot);
+      this.layers.set(slot, layer); this.pendingLayers.delete(layer); committed = true;
+      if (old) this.deleteLayerResources(old);
+      this.wire = false; // no uninitialized wire buffers for a freshly added layer
+      this.pruneTextures(); if (this.textured) this.loadTextures();
+      this.updateStatus(); this.schedule(); this.options.onLayersChanged?.(this.layerReports());
+      return this.layerReports().find((item) => item.slot === slot);
+    } catch (error) {
+      if (!current()) return null;
+      throw error;
+    } finally {
+      if (layer && !committed) { this.pendingLayers.delete(layer); this.deleteLayerResources(layer); }
+      if (this.layerRequests.get(slot) === controller) this.layerRequests.delete(slot);
+    }
+  }
+
+  cancelLayer(slot) {
+    if (!VIEW_LAYER_SLOTS.includes(slot)) return;
+    this.layerSerial.set(slot, (this.layerSerial.get(slot) || 0) + 1);
+    this.layerRequests.get(slot)?.abort(); this.layerRequests.delete(slot);
+  }
+
+  removeLayer(slot) {
+    if (!VIEW_LAYER_SLOTS.includes(slot)) return;
+    this.cancelLayer(slot);
+    const layer = this.layers.get(slot);
+    if (layer) { this.layers.delete(slot); this.deleteLayerResources(layer); }
+    this.pruneTextures(); if (this.textured) this.loadTextures();
+    this.updateStatus(); this.schedule(); this.options.onLayersChanged?.(this.layerReports());
+  }
+
+  setBaseVisible(visible) { this.baseVisible = Boolean(visible); this.schedule(); }
+  setFollowRoot(enabled) { this.followRoot = Boolean(enabled); this.schedule(); }
 
   async setAnimation(url, clip) {
     const serial = this.animationSerial = (this.animationSerial || 0) + 1;
@@ -404,13 +628,18 @@ class ModelViewport {
     // Validate frame zero before changing the current preview.
     HookyAnimation.palette(binding, 0);
     this.animation = { binding, frame: 0, playing: true, loop: Boolean(clip.loop), last: null };
+    for (const layer of this.layers.values()) this.updateLayerBinding(layer, clip);
+    this.options.onLayersChanged?.(this.layerReports());
     this.schedule();
-    return { matched: binding.matched, missing: binding.missing };
+    return { matched: binding.matched, missing: binding.missing, layers: this.layerReports() };
   }
 
   stopAnimation() {
     this.animationSerial = (this.animationSerial || 0) + 1;
-    this.animation = null; this.schedule();
+    this.animation = null;
+    for (const layer of this.layers.values()) this.updateLayerBinding(layer, null);
+    this.options.onLayersChanged?.(this.layerReports());
+    this.schedule();
   }
   playAnimation(playing) {
     if (!this.animation) return;
@@ -428,12 +657,13 @@ class ModelViewport {
   setFlat(enabled) { this.flat = Boolean(enabled); this.schedule(); }
   setWire(enabled) {
     if (!enabled) { this.wire = false; this.schedule(); return true; }
-    if (!this.ready || this.model.triangles * 24 > VIEW_WIRE_BYTES) {
+    const groups = this.allLayers();
+    if (!this.ready || groups.reduce((sum, group) => sum + group.model.triangles, 0) * 24 > VIEW_WIRE_BYTES) {
       this.addNote("fil de fer indisponible au-delà de 64 Mio d'indices"); return false;
     }
     const gl = this.gl, created = [];
     try {
-      for (const part of this.parts) {
+      for (const part of groups.flatMap((group) => group.parts)) {
         if (part.wireBuffer) continue;
         const source = part.mesh.indices, lines = new Uint32Array(source.length * 2);
         for (let i = 0, j = 0; i < source.length; i += 3) {
@@ -457,6 +687,18 @@ class ModelViewport {
   }
 
   reset() { this.yaw = 0.7; this.pitch = -0.35; this.zoom = 1; this.schedule(); }
+
+  configure(settings) {
+    const previous = this.renderSettings, next = normalizeRenderSettings(settings);
+    this.renderSettings = next;
+    if (previous.fsr_quality !== next.fsr_quality || previous.viewer_msaa !== next.viewer_msaa
+        || previous.viewer_dpr !== next.viewer_dpr || previous.viewer_limit !== next.viewer_limit) {
+      this.releaseTargets();
+    }
+    this.lastDraw = null;
+    this.updateStatus(); this.schedule();
+    return this.setMode(next.viewer_upscale);
+  }
 
   async setMode(mode) {
     const serial = ++this.modeSerial;
@@ -494,6 +736,13 @@ class ModelViewport {
       this.frame = 0;
       if (this.disposed || !this.canvas.isConnected) return;
       const anim = this.animation;
+      // Throttle animated rendering, not the animation clock. Interactions and
+      // paused scrubbing still repaint immediately.
+      if (anim?.playing && this.lastDraw !== null
+          && time - this.lastDraw < 1000 / this.renderSettings.viewer_fps - 0.5) {
+        this.schedule(); return;
+      }
+      this.lastDraw = time;
       if (anim && anim.playing) {
         if (anim.last !== null) anim.frame += Math.min(0.1, Math.max(0, (time - anim.last) / 1000)) * anim.binding.clip.fps;
         anim.last = time;
@@ -514,10 +763,11 @@ class ModelViewport {
   sizeCanvas() {
     const rect = this.canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return false;
-    const actualDpr = Math.max(1, window.devicePixelRatio || 1), dpr = Math.min(actualDpr, 2);
+    const { viewer_dpr: maxDpr, viewer_limit: limit } = this.renderSettings;
+    const actualDpr = Math.max(1, window.devicePixelRatio || 1), dpr = Math.min(actualDpr, maxDpr);
     let width = Math.max(1, Math.round(rect.width * dpr)), height = Math.max(1, Math.round(rect.height * dpr));
-    const scale = Math.min(1, 1600 / width, 1600 / height);
-    const clamped = actualDpr > 2 || scale < 1;
+    const scale = Math.min(1, limit / width, limit / height);
+    const clamped = actualDpr > maxDpr || scale < 1;
     if (clamped !== Boolean(this.outputClamped)) { this.outputClamped = clamped; this.updateStatus(); }
     width = Math.max(1, Math.round(width * scale)); height = Math.max(1, Math.round(height * scale));
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -532,7 +782,12 @@ class ModelViewport {
     gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND); gl.clearColor(0.078, 0.086, 0.11, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.useProgram(program);
     const loc = (name) => gl.getUniformLocation(program, name);
-    gl.uniform3fv(loc("u_center"), this.model.center); gl.uniform1f(loc("u_radius"), this.model.radius);
+    const hasBoneLayer = [...this.layers.values()].some((layer) => layer.mode === "bone");
+    const basePose = this.animation ? HookyAnimation.pose(this.animation.binding, this.animation.frame)
+      : (hasBoneLayer && this.skin ? HookyAnimation.restPose(this.skin) : null);
+    const center = this.followRoot && this.animation
+      ? followedCenter(this.model.center, this.rootIndex, basePose) : this.model.center;
+    gl.uniform3fv(loc("u_center"), center); gl.uniform1f(loc("u_radius"), this.model.radius);
     gl.uniform2f(loc("u_angles"), this.yaw, this.pitch);
     const aspect = width / height;
     // Cadrage initial sur la boîte projetée (pas sur sa sphère, souvent très
@@ -544,40 +799,69 @@ class ModelViewport {
     const halfY = Math.abs(sy * sp) * ex + Math.abs(cp) * ey + Math.abs(cy * sp) * ez;
     const factor = 0.88 * this.zoom * Math.min(aspect / Math.max(halfX, 1e-6), 1 / Math.max(halfY, 1e-6));
     gl.uniform2f(loc("u_fit"), factor / aspect, factor);
-    gl.uniform1i(loc("u_texture"), 0);
-    gl.uniform1i(loc("u_animated"), Boolean(this.animation));
-    gl.uniform1i(loc("u_skin"), 1);
-    if (this.animation) {
-      const palette = HookyAnimation.palette(this.animation.binding, this.animation.frame);
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.skinTexture);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 6, this.skin.bones.length, gl.RGBA, gl.FLOAT, palette);
-      gl.activeTexture(gl.TEXTURE0);
-    }
+    gl.uniform1i(loc("u_texture"), 0); gl.uniform1i(loc("u_skin"), 1);
     // WebGL validates the integer generic attribute type even when skinning
     // is disabled and the corresponding vertex arrays are not enabled.
     gl.vertexAttribI4ui(3, 0, 0, 0, 0); gl.vertexAttribI4ui(4, 0, 0, 0, 0);
-    if (this.wire) { gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1, 1); }
-    for (const part of this.parts) {
-      gl.bindVertexArray(part.vao);
-      if (!part.mesh.normals) gl.vertexAttrib3f(1, 0, 0, 1);
-      if (!part.mesh.uvs) gl.vertexAttrib2f(2, 0, 0);
-      const binding = part.mesh.texture;
-      const texture = binding && this.textureMap.get(`${binding.path}\n${binding.index}`)?.texture;
-      gl.uniform3fv(loc("u_color"), part.color); gl.uniform1i(loc("u_smooth"), Boolean(part.mesh.normals) && !this.flat);
-      gl.uniform1i(loc("u_wire"), 0); gl.uniform1i(loc("u_textured"), Boolean(this.textured && texture));
-      if (texture) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texture); }
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.indexBuffer);
-      gl.drawElements(gl.TRIANGLES, part.mesh.indices.length, gl.UNSIGNED_INT, 0);
-    }
-    if (this.wire) {
-      gl.disable(gl.POLYGON_OFFSET_FILL); gl.uniform1i(loc("u_wire"), 1);
-      for (const part of this.parts) {
-        gl.bindVertexArray(part.vao); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.wireBuffer);
-        gl.drawElements(gl.LINES, part.mesh.indices.length * 2, gl.UNSIGNED_INT, 0);
+    let reportChanged = false;
+    for (const layer of this.allLayers()) {
+      if (layer === this && !this.baseVisible) continue;
+      const binding = layer === this ? this.animation?.binding : layer.binding;
+      const animated = Boolean(this.animation && binding);
+      gl.uniform1i(loc("u_animated"), animated);
+      if (animated) {
+        try {
+          const palette = layer === this ? basePose.palette : HookyAnimation.palette(binding, this.animation.frame);
+          gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, layer.skinTexture);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 6, layer.skin.bones.length, gl.RGBA, gl.FLOAT, palette);
+          gl.activeTexture(gl.TEXTURE0);
+        } catch (error) {
+          if (layer === this) throw error;
+          const warning = `Tenue non affichée : ${error.message}`;
+          if (layer.runtimeWarning !== warning) { layer.runtimeWarning = warning; reportChanged = true; }
+          continue;
+        }
+      }
+      const attached = layer !== this && (layer.mode === "bone" || layer.mode === "static");
+      gl.uniform1i(loc("u_attached"), attached);
+      if (attached) {
+        try {
+          const boneIndex = layer.mode === "bone" ? this.skin.bones.findIndex((bone) => bone.name === layer.bone) : -1;
+          const world = layer.mode === "bone" ? basePose?.worlds[boneIndex] : [1,0,0,0, 0,1,0,0, 0,0,1,0];
+          const transform = attachmentMatrices(world, layer);
+          gl.uniformMatrix4fv(loc("u_attachment"), false, transform.matrix);
+          gl.uniformMatrix3fv(loc("u_attachmentNormal"), false, transform.normal);
+        } catch (error) {
+          const warning = `Équipement non affiché : ${error.message}`;
+          if (layer.runtimeWarning !== warning) { layer.runtimeWarning = warning; reportChanged = true; }
+          continue;
+        }
+      }
+      if (layer.runtimeWarning) { layer.runtimeWarning = ""; reportChanged = true; }
+      if (this.wire) { gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1, 1); }
+      for (const part of layer.parts) {
+        gl.bindVertexArray(part.vao);
+        if (!part.mesh.normals) gl.vertexAttrib3f(1, 0, 0, 1);
+        if (!part.mesh.uvs) gl.vertexAttrib2f(2, 0, 0);
+        const map = part.mesh.texture;
+        const texture = map && this.textureMap.get(`${map.path}\n${map.index}`)?.texture;
+        gl.uniform3fv(loc("u_color"), part.color); gl.uniform1i(loc("u_smooth"), Boolean(part.mesh.normals) && !this.flat);
+        gl.uniform1i(loc("u_wire"), 0); gl.uniform1i(loc("u_textured"), Boolean(this.textured && texture));
+        if (texture) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texture); }
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.indexBuffer);
+        gl.drawElements(gl.TRIANGLES, part.mesh.indices.length, gl.UNSIGNED_INT, 0);
+      }
+      if (this.wire) {
+        gl.disable(gl.POLYGON_OFFSET_FILL); gl.uniform1i(loc("u_wire"), 1);
+        for (const part of layer.parts) {
+          gl.bindVertexArray(part.vao); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.wireBuffer);
+          gl.drawElements(gl.LINES, part.mesh.indices.length * 2, gl.UNSIGNED_INT, 0);
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.indexBuffer);
+        }
       }
     }
     gl.bindVertexArray(null);
+    if (reportChanged) this.options.onLayersChanged?.(this.layerReports());
   }
 
   makeTarget(width, height, depth = false, samples = 0) {
@@ -638,12 +922,14 @@ class ModelViewport {
 
   ensureTargets(width, height) {
     if (this.targets) return;
-    const samples = Math.min(4, this.gl.getParameter(this.gl.MAX_SAMPLES) || 0);
-    const iw = Math.max(1, Math.round(width * 0.67)), ih = Math.max(1, Math.round(height * 0.67));
+    const requested = this.renderSettings.viewer_msaa === "off" ? 0 : Number(this.renderSettings.viewer_msaa);
+    const samples = Math.min(requested, this.gl.getParameter(this.gl.MAX_SAMPLES) || 0);
+    const scale = FSR_SCALES[this.renderSettings.fsr_quality];
+    const iw = Math.max(1, Math.round(width * scale)), ih = Math.max(1, Math.round(height * scale));
     const input = this.makeTarget(iw, ih, true, samples >= 2 ? samples : 0);
     try { this.targets = { input, output: this.makeTarget(width, height) }; }
     catch (error) { this.deleteTarget(input); throw error; }
-    if (samples < 2) this.addNote("FSR sans anticrénelage multisample");
+    if (requested && samples < 2) this.addNote("FSR sans anticrénelage multisample");
   }
 
   pass(program, texture, outWidth, outHeight, inWidth, inHeight) {
@@ -653,7 +939,7 @@ class ModelViewport {
     gl.uniform1i(loc("u_in"), 0); gl.uniform1i(loc("u_src"), 0);
     gl.uniform2f(loc("u_outSize"), outWidth, outHeight); gl.uniform2f(loc("u_inSize"), inWidth, inHeight);
     gl.uniform1i(loc("u_flipY"), 0); gl.uniform1f(loc("u_split"), -1); gl.uniform1i(loc("u_dither"), 0);
-    gl.uniform1f(loc("u_sharpness"), 0.65); gl.uniform1i(loc("u_denoise"), 0);
+    gl.uniform1f(loc("u_sharpness"), this.renderSettings.fsr_sharpness); gl.uniform1i(loc("u_denoise"), 0);
     gl.bindVertexArray(this.fullscreenVao); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   }
 
@@ -682,7 +968,8 @@ class ModelViewport {
       if (this.mode === "fsr") {
         this.mode = "native"; this.releaseTargets(); this.options.onModeFallback?.();
         this.addNote(`FSR 1 indisponible : ${error.message}`);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null); this.drawScene(width, height);
+        try { gl.bindFramebuffer(gl.FRAMEBUFFER, null); this.drawScene(width, height); }
+        catch (nativeError) { this.options.onFailure?.(`Vue 3D indisponible : ${nativeError.message}`); }
       } else this.options.onFailure?.(`Vue 3D indisponible : ${error.message}`);
     }
   }
@@ -695,15 +982,19 @@ class ModelViewport {
       return;
     }
     this.disposed = true; this.modeSerial += 1; this.abort.abort();
+    for (const request of this.layerRequests.values()) request.abort();
+    this.layerRequests.clear();
     if (this.frame) cancelAnimationFrame(this.frame);
     this.resizeObserver?.disconnect();
     for (const [node, name, handler, options] of this.listeners) node.removeEventListener(name, handler, options);
     for (const image of this.pendingImages) { image.onload = image.onerror = null; image.src = ""; }
     const gl = this.gl;
     this.releaseTargets();
-    for (const part of this.parts) { for (const buffer of part.buffers) gl.deleteBuffer(buffer); gl.deleteVertexArray(part.vao); }
+    for (const layer of new Set([...this.layers.values(), ...this.pendingLayers])) this.deleteLayerResources(layer);
+    this.layers.clear(); this.pendingLayers.clear();
+    this.deleteLayerResources(this);
     for (const entry of this.textureMap.values()) if (entry.texture) gl.deleteTexture(entry.texture);
-    if (this.skinTexture) gl.deleteTexture(this.skinTexture);
+    this.textureMap.clear();
     this.animation = null; this.animationSerial = (this.animationSerial || 0) + 1;
     if (this.fsr) { gl.deleteProgram(this.fsr.easu); gl.deleteProgram(this.fsr.rcas); }
     gl.deleteProgram(this.scene); gl.deleteVertexArray(this.fullscreenVao);
@@ -721,4 +1012,4 @@ class ModelViewport {
 }
 
 if (typeof window !== "undefined") window.ModelViewport = ModelViewport;
-if (typeof module !== "undefined") module.exports = { parseModelGeometry, ModelViewport };
+if (typeof module !== "undefined") module.exports = { parseModelGeometry, normalizeRenderSettings, attachmentMatrices, uniqueRootIndex, followedCenter, FSR_SCALES, ModelViewport };

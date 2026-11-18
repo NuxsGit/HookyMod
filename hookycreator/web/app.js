@@ -14,6 +14,7 @@ const state = {
   logs: [],
   models: [],
   ensembles: [],
+  ensembleAnimation: "",
   textures: [],
   busy: 0,
   selection: new Set(),
@@ -54,6 +55,16 @@ let uiSessionWriter = null;
 let uiSessionBoot = Promise.resolve();
 let sessionLoadFailed = false;
 let nativeCheckpointSerial = 0;
+
+function applyViewerSettings() {
+  const settings = state.settings || {};
+  if (modelViewport) {
+    const select = document.querySelector("#model-upscale");
+    if (select) select.value = settings.viewer_upscale || "native";
+    void modelViewport.configure(settings);
+  }
+  window.HookyPlayer?.configure(settings);
+}
 
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -199,13 +210,14 @@ function closeTab(id) {
 /* ------------------------------------------------------------------ vues */
 function showView(view, options = {}) {
   if (state.view !== view) {
+    if (state.view === "player") window.HookyPlayer?.hide();
     assetValidation.clearScope("view");
     thumbnailQueue.release($(`#view-${state.view}`));
     const scroll = $("#views");
     if (scroll) scroll.scrollTop = 0;
     // Les espaces d'accueil doivent rester lisibles, surtout sur mobile où
     // l'inspecteur est superposé. L'onglet du document reste disponible.
-    if (view === "edit" || view === "create" || view === "studio" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
+    if (view === "edit" || view === "create" || view === "studio" || view === "player" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
       hideInspector();
     }
   }
@@ -225,6 +237,7 @@ function showView(view, options = {}) {
   if (view === "studio") window.HookyStudio?.show();
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
+  if (view === "player" && !options.skipPlayer) window.HookyPlayer?.show();
   if (view === "textures") renderTextures();
   if (view === "animations") renderAnimations();
   if (view === "videos") renderVideos();
@@ -241,6 +254,7 @@ const VIEW_LABELS = {
   studio: "HookyMod's",
   models: "Modèles",
   ensembles: "Ensembles",
+  player: "Player",
   textures: "Textures",
   animations: "Animations",
   videos: "Vidéos",
@@ -497,9 +511,43 @@ function ensembleMatches(row) {
   return !filter || row.rel.toLowerCase().includes(filter);
 }
 
+function renderEnsembleAssociations() {
+  const catalog = window.HookyPlayerCatalog, select = $("#ensemble-animation");
+  if (!catalog || !select) return;
+  const inventory = state.project?.assets || [];
+  const current = inventory.find((asset) => asset.kind === "animation" && asset.rel === state.ensembleAnimation);
+  if (!current) state.ensembleAnimation = "";
+  const query = $("#ensemble-animation-search").value;
+  const matches = inventory.filter((asset) => asset.kind === "animation" && catalog.matches(asset, query));
+  const choices = matches.slice(0, 250);
+  if (current && !choices.includes(current)) choices.unshift(current);
+  select.innerHTML = '<option value="">Choisir une animation…</option>' + choices.map((asset) =>
+    `<option data-no-i18n value="${esc(asset.rel)}" title="${esc(asset.rel)}">${esc(asset.rel)}</option>`).join("");
+  select.value = state.ensembleAnimation;
+  select.disabled = !choices.length;
+  const status = $("#ensemble-association-status"), list = $("#ensemble-associations");
+  if (!current) {
+    status.textContent = matches.length
+      ? `${matches.length} animation(s) trouvée(s) · ${Math.min(matches.length, 250)} affichées. Choisis-en une.`
+      : "Aucune animation trouvée ; vérifie le filtre ou le scan du projet.";
+    list.innerHTML = "";
+    return;
+  }
+  const suggestions = catalog.suggestModels(inventory, current.rel), shown = suggestions.slice(0, 60);
+  status.textContent = suggestions.length
+    ? `${suggestions.length} modèle(s) suggéré(s) par nom · ${shown.length} affichés. À vérifier dans Player.`
+    : "Aucun modèle suggéré par nom. Le choix manuel reste possible dans Animations et Player.";
+  list.innerHTML = shown.map(({ asset, category, reason }) => `
+    <li><div class="association-name"><strong data-no-i18n>${esc(asset.rel)}</strong>
+      <small><span>${esc(reason)}</span> · <span>${esc(category)}</span> · <span>non vérifié</span></small></div>
+      <div class="actions"><button type="button" class="btn tiny" data-ensemble-model="${esc(asset.rel)}">Voir la fiche</button>
+      <button type="button" class="btn tiny primary" data-ensemble-player="${esc(asset.rel)}">Ouvrir comme base dans Player</button></div></li>`).join("");
+}
+
 async function renderEnsembles() {
   const grid = $("#ensemble-grid");
   if (!grid || state.view !== "ensembles") return;
+  renderEnsembleAssociations();
   const render = ++ensembleRenderSequence;
   if (!state.ensembles.length) {
     const revision = state.project?.image_revision;
@@ -599,8 +647,16 @@ function matches(asset, filter) {
 }
 
 function focusSearch() {
-  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens", sounds: "#search-sound", animations: "#search-animation", videos: "#search-video" }[state.view];
+  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens", player: "#player-base-search", sounds: "#search-sound", animations: "#search-animation", videos: "#search-video" }[state.view];
   if (selector) $(selector)?.focus();
+}
+
+function openPlayer(rel, options = {}) {
+  // Changer de vue avant de charger : aucun contexte 3D de l'inspecteur ne
+  // reste actif derrière la scène Player, même sur une petite machine.
+  hideInspector();
+  showView("player", { skipPlayer: true });
+  void window.HookyPlayer?.open(rel, options);
 }
 
 async function openModel(rel, options = {}) {
@@ -690,6 +746,7 @@ async function openModel(rel, options = {}) {
       <p class="hint">Les fichiers d'animation du jeu restent inchangés.</p></details>` : ""}
     <div class="actions">
       <button class="btn" id="btn-uv">Vérifier les UV</button>
+      <button class="btn" id="btn-compose-player" type="button">Composer dans Player</button>
       <button class="btn primary" id="btn-export-animations" ${animationFiles.length ? "" : "disabled"}>Télécharger 1 GLB · toutes les animations détectées</button>
       <button class="btn" id="btn-export-model">Exporter en GLB / glTF / OBJ</button>
       <button class="btn ghost" id="btn-turntable">Planche PNG</button>
@@ -800,11 +857,11 @@ async function openModel(rel, options = {}) {
   const startView = () => {
     canvas.hidden = false; image.hidden = true; $("#btn-turntable").textContent = "Planche PNG";
     $("#model-flat").checked = false; $("#model-wire").checked = false;
-    $("#model-upscale").value = "native";
+    $("#model-upscale").value = state.settings?.viewer_upscale || "native";
     viewStatus.textContent = "Chargement de la géométrie complète…";
     try {
       const viewport = new ModelViewport(canvas, {
-        textured: $("#model-tex").checked, revision: info.revision,
+        textured: $("#model-tex").checked, revision: info.revision, renderSettings: settingsOrDefault(),
         onStatus: (message) => { if (modelViewport === viewport) viewStatus.textContent = message; },
         onFailure: failView,
         onModeFallback: () => { if (modelViewport === viewport) $("#model-upscale").value = "native"; },
@@ -817,6 +874,7 @@ async function openModel(rel, options = {}) {
       });
       modelViewport = viewport;
       modelViewportForCleanup = viewport;
+      void viewport.setMode(state.settings?.viewer_upscale || "native");
       modelReady = viewport.load(`/api/model/geometry?path=${encodeURIComponent(rel)}`).catch((error) => {
         if (modelViewport === viewport) failView(`Vue 3D indisponible : ${error.message}`);
       });
@@ -852,6 +910,11 @@ async function openModel(rel, options = {}) {
     viewStatus.textContent = "Planche PNG fixe · toutes les faces décodées";
   };
   $("#btn-export-model").onclick = () => exportModel(rel);
+  $("#btn-compose-player").onclick = () => {
+    const animationRel = animFile?.value || "";
+    const animationIndex = animClip?.value ? Number(animClip.value) : null;
+    openPlayer(rel, { animationRel, animationIndex });
+  };
   $("#btn-export-animations").onclick = () => exportAllAnimations(rel);
   $("#btn-uv").onclick = () => showUv(rel);
   $$("[data-open-texture]", document).forEach((node) => {
@@ -913,6 +976,7 @@ async function openAnimation(rel) {
       ${models.map((m) => `<option data-no-i18n value="${esc(m.rel)}" ${m === candidate ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
     <div class="actions"><button class="btn primary" type="button" id="animation-open-model" ${clips.length && models.length ? "" : "disabled"}>
       Ouvrir le modèle et lire</button>
+      <button class="btn" type="button" id="animation-open-player" ${clips.length && models.length ? "" : "disabled"}>Composer dans Player</button>
       <a class="btn" id="animation-download" download="animation.json">Exporter les courbes JSON</a></div>
     <p class="hint">Association par nom proposée à titre indicatif. Ouvre un modèle : le bouton de GLB groupé inclura tous les clips de ce fichier et ceux suggérés pour le modèle. OBJ/MTL restent statiques et les fichiers du jeu ne sont pas modifiés.</p>`);
   const clipSelect = $("#animation-clip"), download = $("#animation-download");
@@ -925,6 +989,11 @@ async function openAnimation(rel) {
     const model = $("#animation-model").value;
     if (!model || !clipSelect.value) { toast("Choisis un modèle et un clip.", "error"); return; }
     void openModel(model, { animationRel: rel, animationIndex: Number(clipSelect.value) });
+  };
+  $("#animation-open-player").onclick = () => {
+    const model = $("#animation-model").value;
+    if (!model || !clipSelect.value) { toast("Choisis un modèle et un clip.", "error"); return; }
+    openPlayer(model, { animationRel: rel, animationIndex: Number(clipSelect.value) });
   };
   ensureTab({ id: `animation:${rel}`, kind: "animation", label: filename, doc: { type: "animation", rel } });
   state.tab = `animation:${rel}`; renderTabs();
@@ -1271,6 +1340,7 @@ function openMob(slug) {
 }
 
 function openDoc(doc) {
+  if (state.view === "player") showView("models", { tab: false });
   if (doc.type === "model") return openModel(doc.rel);
   if (doc.type === "texture") return openTexture(doc.rel, doc.index || 0);
   if (doc.type === "sound") return openSound(doc.rel);
@@ -1447,6 +1517,8 @@ function settingsOrDefault() {
     vram_gb: 6, vram_max_gb: 25, vram_min_gb: 1, supersample: 2,
     cull: true, frustum: true, adaptive: true, max_faces: null, lod: 0,
     accent: "azur", density: "confort", theme: "light", language: "fr", export_textures: true, thumb_faces: null,
+    viewer_upscale: "native", fsr_quality: "quality", fsr_sharpness: 0.65, viewer_msaa: "4",
+    viewer_dpr: "2", viewer_fps: "60", viewer_limit: "1600",
     accents: ["menthe", "azur", "ambre", "framboise"], densities: ["confort", "compact"],
   };
 }
@@ -1475,6 +1547,14 @@ function renderSettings() {
   $("#set-cull").checked = settings.cull;
   $("#set-frustum").checked = settings.frustum;
   $("#set-adaptive").checked = settings.adaptive;
+  $("#set-viewer-upscale").value = settings.viewer_upscale || "native";
+  $("#set-fsr-quality").value = settings.fsr_quality || "quality";
+  $("#set-fsr-sharp").value = settings.fsr_sharpness ?? 0.65;
+  $("#set-fsr-sharp-out").textContent = `${Math.round((settings.fsr_sharpness ?? 0.65) * 100)} %`;
+  $("#set-viewer-msaa").value = settings.viewer_msaa || "4";
+  $("#set-viewer-dpr").value = settings.viewer_dpr || "2";
+  $("#set-viewer-fps").value = settings.viewer_fps || "60";
+  $("#set-viewer-limit").value = settings.viewer_limit || "1600";
 
   $("#set-theme").value = settings.theme || "light";
   $("#set-language").value = settings.language || "fr";
@@ -1523,6 +1603,7 @@ function saveSettings(patch, options = {}) {
   state.settings = { ...settingsOrDefault(), ...patch };
   applyUiSettings(state.settings);
   renderSettings();
+  if (typeof applyViewerSettings === "function") applyViewerSettings();
   // Regrouper toutes les modifications rapprochées, pas seulement la dernière.
   Object.assign(settingsPending, patch);
   settingsNotify ||= !options.quiet;
@@ -1605,6 +1686,13 @@ function wireSettings() {
   on("#set-cull", "onchange", (event) => saveSettings({ cull: event.target.checked }));
   on("#set-frustum", "onchange", (event) => saveSettings({ frustum: event.target.checked }));
   on("#set-adaptive", "onchange", (event) => saveSettings({ adaptive: event.target.checked }));
+  on("#set-viewer-upscale", "onchange", (event) => saveSettings({ viewer_upscale: event.target.value }));
+  on("#set-fsr-quality", "onchange", (event) => saveSettings({ fsr_quality: event.target.value }));
+  on("#set-fsr-sharp", "oninput", (event) => saveSettings({ fsr_sharpness: Number(event.target.value) }));
+  on("#set-viewer-msaa", "onchange", (event) => saveSettings({ viewer_msaa: event.target.value }));
+  on("#set-viewer-dpr", "onchange", (event) => saveSettings({ viewer_dpr: event.target.value }));
+  on("#set-viewer-fps", "onchange", (event) => saveSettings({ viewer_fps: event.target.value }));
+  on("#set-viewer-limit", "onchange", (event) => saveSettings({ viewer_limit: event.target.value }));
   on("#set-accent", "onchange", (event) => saveSettings({ accent: event.target.value }));
   on("#set-density", "onchange", (event) => saveSettings({ density: event.target.value }));
   on("#set-theme", "onchange", (event) => saveSettings({ theme: event.target.value }));
@@ -1627,6 +1715,8 @@ function wireSettings() {
     vram_gb: 6, supersample: 2, cull: true, frustum: true, adaptive: true,
     max_faces: null, lod: 0, accent: "azur", density: "confort", theme: "light", language: "fr",
     export_textures: true, thumb_faces: null, preview_faces: 0, cache_mb: 256,
+    viewer_upscale: "native", fsr_quality: "quality", fsr_sharpness: 0.65,
+    viewer_msaa: "4", viewer_dpr: "2", viewer_fps: "60", viewer_limit: "1600",
   }, { quiet: false }));
 }
 
@@ -2138,6 +2228,7 @@ function paletteCommands() {
     { label: "HookyMod's", group: "vue", run: () => showView("studio") },
     { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
+    { label: "Aller à Player", group: "vue", run: () => showView("player") },
     { label: "Aller aux animations", group: "vue", run: () => showView("animations") },
     { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
     { label: "Aller aux sons", group: "vue", run: () => showView("sounds") },
@@ -2389,6 +2480,7 @@ async function rescanProject() {
     renderStatus();
     if (state.view === "models") await renderModels();
     if (state.view === "ensembles") await renderEnsembles();
+    if (state.view === "player") window.HookyPlayer?.refresh();
     if (state.view === "textures") await renderTextures();
     if (state.view === "animations") renderAnimations();
     if (state.view === "videos") renderVideos();
@@ -2525,6 +2617,7 @@ async function refresh(options = {}) {
   if (state.view === "create") renderCreation();
   if (state.view === "models") await renderModels();
   if (state.view === "ensembles") await renderEnsembles();
+  if (state.view === "player") window.HookyPlayer?.refresh();
   if (state.view === "textures") await renderTextures();
   if (state.view === "animations") renderAnimations();
   if (state.view === "videos") renderVideos();
@@ -2585,6 +2678,8 @@ function handleTileNavigation(event) {
 
 function wire() {
   window.HookyStudio?.wire({ api, toast });
+  window.HookyPlayer?.wire({ api, toast, getAssets: () => state.project?.assets || [],
+    getSettings: settingsOrDefault, getRevision: () => state.project?.image_revision || "" });
   let paused = false;
   try { paused = localStorage.getItem("hooky-thumbnails-paused") === "1"; }
   catch (_) { /* stockage facultatif */ }
@@ -2625,6 +2720,17 @@ function wire() {
     state.shown.ensembles = 48;
     renderEnsembles();
   });
+  onInputDebounced("#ensemble-animation-search", renderEnsembleAssociations);
+  $("#ensemble-animation").onchange = (event) => {
+    state.ensembleAnimation = event.target.value;
+    renderEnsembleAssociations();
+  };
+  $("#ensemble-associations").onclick = (event) => {
+    const button = event.target.closest("[data-ensemble-model], [data-ensemble-player]");
+    if (!button || !state.ensembleAnimation) return;
+    if (button.dataset.ensemblePlayer) openPlayer(button.dataset.ensemblePlayer, { animationRel: state.ensembleAnimation });
+    else if (button.dataset.ensembleModel) void openModel(button.dataset.ensembleModel, { animationRel: state.ensembleAnimation });
+  };
   onInputDebounced("#search-sound", (value) => {
     state.filters.sounds = value.trim().toLowerCase();
     state.shown.sounds = 48;

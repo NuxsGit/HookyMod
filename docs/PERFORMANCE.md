@@ -31,8 +31,10 @@ ou de délai dépassé, un changement de projet est annulé et la fermeture dema
 confirmation. Les sauvegardes restent **best-effort** en cas de crash, arrêt
 forcé, panne électrique ou fermeture brutale du navigateur. Les fichiers choisis
 dans les boîtes d'import, les tâches d'export en cours, la lecture audio, le
-plein écran et les positions/taille de fenêtre ne sont pas restaurés. La session
-est limitée à 64 onglets, 5 000 éléments sélectionnés et 4 Mio ; les saisies
+plein écran et les positions/taille de fenêtre ne sont pas restaurés. La vue
+Player peut être rouverte, mais sa composition temporaire n'est pas enregistrée
+après rechargement ou fermeture ; elle est seulement conservée entre les vues
+pendant la session ouverte. La session est limitée à 64 onglets, 5 000 éléments sélectionnés et 4 Mio ; les saisies
 sont limitées à 2 048 caractères par champ. Une erreur d'écriture est affichée.
 Ne pas considérer cette fonctionnalité comme une sauvegarde de sécurité du dump
 ou du dossier de travail.
@@ -60,6 +62,14 @@ ou du dossier de travail.
   elle est bornée séparément du budget des PNG CPU. Les vignettes sans réduction
   de faces peuvent être plus lentes qu'auparavant. Le FSR 1 expérimental réduit la
   résolution de rendu, pas le nombre de triangles ni le temps de décodage BFRES.
+  Ses niveaux (77/67/59/50 % par dimension), la netteté, le MSAA, la densité, la
+  taille du canvas et le plafond de rafraîchissement des animations sont réglables.
+  Aucun gain de performance n'est garanti : compare avec le mode natif.
+- Player cumule les limites de géométrie (128 Mio, 2 millions de sommets,
+  4 millions de triangles), de skins (64 Mio) et de textures (16) pour toutes
+  ses couches, y compris les ressources temporaires d'un remplacement. La vue
+  libère ses ressources GPU quand on la quitte et recharge la composition en y
+  revenant. Ce n'est pas le budget mémoire du rendu PNG.
 
 Sur trois modèles réels fournis séparément (2 148, 39 679 et 43 160 triangles),
 les indices LOD 0 des exports glTF/OBJ ont été comparés aux maillages décodés.
@@ -75,17 +85,20 @@ textures réelles et ne prouve pas la fidélité en jeu.
 Sur Linux x86-64 avec Node.js ≥ 22.17 et les bibliothèques système Chromium
 (notamment `libnss3` et `libnspr4`), les dépendances isolées et verrouillées dans
 `tools/webgl/` permettent d'exercer la géométrie complète, les albédos, les UV,
-les passes EASU/RCAS, le fil de fer et le repli après erreur de shader. Un second
-parcours démarre le véritable backend sur un projet temporaire synthétique :
-langues et thèmes persistés, animation reliée à un modèle avec mouvement visible
-des pixels, lecture et téléchargements audio/vidéo, remplacements avec
-confirmation et vérification des originaux :
+les passes EASU/RCAS, les quatre niveaux FSR, les limites de résolution et de
+mémoire, le fil de fer, les skins indépendants, les attaches et les replis. Deux
+autres parcours démarrent le véritable backend sur des projets temporaires
+synthétiques : Player, recherche de modèles par animation, tenue animée visible,
+suivi de racine, changements rapides, rescans, restauration entre vues et
+conservation des originaux ; puis langues et thèmes, animation, lecture et
+téléchargements audio/vidéo et remplacements :
 
 ```bash
 python -m pip install -r requirements.txt
 npm ci --prefix tools/webgl --ignore-scripts --no-audit --no-fund
 CHROMIUM=$(node --input-type=module -e "import c from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await c.executablePath())")
 HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_webgl.js
+HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_player.js
 HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
 # Facultatif : refaire le parcours média avec un sidecar Linux déjà construit.
 HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-x86_64-unknown-linux-gnu" \
@@ -96,8 +109,10 @@ Le parcours avec sidecar teste aussi la connexion par jeton, le cookie HttpOnly
 et la politique de sécurité HTTP ; il utilise toujours Chromium, pas une fenêtre
 Tauri. Ces tests utilisent SwiftShader, pas une carte physique. Avec un autre navigateur
 Chromium compatible et `playwright-core`, `HOOKY_CHROMIUM` et `HOOKY_PLAYWRIGHT`
-peuvent désigner leurs chemins respectifs. Le parcours Tauri natif est distinct
-et décrit dans [DESKTOP.md](DESKTOP.md).
+peuvent désigner leurs chemins respectifs ; `HOOKY_PYTHON` peut pointer vers
+l'interpréteur de l'environnement virtuel. Player et ses compositions n'ont pas
+été validés avec des assets du jeu. Le parcours Tauri natif est distinct et décrit
+dans [DESKTOP.md](DESKTOP.md).
 
 ## Mesurer chez soi
 

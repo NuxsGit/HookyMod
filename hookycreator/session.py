@@ -22,7 +22,7 @@ MAX_BYTES = 4 * 1024 * 1024
 MAX_TEXT = 2048
 MAX_TABS = 64
 MAX_SELECTION = 5000
-VIEWS = frozenset({"home", "edit", "create", "studio", "models", "ensembles", "textures",
+VIEWS = frozenset({"home", "edit", "create", "studio", "models", "ensembles", "player", "textures",
                    "sounds", "animations", "videos", "mobs", "import", "settings"})
 TEXT_FIELDS = frozenset({"search", "search-tex", "search-ens", "search-sound", "search-animation", "search-video", "tex-role",
                          "mod-name", "mob-name", "mob-parent", "mob-resource-search",

@@ -14,19 +14,19 @@ const web = path.resolve(__dirname, "../hookycreator/web");
 const redBlue = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR4nGP4z8DwHxkzYAig8TEFACxQH+H1DG8tAAAAAElFTkSuQmCC", "base64");
 const green = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAD0lEQVR4nGNg+I8GSRcAACxQH+H81I9XAAAAAElFTkSuQmCC", "base64");
 
-function geometry() {
-  const materials = ["A", "B"];
+function geometry(materials = ["A", "B"]) {
   const header = Buffer.from(JSON.stringify({ version: 1, meshes: materials.map((name, index) => ({
     name, material: name, vertices: 4, triangles: 2, normals: true, uvs: true,
-    texture: { path: `Tex/${name}.bntx`, index },
+    texture: name === "A" || name === "B" ? { path: `Tex/${name}.bntx`, index } : null,
   })) }));
   const start = Math.ceil((8 + header.length) / 4) * 4;
-  const blob = Buffer.alloc(start + 2 * (12 + 12 + 8 + 6) * 4);
+  const blob = Buffer.alloc(start + materials.length * (12 + 12 + 8 + 6) * 4);
   blob.write("H3D1"); blob.writeUInt32LE(header.length, 4); header.copy(blob, 8);
   let cursor = start;
   const floats = (values) => { for (const value of values) { blob.writeFloatLE(value, cursor); cursor += 4; } };
   const ints = (values) => { for (const value of values) { blob.writeUInt32LE(value, cursor); cursor += 4; } };
-  for (const left of [-1, 0]) {
+  for (const [index] of materials.entries()) {
+    const left = materials.length === 1 ? -.5 : index - 1;
     floats([left,-.5,0, left+1,-.5,0, left+1,.5,0, left,.5,0]);
     floats([0,0,1, 0,0,1, 0,0,1, 0,0,1]);
     floats([0,1, 1,1, 1,0, 0,0]);
@@ -36,19 +36,20 @@ function geometry() {
   return blob;
 }
 
-function skin() {
-  const bone = { name: "Root", parent: -1, scale: [1,1,1], rotation: [0,0,0,1], translation: [0,0,0],
+function skin(materials = ["A", "B"], boneName = "Root") {
+  const bone = { name: boneName, parent: -1, scale: [1,1,1], rotation: [0,0,0,1], translation: [0,0,0],
     inverse: [1,0,0,0, 0,1,0,0, 0,0,1,0], ssc: false };
   const header = Buffer.from(JSON.stringify({ version: 1, bones: [bone],
-    meshes: [{ name: "A", vertices: 4 }, { name: "B", vertices: 4 }] }));
-  const start = Math.ceil((8 + header.length) / 4) * 4, blob = Buffer.alloc(start + 2 * 4 * 24);
+    meshes: materials.map((name) => ({ name, vertices: 4 })) }));
+  const start = Math.ceil((8 + header.length) / 4) * 4, blob = Buffer.alloc(start + materials.length * 4 * 24);
   blob.write("H3S1"); blob.writeUInt32LE(header.length, 4); header.copy(blob, 8);
-  for (let i = 0; i < 2; i += 1) for (let j = 0; j < 4; j += 1) blob[start + i*96 + 64 + j*8] = 255;
+  for (let i = 0; i < materials.length; i += 1) for (let j = 0; j < 4; j += 1) blob[start + i*96 + 64 + j*8] = 255;
   return blob;
 }
 
 async function main() {
-  const blob = geometry(), skinBlob = skin();
+  const blob = geometry(), skinBlob = skin(), outfitBlob = geometry(["C"]);
+  const outfitSkin = skin(["C"]), incompatibleSkin = skin(["C"], "Other");
   const files = new Set(["model_viewer.js", "model_animation.js", "i18n.js", "shaders/common.glsl", "shaders/easu.frag.glsl",
     "shaders/rcas.frag.glsl", "shaders/fullscreen.vert.glsl"]);
   const server = http.createServer((request, response) => {
@@ -65,13 +66,16 @@ async function main() {
         + '<div id="summary"></div><div id="animation"></div><div id="validation"></div>'
         + '<script src="/static/i18n.js"></script></body></html>');
     }
-    if (url.pathname === "/skin") {
-      response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": skinBlob.length });
-      return response.end(skinBlob);
-    }
-    if (url.pathname === "/geometry") {
-      response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": blob.length });
-      return response.end(blob);
+    const binary = { "/skin": skinBlob, "/skin-c": outfitSkin, "/skin-other": incompatibleSkin,
+      "/geometry": blob, "/geometry-c": outfitBlob, "/slow-geometry": outfitBlob }[url.pathname];
+    if (binary) {
+      const send = () => {
+        if (response.destroyed) return;
+        response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": binary.length });
+        response.end(binary);
+      };
+      if (url.pathname === "/slow-geometry") setTimeout(send, 250); else send();
+      return;
     }
     if (url.pathname === "/api/texture/png") {
       const asset = url.searchParams.get("path"), index = url.searchParams.get("index");
@@ -147,6 +151,99 @@ async function main() {
     assert.equal(animated.matched, 1); assert.equal(animated.missing, 0);
     assert.equal(animated.triangles, 4); assert.equal(animated.error, 0);
     assert.ok(animated.different > 100, JSON.stringify(animated));
+
+    // Player composition: each outfit must use its own geometry AND its own
+    // skin. The fixture C has one mesh, while the base has two; sharing the
+    // base skin would be rejected. These are entirely synthetic assets.
+    const composition = await page.evaluate(async () => {
+      const v = window.viewer, gl = v.gl;
+      const clip = { frames: 10, fps: 30, loop: true, bones: [{ name: "Root", base: {}, ssc: false,
+        curves: [{ target: "translation.x", interpolation: "cubic", frames: [0,10], values: [0,.5], slopes: [.05,.05] }] }] };
+      await v.setAnimation("/skin", clip); v.playAnimation(false);
+      const body = await v.setLayer("body", { geometryUrl: "/geometry-c", skinUrl: "/skin-c", mode: "skin" });
+      const independent = v.layers.get("body").skin !== v.skin && v.layers.get("body").skin.meshes.length === 1
+        && v.skin.meshes.length === 2 && v.layers.get("body").binding.matched === 1;
+      v.setBaseVisible(false);
+      function capture(frame) {
+        v.seekAnimation(frame); v.draw();
+        const pixels = new Uint8Array(v.canvas.width * v.canvas.height * 4);
+        gl.readPixels(0, 0, v.canvas.width, v.canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        return pixels;
+      }
+      const first = capture(0), last = capture(8);
+      let outfitMotion = 0;
+      for (let i = 0; i < first.length; i += 1) if (first[i] !== last[i]) outfitMotion += 1;
+      let mismatch = "";
+      const savedBody = v.layers.get("body");
+      try { await v.setLayer("body", { geometryUrl: "/geometry-c", skinUrl: "/skin", mode: "skin" }); }
+      catch (error) { mismatch = error.message; }
+      const mismatchPreserved = v.layers.get("body") === savedBody;
+      const badTracks = await v.setLayer("head", { geometryUrl: "/geometry-c", skinUrl: "/skin-other", mode: "skin" });
+      const attached = await v.setLayer("right", { geometryUrl: "/geometry-c", mode: "bone", bone: "Root",
+        offset: [.25,0,0], rotation: [0,0,0], scale: 1 });
+      v.seekAnimation(0); v.draw();
+      const loc = gl.getUniformLocation(v.scene, "u_attachment");
+      const x0 = gl.getUniform(v.scene, loc)[12];
+      v.seekAnimation(8); v.draw();
+      const x8 = gl.getUniform(v.scene, loc)[12];
+      v.removeLayer("head");
+      const original = gl.drawElements.bind(gl), counts = [];
+      gl.drawElements = (...args) => { counts.push(args[1]); return original(...args); };
+      v.draw(); gl.drawElements = original;
+      const hiddenDrawn = counts.reduce((a, b) => a + b, 0);
+
+      const oldBytes = v.geometryBytes; v.geometryBytes = 128 * 1024 * 1024;
+      let geometryLimit = "";
+      try { await v.setLayer("left", { geometryUrl: "/geometry-c", mode: "static" }); }
+      catch (error) { geometryLimit = error.message; }
+      v.geometryBytes = oldBytes;
+      const oldSkinBytes = v.skinBytes; v.skinBytes = 64 * 1024 * 1024;
+      let skinLimit = "";
+      try { await v.setLayer("left", { geometryUrl: "/geometry-c", skinUrl: "/skin-c", mode: "skin" }); }
+      catch (error) { skinLimit = error.message; }
+      v.skinBytes = oldSkinBytes;
+
+      // An invalid later request must cancel the old pending replacement while
+      // keeping the already installed outfit, not commit the delayed result.
+      const slow = v.setLayer("body", { geometryUrl: "/slow-geometry", mode: "static" });
+      let invalid = "";
+      try { await v.setLayer("body", { geometryUrl: "/geometry-c", mode: "bone", bone: "Missing" }); }
+      catch (error) { invalid = error.message; }
+      const slowResult = await slow;
+      const stillOld = v.layers.get("body") === savedBody;
+      const previousBuffer = savedBody.parts[0].buffers[0], previousTexture = savedBody.skinTexture;
+      const beforeDelete = gl.isBuffer(previousBuffer) && gl.isTexture(previousTexture);
+      const slowAgain = v.setLayer("body", { geometryUrl: "/slow-geometry", mode: "static" });
+      const replacement = await v.setLayer("body", { geometryUrl: "/geometry-c", mode: "static", offset: [1,0,0] });
+      const superseded = await slowAgain;
+      const freed = !gl.isBuffer(previousBuffer) && !gl.isTexture(previousTexture);
+      const pendingRemove = v.setLayer("left", { geometryUrl: "/slow-geometry", mode: "static" });
+      v.removeLayer("left"); await pendingRemove;
+      const noPending = v.pendingLayers.size === 0 && v.layerRequests.size === 0 && !v.layers.has("left");
+      const removedBuffer = v.layers.get("body").parts[0].buffers[0];
+      v.removeLayer("body"); v.removeLayer("right");
+      const removed = !gl.isBuffer(removedBuffer) && v.layers.size === 0;
+      v.setBaseVisible(true); v.stopAnimation(); v.draw();
+      return { body, independent, outfitMotion, mismatch, mismatchPreserved, badTracks, attached, x0, x8, hiddenDrawn,
+        geometryLimit, skinLimit, invalid, slowResult, stillOld, beforeDelete, replacement, superseded, freed, noPending,
+        removed, error: gl.getError() };
+    });
+    assert.equal(composition.independent, true);
+    assert.equal(composition.body.matched, 1);
+    assert.ok(composition.outfitMotion > 100, JSON.stringify(composition));
+    assert.match(composition.mismatch, /Squelette|correspondent/); assert.equal(composition.mismatchPreserved, true);
+    assert.match(composition.badTracks.warning, /Tenue statique/);
+    assert.equal(composition.attached.bone, "Root");
+    assert.ok(Math.abs(composition.x0 - .25) < .001 && Math.abs(composition.x8 - .65) < .001, JSON.stringify(composition));
+    assert.equal(composition.hiddenDrawn, 12);
+    assert.match(composition.geometryLimit, /Composition trop volumineuse/);
+    assert.match(composition.skinLimit, /Skins de la composition/);
+    assert.match(composition.invalid, /os reconnu/);
+    assert.equal(composition.slowResult, null); assert.equal(composition.stillOld, true);
+    assert.equal(composition.beforeDelete, true); assert.equal(composition.replacement.mode, "static");
+    assert.equal(composition.superseded, null); assert.equal(composition.freed, true);
+    assert.equal(composition.noPending, true); assert.equal(composition.removed, true); assert.equal(composition.error, 0);
+
     const box = await page.locator("#view").boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2 + 20);
@@ -180,6 +277,44 @@ async function main() {
     assert.ok(fsr.different > 100, JSON.stringify(fsr));
     assert.ok(fsr.red > 100 && fsr.blue > 100 && fsr.green > 100 && fsr.redY > fsr.blueY, JSON.stringify(fsr));
     assert.ok(fsr.size[0] < fsr.size[2] && fsr.size[1] < fsr.size[3]);
+
+    const profiles = await page.evaluate(async () => {
+      const v = window.viewer, gl = v.gl, result = [];
+      for (const [quality, scale] of [["ultra", .77], ["quality", .67], ["balanced", .59], ["performance", .5]]) {
+        await v.configure({ viewer_upscale: "fsr", fsr_quality: quality, fsr_sharpness: .8, viewer_msaa: "off" });
+        v.draw();
+        result.push({ quality, scale, input: [v.targets.input.width, v.targets.input.height],
+          output: [v.canvas.width, v.canvas.height], msaa: Boolean(v.targets.input.msaa),
+          sharpness: gl.getUniform(v.fsr.rcas, gl.getUniformLocation(v.fsr.rcas, "u_sharpness")), error: gl.getError() });
+      }
+      await v.configure({ viewer_upscale: "fsr", fsr_quality: "quality", viewer_msaa: "2" }); v.draw();
+      const msaa = { requested: Boolean(v.targets.input.msaa), max: gl.getParameter(gl.MAX_SAMPLES), error: gl.getError() };
+      const descriptor = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+      Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
+      try {
+        await v.configure({ viewer_upscale: "native", viewer_dpr: "1", viewer_limit: "1600" }); v.draw();
+        const dpr1 = [v.canvas.width, v.canvas.height];
+        await v.configure({ viewer_upscale: "native", viewer_dpr: "2", viewer_limit: "1600" }); v.draw();
+        const dpr2 = [v.canvas.width, v.canvas.height];
+        v.canvas.style.width = "1400px"; v.canvas.style.height = "900px";
+        await v.configure({ viewer_upscale: "native", viewer_dpr: "2", viewer_limit: "800", viewer_fps: "15" }); v.draw();
+        const capped = [v.canvas.width, v.canvas.height], fps = v.renderSettings.viewer_fps;
+        v.canvas.style.width = "400px"; v.canvas.style.height = "300px";
+        return { result, msaa, dpr1, dpr2, capped, fps, error: gl.getError() };
+      } finally {
+        if (descriptor) Object.defineProperty(window, "devicePixelRatio", descriptor);
+        else delete window.devicePixelRatio;
+        await v.configure({ viewer_upscale: "fsr", fsr_quality: "quality" }); v.draw();
+      }
+    });
+    for (const profile of profiles.result) {
+      assert.deepEqual(profile.input, profile.output.map((value) => Math.max(1, Math.round(value * profile.scale))));
+      assert.equal(profile.msaa, false); assert.ok(Math.abs(profile.sharpness - .8) < .001); assert.equal(profile.error, 0);
+    }
+    assert.equal(profiles.msaa.requested, profiles.msaa.max >= 2); assert.equal(profiles.msaa.error, 0);
+    assert.deepEqual(profiles.dpr1, [400, 300]); assert.deepEqual(profiles.dpr2, [800, 600]);
+    assert.deepEqual(profiles.capped, [800, 514]); assert.equal(profiles.fps, 15); assert.equal(profiles.error, 0);
+
     const wires = await page.evaluate(() => {
       const v = window.viewer, gl = v.gl, original = gl.drawElements.bind(gl), counts = [];
       v.setWire(true); gl.drawElements = (...args) => { counts.push([args[0], args[1]]); return original(...args); };
@@ -239,6 +374,12 @@ async function main() {
         assert.ok(!audioDialog.startsWith("Remplacer"));
         assert.ok(!buildDialog.startsWith("Assembler"));
         assert.ok(!(await translated.locator("#validation").innerText()).includes("vérifié"));
+        const viewStatus = await translated.evaluate(() => HookyI18n.translate(
+          "42 triangles · FSR 1 expérimental · 50 % · image plafonnée à 800 px / densité ×1 · plus de 16 textures : certaines non affichées · albédos limités à 1 024 px dans la vue"));
+        assert.ok(!viewStatus.includes("expérimental") && !viewStatus.includes("plafonnée")
+          && !viewStatus.includes("non affichées") && !viewStatus.includes("albédos"), viewStatus);
+        const diagnostic = await translated.evaluate(() => HookyI18n.translate("Non restauré : User/Example.bfres"));
+        assert.ok(diagnostic.includes("User/Example.bfres") && !diagnostic.startsWith("Non restauré"));
       }
     }
     await translated.close();
@@ -251,7 +392,7 @@ async function main() {
       return { lostBeforeClosing, released: view.contextReleased, lostAfterClosing: gl.isContextLost() };
     });
     assert.deepEqual(cleanup, { lostBeforeClosing: false, released: true, lostAfterClosing: true });
-    console.log("WebGL2 / FSR 1 smoke: OK — triangles, textures, UV, skin animation, fallback, cleanup and four UI languages");
+    console.log("WebGL2 / FSR 1 smoke: OK — profiles, triangles, textures, independent skins, attachments, limits, races, fallback and cleanup");
   } finally {
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));

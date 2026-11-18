@@ -17,7 +17,7 @@
 
 **HookyCreator** is HookyMod's local visual workspace for exploring user-supplied models, textures, sounds, animations and WebM videos, making standard exports, and assembling working copies. A Python/Tk explorer and command-line tools are also available.
 
-**HookyMod's** is a separate design workspace within the same application for imagining new items, cutscenes, dungeons and buildings. The workspace currently exports **non-playable design projects** as `.hooky`. A separate experimental reference tool can also package already prepared mod files as `.hooky`; it does not generate or validate playable content. This is unreleased development work; the existing 11.26.1-beta installers predate it.
+**HookyMod's** is a separate design workspace within the same application for imagining new items, cutscenes, dungeons and buildings. The workspace currently exports **non-playable design projects** as `.hooky`. A separate experimental source-only reference tool can also package already prepared mod files as `.hooky`; it does not generate or validate playable content. The older 11.26.1-beta installers predate the workspace.
 
 > [!IMPORTANT]
 > No game, game assets, dictionaries, cryptographic keys or game executable are intentionally supplied. Bring your own files obtained lawfully and check your rights before using or sharing them. Tests use synthetic fixtures and do not require game files. No decryption capability or keys are supplied. The supplied project logo is kept at the maintainer's request; its origin and rights have not been verified.
@@ -30,7 +30,7 @@ HookyMod is an independent project, not affiliated with or endorsed by Team Magi
 
 ## Project status
 
-HookyMod 11.26.1 is a beta. Format support is partial; a successful export, replacement or package does not guarantee visual accuracy or in-game compatibility. The planned Linux, Windows and macOS installers are unsigned, and macOS notarization and interactive window testing remain unverified. Check the rights and dependency notices before distributing any binary.
+HookyMod 11.26.2 is a public release with experimental features. Format support is partial; a successful export, replacement or package does not guarantee visual accuracy or in-game compatibility. The Linux, Windows and macOS installers are unsigned, and macOS notarization and interactive window testing remain unverified. Check the rights and dependency notices before distributing any binary.
 
 | Area | Current support and limits |
 | --- | --- |
@@ -39,6 +39,7 @@ HookyMod 11.26.1 is a beta. Format support is partial; a successful export, repl
 | Models | Inspect and export GLB / glTF / OBJ with available textures. Geometry injection is restricted to some BFRES 9.x targets; BFRES 10.x injection, rig injection and morphs are not supported. |
 | Textures | Preview, export PNG and replace supported BNTX images. ASTC and BC7 encoding is not available. |
 | Animations | Preview supported BFRES 10.x FSKA Euler clips, export curves as JSON, or experimentally export clips with their skin: one selected clip in GLB/glTF, or detected clips together in one GLB. OBJ/MTL and batch exports are static; animation injection is not supported. |
+| Collections and Player | Find name-based model/outfit suggestions for an animation and temporarily compose a character with separately skinned outfits or bone-attached items. These are experimental previews, not validated in-game assemblies or exports. |
 | Audio and video | Experimental BWAV conversion and replacement, plus WebM preview and replacement. Game compatibility is not validated. |
 | Mod assembly | Collect working copies and preparatory mob records. It does not create playable actors or update RESTBL automatically. Building deletes and recreates `mods/<name>` without a backup. |
 | Desktop | CI targets Tauri and a standalone backend on Windows, Linux and macOS. Packages are experimental; the macOS window has not been tested interactively. |
@@ -61,7 +62,7 @@ python -m pip install -r requirements.txt
 python -m hookycreator /path/to/romfs --host 127.0.0.1 --open
 ```
 
-The workspace opens at `http://127.0.0.1:8765/`. Keeping `--host 127.0.0.1` restricts the browser server to the local machine; do not expose it to an untrusted network. A folder of extracted assets can be used instead of a `romfs`. Add `--work /path/to/work` to choose where working copies and caches are stored.
+The workspace opens at `http://127.0.0.1:8765/` and listens only on loopback by default. The browser server checks the local host and cross-origin requests; write actions require JSON POSTs. Scripts using the old GET write routes must switch to POST. An explicitly chosen non-local `--host` exposes an **unauthenticated** server: do not use it on an untrusted network. A folder of extracted assets can be used instead of a `romfs`. Add `--work /path/to/work` to choose where working copies and caches are stored.
 
 The original explorer is available with `python AssetViewer.py`. For the native Tauri window and standalone backend, follow [docs/DESKTOP.md](docs/DESKTOP.md). These builds are not necessarily signed; platform security warnings can appear.
 
@@ -81,6 +82,12 @@ Create a workspace from the **HookyMod's** tab, add descriptive elements and com
 6. Injection writes a copy under `hookycreator_work/assets/`, not the original. It accepts only one shape and one LOD in certain BFRES 9.x structures, within existing buffer capacity. BFRES 10.x targets, skeletons, morphs, bounds requiring rewriting and unverified structures are refused. A successful re-read does not prove in-game safety.
 
 Provided UVs and normals must be representable by the target. Missing normals are not invented in exports, although a preview may compute face normals. OBJ polygons must be triangulated. Required glTF extensions, compressed buffers, deformations, sparse accessors and network access are not supported. See the [workspace guide](docs/HOOKYCREATOR.md).
+
+### Player and 3D performance
+
+In **Collections**, search for an animation to see candidate models and outfits suggested by their names. Open a character as the base in **Player**, then manually select up to five outfit or item slots and test a supported clip. Outfits use their own skeletons; objects can be attached to a chosen base bone with adjustable transforms. Player can follow a unique root with the camera so large motion stays in frame; turn this off to inspect global movement. Names and age labels are only hints, and **All project models** allows manual selection. Required files can be missed, incompatible outfits are reported, and no game assets are supplied. The composition is temporary, retained between views in the open session but not saved after reload and not included in exports. Real Link models, equipment and animations have not been validated in game. See the [workspace guide](docs/HOOKYCREATOR.md#ensembles-et-player--essayer-une-composition).
+
+**Settings → 3D view & animations** offers native rendering or adjustable experimental **FSR 1**, with per-dimension scene scales of 77%, 67%, 59% and 50%, sharpening, FSR MSAA, pixel-density and canvas caps, and a 15/30/60 fps animation cap. FSR 1 is spatial upscaling, not FSR 4; it does not reduce triangle count or affect PNGs or exports and can be slower on some GPUs. Compare settings on your own hardware.
 
 ### Animations, sounds and video
 

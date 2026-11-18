@@ -7,4 +7,4 @@ navigateur. Les ressources à traiter sont fournies par l'utilisateur.
 from .project import Project, ProjectError, open_project
 
 __all__ = ["Project", "ProjectError", "open_project"]
-__version__ = "11.26.1"
+__version__ = "11.26.2"

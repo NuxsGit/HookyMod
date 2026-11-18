@@ -132,7 +132,7 @@ def run(binary: Path) -> None:
                 # A sidecar built earlier may still start correctly while serving
                 # stale UI assets. Compare the bundled files with this checkout.
                 for name in ("index.html", "style.css", "app.js", "i18n.js", "HookyMod.png",
-                             "model_viewer.js", "model_animation.js", "shaders/common.glsl",
+                             "model_viewer.js", "model_animation.js", "player.js", "shaders/common.glsl",
                              "shaders/easu.frag.glsl", "shaders/rcas.frag.glsl",
                              "shaders/fullscreen.vert.glsl", "shaders/LICENSE-FSR1.txt"):
                     with opener.open(origin + "/static/" + name, timeout=10) as response:

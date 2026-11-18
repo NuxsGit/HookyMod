@@ -19,12 +19,12 @@ WEB = ROOT / "hookycreator" / "web"
 #: éléments fabriqués à la volée par le script (panneau de détail), donc absents
 #: du HTML livré : ils sont créés par showInspector() et ses appelants.
 DYNAMIC_IDS = {
-    "btn-export-model", "btn-export-animations", "btn-export-png", "btn-import", "btn-uv", "texture-index",
+    "btn-export-model", "btn-export-animations", "btn-compose-player", "btn-export-png", "btn-import", "btn-uv", "texture-index",
     "btn-translate-model", "btn-turntable", "copy-command", "file-import",
     "model-budget", "model-budget-note", "model-quality", "model-shot", "model-canvas",
     "model-view-status", "model-reset", "model-fullscreen", "model-flat", "model-wire", "model-tex", "model-upscale",
     "uv-back", "uv-flip", "uv-normal", "uv-shot", "sound-player", "sound-import-btn", "sound-import-file",
-    "animation-clip", "animation-download", "animation-model", "animation-open-model",
+    "animation-clip", "animation-download", "animation-model", "animation-open-model", "animation-open-player",
     "model-animation-file", "model-animation-clip", "model-animation-frame", "model-animation-loop",
     "model-animation-play", "model-animation-status", "model-animation-time",
     "video-player", "video-status", "video-import-btn", "video-import-file",
@@ -51,7 +51,7 @@ class WebContractTests(unittest.TestCase):
         sections = set(re.findall(r'id="view-([a-z]+)"', self.html))
         rail = set(re.findall(r'data-view="([a-z]+)"', self.html))
         labels = set(re.findall(
-            r'^\s+(home|edit|create|studio|models|ensembles|textures|sounds|animations|videos|mobs|import|settings):',
+            r'^\s+(home|edit|create|studio|models|ensembles|player|textures|sounds|animations|videos|mobs|import|settings):',
             self.js, re.M))
         self.assertEqual(sections, rail)
         self.assertTrue(sections <= labels | {"home"})
@@ -154,6 +154,20 @@ class WebContractTests(unittest.TestCase):
         self.assertIn("renderEnsembles", self.js)
         self.assertIn("tex=1", self.js)
 
+    def test_player_and_reverse_animation_lookup_are_wired(self) -> None:
+        player = _read("player.js")
+        self.assertIn('<script src="/static/player.js"></script>', self.html)
+        self.assertIn('data-view="player"', self.html)
+        self.assertIn('id="ensemble-animation"', self.html)
+        self.assertIn('renderEnsembleAssociations', self.js)
+        self.assertIn('data-ensemble-player', self.js)
+        self.assertIn('id="btn-compose-player"', self.js)
+        self.assertIn('window.HookyPlayer?.hide()', self.js)
+        self.assertIn('window.HookyPlayer?.configure(settings)', self.js)
+        used = set(re.findall(r'\$\("#([A-Za-z0-9_-]+)"', player))
+        present = set(re.findall(r'id="([A-Za-z0-9_-]+)"', self.html))
+        self.assertEqual(sorted(used - present), [])
+
     def test_native_engine_status_is_visible_in_settings(self) -> None:
         self.assertIn('id="engine-list"', self.html)
         self.assertIn('id="engine-hint"', self.html)
@@ -214,7 +228,7 @@ class WebContractTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "node absent")
     def test_javascript_parses(self) -> None:
-        for name in ("app.js", "thumbnails.js", "model_viewer.js"):
+        for name in ("app.js", "thumbnails.js", "model_viewer.js", "model_animation.js", "player.js"):
             with self.subTest(name=name):
                 result = subprocess.run(["node", "--check", str(WEB / name)],
                                         capture_output=True, text=True)
@@ -224,6 +238,7 @@ class WebContractTests(unittest.TestCase):
     def test_javascript_behaviour(self) -> None:
         for script, message in (("thumbnail_queue_test.js", "ThumbnailQueue: OK"),
                                 ("model_viewer_test.js", "Model viewer geometry: OK"),
+                                ("player_catalog_test.js", "Player catalog associations: OK"),
                                 ("asset_checks_test.js", "Asset validation queue: OK"),
                                 ("settings_ui_test.js", "Settings UI: OK"),
                                 ("image_revision_ui_test.js", "Image revision UI: OK"),

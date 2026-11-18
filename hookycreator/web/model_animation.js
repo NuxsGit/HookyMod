@@ -130,7 +130,7 @@ const HookyAnimation = (() => {
       (b*f-c*e)*q, (c*d-a*f)*q, (a*e-b*d)*q, 0];
   }
 
-  function palette(binding, frame) {
+  function pose(binding, frame) {
     if (!Number.isFinite(frame)) throw new Error("Temps d'animation invalide.");
     const { skin, tracks } = binding, locals = [], worlds = [], result = new Float32Array(skin.bones.length * 24);
     for (let i = 0; i < skin.bones.length; i += 1) {
@@ -154,10 +154,13 @@ const HookyAnimation = (() => {
       if (!matrix.every(Number.isFinite)) throw new Error("Matrice d'animation non finie.");
       result.set(matrix, i*24); result.set(normalRows(matrix), i*24 + 12);
     }
-    return result;
+    return { palette: result, worlds };
   }
 
-  return { parseSkin, evaluate, bind, palette };
+  function palette(binding, frame) { return pose(binding, frame).palette; }
+  function restPose(skin) { return pose({ skin, tracks: [] }, 0); }
+
+  return { parseSkin, evaluate, bind, palette, pose, restPose };
 })();
 if (typeof window !== "undefined") window.HookyAnimation = HookyAnimation;
 if (typeof module !== "undefined") module.exports = HookyAnimation;

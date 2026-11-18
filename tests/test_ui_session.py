@@ -69,6 +69,15 @@ class SessionStoreTests(unittest.TestCase):
         self.assertNotEqual(self.store.name, other.name)
         self.assertNotIn(str(self.root), self.store.name)
 
+    def test_player_view_is_restored_as_a_normal_view_tab(self):
+        state = snapshot("player")
+        state["active"] = "view:player"
+        self.assertTrue(self.store.save("client_123", 1, state))
+        restored = self.store.load()
+        self.assertEqual(restored["view"], "player")
+        self.assertEqual(restored["active"], "view:player")
+        self.assertIn({"type": "view", "view": "player"}, restored["tabs"])
+
     def test_corrupt_truncated_oversized_or_wrong_root_falls_back(self):
         self.store.save("client_123", 1, snapshot())
         path = self.store._path()

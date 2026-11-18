@@ -2,7 +2,7 @@
 
 Ce document est destiné aux créateurs de mods et aux développeurs de lanceurs. **`.hooky` est le format de HookyMod's**, avec pour objectif de transporter aussi bien des modifications que de nouveaux contenus pour Longshot sur PC. Les identifiants et les versions ci-dessous servent à distinguer les usages : l'extension seule ne suffit pas. Voir aussi la [présentation en anglais pour les développeurs de lanceurs](HOOKY_FORMAT_EN.md).
 
-> **Statut : expérimental, à discuter avec les développeurs des lanceurs avant stabilisation.** L'atelier exporte déjà des projets de conception. Une implémentation de référence distincte, utilisable depuis les sources, peut également emballer et vérifier des fichiers de mod déjà préparés. Elle ne génère pas ces fichiers depuis les blocs visuels. Aucun chargement direct `.hooky` par Link's Tool Box ou le lanceur officiel Longshot, ni compatibilité en jeu, n'a été validé ici. Les installateurs `11.26.1-beta` publiés ne contiennent pas ces nouveautés.
+> **Statut : expérimental, à discuter avec les développeurs des lanceurs avant stabilisation.** L'atelier exporte déjà des projets de conception. Une implémentation de référence distincte, utilisable depuis les sources, peut également emballer et vérifier des fichiers de mod déjà préparés. Elle ne génère pas ces fichiers depuis les blocs visuels. Aucun chargement direct `.hooky` par Link's Tool Box ou le lanceur officiel Longshot, ni compatibilité en jeu, n'a été validé ici. Les anciens installateurs `11.26.1-beta` ne contiennent pas l'atelier ; celui-ci est inclus à partir de 11.26.2.
 
 | Identifiant dans `manifest.json` | Version | Usage actuel | Produit par |
 | --- | --- | --- | --- |

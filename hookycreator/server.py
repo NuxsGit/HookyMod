@@ -16,6 +16,7 @@ import binascii
 import gzip
 import hashlib
 import hmac
+import ipaddress
 import json
 import mimetypes
 import re
@@ -30,6 +31,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from hookymod import audio_codec, bntx, native, restbl, sarc, video, zs
 from hookymod.util import HookyError
 
+from . import __version__
 from . import model_import as model_import_mod
 from . import session as session_mod
 from . import studio as studio_mod
@@ -40,10 +42,10 @@ WEB_DIR = Path(__file__).parent / "web"
 #: routes qui coûtent un rendu CPU (limitées en parallèle)
 IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png")
 
-# Dans la fenêtre native, une navigation GET ne doit jamais modifier le disque.
+# Dans les deux modes, une navigation GET ne doit pas lancer d'action d'écriture.
 # Les routes sont explicites afin qu'une nouvelle action ne devienne pas
 # accidentellement accessible comme image ou lien depuis un autre site.
-DESKTOP_READ_ROUTES = frozenset({
+READ_ROUTES = frozenset({
     "/api/state", "/api/settings", "/api/model/plan", "/api/textures", "/api/models",
     "/api/asset/check", "/api/sound/info", "/api/sound/ogg", "/api/sound/convert", "/api/texture/info",
     "/api/animation/list", "/api/animation/clip", "/api/video/info", "/api/video/stream",
@@ -53,7 +55,7 @@ DESKTOP_READ_ROUTES = frozenset({
     "/api/system", "/api/thumbs/status", "/api/export/download", "/api/ui-state",
     "/api/studio/workspaces", "/api/studio/workspace", "/api/studio/export",
 })
-DESKTOP_WRITE_ROUTES = frozenset({
+WRITE_ROUTES = frozenset({
     "/api/settings", "/api/texture/import", "/api/texture/export", "/api/sound/import", "/api/video/import",
     "/api/model/export", "/api/model/import", "/api/model/inspect", "/api/mobs", "/api/bulk/start",
     "/api/mod/build", "/api/thumbs/warm",
@@ -101,7 +103,7 @@ class HookyCreatorServer:
     """Serveur HTTP + état du projet (un projet à la fois, comme un éditeur)."""
 
     def __init__(self, root: str | Path, work: str | Path | None = None,
-                 host: str = "0.0.0.0", port: int = 8765, *,
+                 host: str = "127.0.0.1", port: int = 8765, *,
                  scan_limit: int = MAX_SCAN_FILES, desktop_token: str | None = None) -> None:
         if desktop_token is not None:
             if host != "127.0.0.1" or port != 0:
@@ -144,7 +146,7 @@ class HookyCreatorServer:
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         if open_browser:
-            webbrowser.open(f"http://127.0.0.1:{self.port}/")
+            webbrowser.open(self.url)
         return self
 
     def stop(self) -> None:
@@ -162,7 +164,10 @@ class HookyCreatorServer:
 
     @property
     def url(self) -> str:
-        return f"http://{self.host}:{self.port}/"
+        # 0.0.0.0 désigne toutes les interfaces pour l'écoute, pas une adresse
+        # utilisable par le navigateur. Conserver la boucle locale comme lien.
+        host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
+        return f"http://{host}:{self.port}/"
 
     # ------------------------------------------------------------------ routes
     def api(self, method: str, route: str, query: dict, body: dict) -> tuple[bytes, str]:
@@ -541,9 +546,18 @@ def _json(payload: dict) -> tuple[bytes, str]:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json"
 
 
+def _loopback_host(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _make_handler(server: HookyCreatorServer):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "HookyCreator/1.0"
+        server_version = f"HookyCreator/{__version__}"
 
         def log_message(self, fmt, *args):        # journal discret
             if "--verbose" in __import__("sys").argv:
@@ -587,8 +601,12 @@ def _make_handler(server: HookyCreatorServer):
             if route == "/api/desktop/session" and method == "POST":
                 return True  # le jeton du premier échange est vérifié séparément
             if not route.startswith("/api/"):
-                return method == "GET"
-            allowed = DESKTOP_READ_ROUTES if method == "GET" else DESKTOP_WRITE_ROUTES
+                if method == "GET":
+                    return True
+                self.close_connection = True
+                self._error("Méthode ou action non autorisée.", 405)
+                return False
+            allowed = READ_ROUTES if method == "GET" else WRITE_ROUTES
             if route not in allowed:
                 self.close_connection = True
                 self._error("Méthode ou action non autorisée.", 405)
@@ -603,6 +621,54 @@ def _make_handler(server: HookyCreatorServer):
             if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token) or not hmac.compare_digest(token, server.desktop_token):
                 self.close_connection = True
                 self._error("Session native absente ou expirée.", 403)
+                return False
+            return True
+
+        def _browser_allowed(self, route: str, method: str) -> bool:
+            """Protéger le serveur navigateur local des requêtes inter-origines.
+
+            Les clients non navigateur peuvent omettre Origin, mais doivent
+            envoyer du JSON pour les POST. Les adresses externes ne sont admises
+            que si l'utilisateur a explicitement choisi une écoute non locale ;
+            dans ce cas il n'y a pas d'authentification réseau.
+            """
+            if server.desktop_token is not None:
+                return True  # le mode natif possède ses propres contrôles et cookie
+            hosts = self.headers.get_all("Host", [])
+            origins = self.headers.get_all("Origin", [])
+            sites = self.headers.get_all("Sec-Fetch-Site", [])
+            valid = len(hosts) == 1 and len(origins) <= 1 and len(sites) <= 1
+            host = hosts[0].lower() if len(hosts) == 1 else ""
+            # Refuser notamment les userinfo, espaces et chemins ambigus dans
+            # Host, tout en acceptant les hôtes transmis par un proxy de preview.
+            if not re.fullmatch(r"(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::[0-9]{1,5})?", host):
+                valid = False
+            try:
+                authority = urlparse(f"http://{host}")
+                hostname = authority.hostname or ""
+                port = authority.port
+            except ValueError:
+                hostname, port, valid = "", None, False
+            local = _loopback_host(server.host)
+            if local:
+                names = {server.host.lower()}
+                if server.host.lower() in ("127.0.0.1", "localhost"):
+                    names.update(("127.0.0.1", "localhost"))
+                if hostname not in names or (port if port is not None else 80) != server.port:
+                    valid = False  # protège aussi contre le DNS rebinding
+            schemes = ("http",) if local else ("http", "https")
+            if origins and origins[0].lower() not in {f"{scheme}://{host}" for scheme in schemes}:
+                valid = False
+            if sites and sites[0] not in ("same-origin", "none"):
+                valid = False
+            if not valid:
+                self.close_connection = True
+                self._error("Origine ou hôte refusé.", 403)
+                return False
+            allowed = READ_ROUTES if method == "GET" else WRITE_ROUTES
+            if (route.startswith("/api/") and route not in allowed) or (method != "GET" and not route.startswith("/api/")):
+                self.close_connection = True
+                self._error("Méthode ou action non autorisée.", 405)
                 return False
             return True
 
@@ -645,7 +711,7 @@ def _make_handler(server: HookyCreatorServer):
 
         def do_GET(self) -> None:                # noqa: N802 (API HTTP)
             parsed = urlparse(self.path)
-            if not self._desktop_allowed(parsed.path, "GET"):
+            if not self._desktop_allowed(parsed.path, "GET") or not self._browser_allowed(parsed.path, "GET"):
                 return
             if parsed.path == "/desktop-login" and server.desktop_token is not None:
                 parsed = parsed._replace(path="/static/desktop-login.html")
@@ -803,14 +869,25 @@ def _make_handler(server: HookyCreatorServer):
 
         def do_POST(self) -> None:               # noqa: N802
             parsed = urlparse(self.path)
-            if not self._desktop_allowed(parsed.path, "POST"):
+            if not self._desktop_allowed(parsed.path, "POST") or not self._browser_allowed(parsed.path, "POST"):
                 return
+            # Aucun formulaire cross-origin ne peut envoyer ce type de contenu
+            # sans preflight, que le serveur ne prend pas en charge.
+            content_types = self.headers.get_all("Content-Type", [])
+            if (parsed.path != "/api/desktop/session"
+                    and (len(content_types) != 1 or self.headers.get_content_type() != "application/json")):
+                self.close_connection = True
+                return self._error("Contenu JSON requis.", 415)
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) > 1 or self.headers.get_all("Transfer-Encoding", []):
+                self.close_connection = True
+                return self._error("Longueur de requête invalide.")
             try:
-                length = int(self.headers.get("Content-Length") or 0)
+                length = int(lengths[0]) if lengths else 0
             except ValueError:
                 self.close_connection = True
                 return self._error("Longueur de requête invalide.")
-            if (length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024)
+            if (length < 0 or length > 128 * 1024 * 1024
                     or (parsed.path == "/api/ui-state" and length > session_mod.MAX_BYTES)
                     or (parsed.path.startswith("/api/studio/") and length > studio_mod.MAX_REQUEST_BYTES)
                     or (parsed.path == "/api/sound/import" and length > ((audio_codec.MAX_IMPORT_BYTES + 2) // 3) * 4 + 4096)
@@ -866,6 +943,8 @@ def _make_handler(server: HookyCreatorServer):
                 body = json.loads(raw.decode("utf-8") or "{}")
             except (ValueError, RecursionError):
                 return self._error("Requête JSON invalide.")
+            if not isinstance(body, dict):
+                return self._error("Objet JSON attendu.")
             if not parsed.path.startswith("/api/"):
                 return self._error("Page inconnue", 404)
             try:
@@ -884,6 +963,6 @@ def _make_handler(server: HookyCreatorServer):
     return Handler
 
 
-def serve(root, work=None, host: str = "0.0.0.0", port: int = 8765,
+def serve(root, work=None, host: str = "127.0.0.1", port: int = 8765,
           open_browser: bool = False, *, scan_limit: int = MAX_SCAN_FILES) -> HookyCreatorServer:
     return HookyCreatorServer(root, work, host, port, scan_limit=scan_limit).start(open_browser)

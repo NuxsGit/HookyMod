@@ -117,7 +117,7 @@ async function ensembleListIsLoadedOnlyOnceWhileFiltering() {
   const state = { view: "ensembles", project: { image_revision: "one" }, ensembles: [],
     filters: { ensembles: "" }, shown: { ensembles: 48 } };
   const ctx = vm.createContext({ $, state, console, esc: String, humanSize: String,
-    ensembleMatches: () => true, ensembleThumb: () => "/image", renderBlenderState() {}, toast() {},
+    ensembleMatches: () => true, ensembleThumb: () => "/image", renderEnsembleAssociations() {}, renderBlenderState() {}, toast() {},
     assetValidation: { setScope() {} }, updateValidatedAssets() {},
     thumbnailQueue: { release: () => work.push("release"), observe: () => work.push("observe") },
     api: () => new Promise((resolve) => requests.push(resolve)),
@@ -218,7 +218,7 @@ async function rescanningUpdatesEnsemblesAndRejectsAnOldList() {
   const staleState = { view: "ensembles", project: { image_revision: "old" }, ensembles: [] };
   const stale = vm.createContext({ $, state: staleState, console,
     api: () => new Promise((done) => { resolve = done; }), renderBlenderState() {},
-    toast() {},
+    renderEnsembleAssociations() {}, toast() {},
   });
   vm.runInContext("let ensembleLoad = null, ensembleRenderSequence = 0;\n" +
     section("async function renderEnsembles()", "async function renderModels()"), stale);

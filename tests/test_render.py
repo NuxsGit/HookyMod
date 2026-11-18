@@ -163,8 +163,9 @@ class ViewCommandTests(unittest.TestCase):
         self.assertEqual(cli._parse_size("800X600"), (800, 600))
         self.assertEqual(cli._parse_size("800, 600"), (800, 600))
         self.assertEqual(cli._parse_size("10x10"), (64, 64))
-        with self.assertRaises(Exception):
-            cli._parse_size("grand")
+        for invalid in ("grand", "800x600x400", "800x600x", "800xx600"):
+            with self.subTest(invalid=invalid), self.assertRaises(util.HookyError):
+                cli._parse_size(invalid)
 
 
 class BfresMeshHelperTests(unittest.TestCase):

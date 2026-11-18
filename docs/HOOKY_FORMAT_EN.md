@@ -2,7 +2,7 @@
 
 HookyMod's owns the `.hooky` format. This draft is intended for discussion with launcher developers, beginning with Link's Tool Box and later the official Longshot launcher. It distinguishes what the repository implements from what remains to be built. The [French reference](HOOKY_FORMAT.md) includes the full design-project schema and a more detailed integration plan.
 
-**Status:** the studio currently exports non-playable design projects. A separate source-only reference tool can package, validate and extract already prepared mod files. Neither tool converts visual blocks into game content. Direct `.hooky` import by a launcher and compatibility in Longshot have **not been verified**. The published `11.26.1-beta` installers predate this work. The package contract below is experimental and may change before launcher developers agree on a stable version; no particular launcher version has been specified.
+**Status:** the studio currently exports non-playable design projects. A separate source-only reference tool can package, validate and extract already prepared mod files. Neither tool converts visual blocks into game content. Direct `.hooky` import by a launcher and compatibility in Longshot have **not been verified**. The older `11.26.1-beta` installers predate the workspace, which is included from 11.26.2. The package contract below is experimental and may change before launcher developers agree on a stable version; no particular launcher version has been specified.
 
 ## Dispatch by manifest, not extension
 

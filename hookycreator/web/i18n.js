@@ -4,6 +4,128 @@
    names or paths. Unknown diagnostics remain intact rather than being guessed. */
 const HookyI18n = (() => {
   const rows = [
+    // Player and FSR controls. Asset names and paths remain untranslated.
+    ["Player : personnages, tenues et objets", "Player: characters, outfits and items", "Player: персонажи, одежда и предметы", "Player：角色、服装和物品"],
+    ["Associer un personnage, ses tenues et objets pour tester des animations.", "Combine a character, outfits and items to test animations.", "Объедините персонажа, одежду и предметы для проверки анимации.", "组合角色、服装和物品以测试动画。"],
+    ["ATELIER / PERSONNAGE", "STUDIO / CHARACTER", "МАСТЕРСКАЯ / ПЕРСОНАЖ", "工作室 / 角色"],
+    ["Compose un personnage à partir de tes fichiers : Link enfant ou adulte, tenues et objets, puis teste un clip sur les squelettes compatibles.", "Build a character from your files: child or adult Link, outfits and items, then test a clip on compatible skeletons.", "Соберите персонажа из своих файлов: юный или взрослый Линк, одежда и предметы; затем проверьте клип на совместимых скелетах.", "使用自己的文件组合少年或成年林克、服装和物品，然后在兼容骨架上测试片段。"],
+    ["Réglages 3D ↗", "3D settings ↗", "Настройки 3D ↗", "3D 设置 ↗"],
+    ["Aperçu du personnage", "Character preview", "Предпросмотр персонажа", "角色预览"],
+    ["VUE INTERACTIVE", "INTERACTIVE VIEW", "ИНТЕРАКТИВНЫЙ ВИД", "交互式视图"],
+    ["La scène", "The scene", "Сцена", "场景"],
+    ["Personnage 3D : glisser pour tourner, molette pour zoomer, flèches et plus ou moins au clavier", "3D character: drag to rotate, scroll to zoom, or use arrow and plus/minus keys", "Персонаж 3D: перетаскивайте для вращения, используйте колесо или клавиши стрелок и плюс/минус", "3D 角色：拖动旋转，滚轮缩放，或使用方向键和加减键"],
+    ["Ta scène commence ici", "Your scene starts here", "Ваша сцена начинается здесь", "从这里开始场景"],
+    ["Aperçu indisponible", "Preview unavailable", "Предпросмотр недоступен", "预览不可用"],
+    ["Aperçu indisponible. Réessaie ou change de modèle.", "Preview unavailable. Retry or choose another model.", "Предпросмотр недоступен. Повторите попытку или выберите другую модель.", "预览不可用。请重试或选择其他模型。"],
+    ["Consulte le diagnostic sous la scène.", "See the diagnostic below the scene.", "Посмотрите сообщение под сценой.", "请查看场景下方的诊断信息。"],
+    ["Choisis un modèle de base dans ton projet.", "Choose a base model from your project.", "Выберите базовую модель из проекта.", "从项目中选择基础模型。"],
+    ["Aucun modèle chargé.", "No model loaded.", "Модель не загружена.", "未加载模型。"],
+    ["Afficher le modèle de base", "Show base model", "Показать базовую модель", "显示基础模型"],
+    ["Suivre la racine · caméra", "Follow root · camera", "Следовать за корнем · камера", "跟随根骨骼 · 相机"],
+    ["Glisser pour tourner · molette pour zoomer · flèches et +/− au clavier. La caméra suit la racine unique si l'option est activée : désactive-la pour voir son déplacement global.", "Drag to rotate · scroll to zoom · arrow and +/− keys. When enabled, the camera follows a single root: turn this off to see its global movement.", "Перетаскивайте для вращения · колесо для масштаба · стрелки и +/− на клавиатуре. Если включено, камера следует за единственной корневой костью; отключите, чтобы видеть её общее движение.", "拖动旋转 · 滚轮缩放 · 方向键及 +/− 键。启用时相机跟随唯一根骨骼；关闭后可看到其全局位移。"],
+    ["02 / MOUVEMENT", "02 / MOTION", "02 / ДВИЖЕНИЕ", "02 / 动作"],
+    ["Tester une animation", "Test an animation", "Проверить анимацию", "测试动画"],
+    ["Rechercher un fichier d'animation", "Search animation files", "Поиск файлов анимации", "搜索动画文件"],
+    ["Choisis un fichier d'animation puis un clip pris en charge.", "Choose an animation file and a supported clip.", "Выберите файл анимации и поддерживаемый клип.", "选择动画文件和受支持的片段。"],
+    ["01 / PERSONNAGE", "01 / CHARACTER", "01 / ПЕРСОНАЖ", "01 / 角色"],
+    ["Modèle de base", "Base model", "Базовая модель", "基础模型"],
+    ["Famille suggérée", "Suggested family", "Предполагаемая группа", "推荐类别"],
+    ["Link enfant", "Child Link", "Юный Линк", "少年林克"], ["Link adulte", "Adult Link", "Взрослый Линк", "成年林克"],
+    ["Tous les modèles du projet", "All project models", "Все модели проекта", "项目中的所有模型"],
+    ["Rechercher un modèle", "Search models", "Поиск модели", "搜索模型"],
+    ["Personnage", "Character", "Персонаж", "角色"],
+    ["Les catégories sont des suggestions par nom.", "Categories are suggestions based on names.", "Категории предлагаются по имени.", "类别根据名称推荐。"],
+    ["03 / ÉQUIPEMENT", "03 / EQUIPMENT", "03 / СНАРЯЖЕНИЕ", "03 / 装备"],
+    ["Tenues & objets", "Outfits & items", "Одежда и предметы", "服装与物品"],
+    ["Emplacement", "Slot", "Ячейка", "装备槽"], ["Tête", "Head", "Голова", "头部"],
+    ["Tenue / corps", "Outfit / body", "Одежда / тело", "服装 / 身体"], ["Tenue", "Outfit", "Одежда", "服装"],
+    ["Jambes", "Legs", "Ноги", "腿部"], ["Main droite", "Right hand", "Правая рука", "右手"], ["Main gauche", "Left hand", "Левая рука", "左手"],
+    ["Objet · main droite", "Item · right hand", "Предмет · правая рука", "物品 · 右手"],
+    ["Objet · main gauche", "Item · left hand", "Предмет · левая рука", "物品 · 左手"],
+    ["Ressources à proposer", "Resources to suggest", "Предлагаемые ресурсы", "推荐资源"],
+    ["Tenues et objets suggérés", "Suggested outfits and items", "Предлагаемые одежда и предметы", "推荐服装和物品"],
+    ["Modèle à équiper", "Model to equip", "Модель для оснащения", "要装备的模型"],
+    ["Association", "Attachment", "Связь", "关联方式"],
+    ["Tenue : animer son squelette", "Outfit: animate its skeleton", "Одежда: анимировать её скелет", "服装：动画化其骨架"],
+    ["Objet : attacher à un os", "Item: attach to a bone", "Предмет: прикрепить к кости", "物品：附着到骨骼"],
+    ["Modèle statique · espace commun", "Static model · shared space", "Статичная модель · общее пространство", "静态模型 · 共享空间"],
+    ["Os d'attache", "Attachment bone", "Кость крепления", "附着骨骼"], ["Choisir un os…", "Choose a bone…", "Выберите кость…", "选择骨骼…"],
+    ["Ajuster la position, la rotation et l'échelle", "Adjust position, rotation and scale", "Изменить положение, вращение и масштаб", "调整位置、旋转和缩放"],
+    ["Valeurs locales, à ajuster selon le modèle ; aucun point d'attache n'est deviné.", "Local values to adjust for the model; attachment points are not guessed.", "Локальные значения нужно настроить под модель; точки крепления не угадываются.", "根据模型调整局部值；不会猜测附着点。"],
+    ["Décalage X", "X offset", "Смещение X", "X 偏移"], ["Décalage Y", "Y offset", "Смещение Y", "Y 偏移"], ["Décalage Z", "Z offset", "Смещение Z", "Z 偏移"],
+    ["Rotation X °", "X rotation °", "Вращение X °", "X 旋转 °"], ["Rotation Y °", "Y rotation °", "Вращение Y °", "Y 旋转 °"], ["Rotation Z °", "Z rotation °", "Вращение Z °", "Z 旋转 °"],
+    ["Équiper dans l'aperçu", "Equip in preview", "Оснастить в предпросмотре", "在预览中装备"],
+    ["Retirer l'emplacement", "Remove slot", "Очистить ячейку", "移除装备槽"],
+    ["La sélection reste locale et ne modifie aucun fichier.", "The selection stays local and changes no files.", "Выбор остаётся локальным и не изменяет файлы.", "选择仅保存在本地，不会修改文件。"],
+    ["Équipements affichés", "Displayed equipment", "Отображаемое снаряжение", "显示的装备"],
+    ["Aucun équipement affiché.", "No equipment displayed.", "Снаряжение не отображается.", "未显示装备。"],
+    ["Restauration en attente.", "Waiting to restore.", "Ожидает восстановления.", "等待恢复。"],
+    ["Squelette chargé · choisir un clip pour tester.", "Skeleton loaded · choose a clip to test.", "Скелет загружен · выберите клип для проверки.", "骨架已加载 · 选择片段进行测试。"],
+    ["Statique dans l'espace commun.", "Static in shared space.", "Статично в общем пространстве.", "在共享空间中保持静态。"],
+    ["Équipement affiché dans l'aperçu. Vérifie sa position et son mouvement.", "Equipment shown in preview. Check its position and movement.", "Снаряжение показано в предпросмотре. Проверьте положение и движение.", "装备已显示在预览中，请检查位置和动作。"],
+    ["Équipement retiré de l'aperçu.", "Equipment removed from preview.", "Снаряжение удалено из предпросмотра.", "装备已从预览中移除。"],
+    ["Modèle absent du projet ; recherche une autre ressource.", "Model missing from project; search for another resource.", "Модель отсутствует в проекте; найдите другой ресурс.", "项目中缺少模型；请搜索其他资源。"],
+    ["Le modèle n'est plus présent dans le projet.", "The model is no longer in the project.", "Модель больше не находится в проекте.", "模型已不在项目中。"],
+    ["Choisis d'abord le personnage et un autre modèle.", "First choose a character and another model.", "Сначала выберите персонажа и другую модель.", "请先选择角色和另一个模型。"],
+    ["Choisis d'abord un modèle.", "First choose a model.", "Сначала выберите модель.", "请先选择模型。"],
+    ["Chargement de l'équipement…", "Loading equipment…", "Загрузка снаряжения…", "正在加载装备…"],
+    ["Aucun clip Euler pris en charge", "No supported Euler clip", "Нет поддерживаемых клипов Эйлера", "没有受支持的欧拉片段"],
+    ["Aucun clip squelettique Euler pris en charge.", "No supported Euler skeletal clip.", "Нет поддерживаемых скелетных клипов Эйлера.", "没有受支持的欧拉骨骼片段。"],
+    ["L'ancien équipement est conservé.", "The previous equipment is kept.", "Предыдущее снаряжение сохранено.", "保留之前的装备。"],
+    ["Aucun équipement n'a été ajouté.", "No equipment was added.", "Снаряжение не добавлено.", "未添加装备。"],
+    ["Vue 3D indisponible", "3D view unavailable", "3D недоступно", "3D 视图不可用"],
+    ["Squelette du modèle indisponible", "Model skeleton unavailable", "Скелет модели недоступен", "模型骨架不可用"],
+    ["Tenue statique", "Static outfit", "Статичная одежда", "静态服装"],
+    ["Tenue non affichée", "Outfit not displayed", "Одежда не отображается", "服装未显示"],
+    ["Équipement non affiché", "Equipment not displayed", "Снаряжение не отображается", "装备未显示"],
+    ["Non restauré", "Not restored", "Не восстановлено", "未恢复"],
+    ["FSR 1 indisponible", "FSR 1 unavailable", "FSR 1 недоступен", "FSR 1 不可用"],
+    ["Contexte WebGL perdu.", "WebGL context lost.", "Контекст WebGL потерян.", "WebGL 上下文已丢失。"],
+    ["Transformation d'équipement invalide.", "Invalid equipment transform.", "Некорректное преобразование снаряжения.", "装备变换无效。"],
+    ["Os d'attache à échelle nulle.", "Attachment bone has zero scale.", "Масштаб кости крепления равен нулю.", "附着骨骼的缩放为零。"],
+    ["Choisis un os reconnu du modèle de base.", "Choose a recognized bone from the base model.", "Выберите распознанную кость базовой модели.", "请选择基础模型中已识别的骨骼。"],
+    ["Composition trop volumineuse : aucune géométrie n'a été supprimée.", "Composition too large: no geometry was removed.", "Композиция слишком велика: геометрия не удалена.", "组合过大：未删除任何几何体。"],
+    ["Skins de la composition supérieurs à 64 Mio.", "Composition skins exceed 64 MiB.", "Скины композиции превышают 64 МиБ.", "组合的皮肤超过 64 MiB。"],
+    ["Aucun os animé de ce clip ne correspond au modèle.", "No animated bone in this clip matches the model.", "Анимированные кости клипа не соответствуют модели.", "此片段中没有与模型匹配的动画骨骼。"],
+    ["Skin et géométrie ne correspondent pas.", "Skin and geometry do not match.", "Скин и геометрия не совпадают.", "皮肤与几何体不匹配。"],
+    ["Squelette de skin invalide.", "Invalid skin skeleton.", "Некорректный скелет скина.", "皮肤骨架无效。"],
+    ["albédos limités à 1 024 px dans la vue", "albedos limited to 1,024 px in the view", "альбедо ограничено 1 024 пикселями", "视图中的反照率纹理限制为 1,024 像素"],
+    ["texture indisponible", "texture unavailable", "текстура недоступна", "纹理不可用"],
+    ["mémoire texture insuffisante", "insufficient texture memory", "недостаточно памяти для текстур", "纹理内存不足"],
+    ["FSR sans anticrénelage multisample", "FSR without multisample anti-aliasing", "FSR без мультисэмплинга", "FSR 未启用多重采样抗锯齿"],
+    ["Un aperçu, pas une validation en jeu.", "A preview, not an in-game validation.", "Предпросмотр не является проверкой в игре.", "这只是预览，不代表游戏内验证。"],
+    ["Les catégories et associations sont indicatives. Os, proportions, morphs, matières, collisions et comportements peuvent différer. Les modèles requis ne sont pas toujours déductibles d'un clip : ajoute-les manuellement.", "Categories and associations are indicative. Bones, proportions, morphs, materials, collisions and behavior may differ. Required models cannot always be inferred from a clip: add them manually.", "Категории и связи приблизительны. Кости, пропорции, морфы, материалы, столкновения и поведение могут отличаться. Необходимые модели не всегда можно определить по клипу: добавляйте их вручную.", "类别和关联仅供参考。骨骼、比例、变形、材质、碰撞和行为可能不同。无法始终从片段推断所需模型：请手动添加。"],
+    ["Composer dans Player", "Compose in Player", "Собрать в Player", "在 Player 中组合"],
+    ["Aller à Player", "Go to Player", "Перейти в Player", "前往 Player"],
+    ["Retrouver des modèles pour une animation", "Find models for an animation", "Найти модели для анимации", "为动画查找模型"],
+    ["Suggestions d'après les noms uniquement : les tenues et skins sans nom reconnaissable peuvent manquer. La présence d'un modèle ne prouve pas sa compatibilité avec le clip.", "Suggestions use names only: outfits and skins without recognizable names may be missing. A model's presence does not prove clip compatibility.", "Предложения основаны только на именах: одежда и скины с нераспознаваемыми именами могут отсутствовать. Наличие модели не подтверждает совместимость с клипом.", "仅根据名称推荐：名称无法识别的服装和皮肤可能遗漏。列出模型不代表它与片段兼容。"],
+    ["Rechercher une animation", "Search animations", "Поиск анимации", "搜索动画"], ["Choisir une animation…", "Choose an animation…", "Выберите анимацию…", "选择动画…"],
+    ["Choisis une animation pour chercher des modèles.", "Choose an animation to find models.", "Выберите анимацию для поиска моделей.", "选择动画以查找模型。"],
+    ["Aucune animation trouvée ; vérifie le filtre ou le scan du projet.", "No animation found; check the filter or project scan.", "Анимации не найдены; проверьте фильтр или сканирование проекта.", "未找到动画；请检查筛选条件或项目扫描。"],
+    ["Aucun modèle suggéré par nom. Le choix manuel reste possible dans Animations et Player.", "No model suggested by name. You can still choose manually in Animations and Player.", "По имени не предложено моделей. Вы можете выбрать их вручную в разделах «Анимации» и Player.", "没有按名称推荐的模型；仍可在动画和 Player 中手动选择。"],
+    ["Pour assembler une tenue, ouvre d'abord le personnage comme base dans Player, puis sélectionne la tenue et son emplacement. Pour un modèle absent des suggestions, ouvre l'animation dans la vue Animations et choisis-le manuellement ; ou sélectionne « Tous les modèles » dans Player.", "To assemble an outfit, first open the character as the base in Player, then choose the outfit and its slot. For a missing model, open the animation in Animations and choose it manually, or select All models in Player.", "Чтобы собрать комплект, сначала откройте персонажа как базовую модель в Player, затем выберите одежду и ячейку. Если модели нет в предложениях, откройте анимацию в разделе «Анимации» и выберите её вручную либо выберите все модели в Player.", "要组合服装，请先在 Player 中将角色作为基础模型打开，然后选择服装及其装备槽。对于未推荐的模型，请在动画视图中打开动画并手动选择，或在 Player 中选择所有模型。"],
+    ["Voir la fiche", "View details", "Открыть карточку", "查看详情"], ["Ouvrir comme base dans Player", "Open as base in Player", "Открыть как базовую модель в Player", "在 Player 中作为基础模型打开"],
+    ["Nom exact", "Exact name", "Точное имя", "名称完全匹配"], ["Nom proche", "Similar name", "Похожее имя", "名称相近"],
+    ["Même famille de nom", "Same name family", "Одна группа имён", "同一名称类别"],
+    ["Âge indiqué dans le nom", "Age indicated by name", "Возраст указан в имени", "名称中标明年龄"],
+    ["personnage", "character", "персонаж", "角色"], ["tenue / skin", "outfit / skin", "одежда / скин", "服装 / 皮肤"],
+    ["objet", "item", "предмет", "物品"], ["non vérifié", "unverified", "не проверено", "未验证"],
+    ["Vue 3D & animations", "3D view & animations", "3D и анимация", "3D 视图与动画"],
+    ["Rendu interactif", "Interactive rendering", "Интерактивный рендеринг", "交互式渲染"],
+    ["FSR 1 expérimental (WebGL2)", "Experimental FSR 1 (WebGL2)", "Экспериментальный FSR 1 (WebGL2)", "实验性 FSR 1（WebGL2）"],
+    ["Niveau d'upscaling FSR 1", "FSR 1 upscaling level", "Уровень масштабирования FSR 1", "FSR 1 升频等级"],
+    ["Ultra qualité · 77 %", "Ultra quality · 77%", "Ультракачество · 77%", "超高质量 · 77%"],
+    ["Qualité · 67 %", "Quality · 67%", "Качество · 67%", "质量 · 67%"], ["Équilibré · 59 %", "Balanced · 59%", "Баланс · 59%", "平衡 · 59%"],
+    ["Performance · 50 %", "Performance · 50%", "Производительность · 50%", "性能 · 50%"],
+    ["Netteté FSR 1", "FSR 1 sharpness", "Резкость FSR 1", "FSR 1 锐化"], ["Anticrénelage FSR 1", "FSR 1 anti-aliasing", "Сглаживание FSR 1", "FSR 1 抗锯齿"],
+    ["Désactivé · économie GPU", "Off · save GPU", "Выключено · экономия GPU", "关闭 · 节省 GPU"],
+    ["Densité maximale de l'aperçu", "Maximum preview density", "Максимальная плотность предпросмотра", "预览最大像素密度"],
+    ["×1 · économie GPU", "×1 · save GPU", "×1 · экономия GPU", "×1 · 节省 GPU"], ["×2 · écrans haute densité", "×2 · high-density displays", "×2 · экраны высокой плотности", "×2 · 高密度屏幕"],
+    ["Taille maximale du canvas", "Maximum canvas size", "Максимальный размер холста", "画布最大尺寸"],
+    ["800 px · économie GPU", "800 px · save GPU", "800 px · экономия GPU", "800 像素 · 节省 GPU"],
+    ["Images par seconde en animation", "Animation frames per second", "Кадров в секунду анимации", "动画帧率"],
+    ["15 i/s · économie GPU", "15 fps · save GPU", "15 кадров/с · экономия GPU", "15 帧/秒 · 节省 GPU"], ["30 i/s", "30 fps", "30 кадров/с", "30 帧/秒"], ["60 i/s", "60 fps", "60 кадров/с", "60 帧/秒"],
+    ["FSR 1 est spatial, pas FSR 4. Il réduit la résolution de la scène, pas les triangles ; les deux passes peuvent être plus lentes sur certains GPU. Les exports et PNG ne sont pas modifiés.", "FSR 1 is spatial, not FSR 4. It reduces scene resolution, not triangles; the two passes can be slower on some GPUs. Exports and PNGs are unchanged.", "FSR 1 — пространственное масштабирование, не FSR 4. Оно снижает разрешение сцены, а не число треугольников; два прохода на некоторых GPU могут быть медленнее. Экспорт и PNG не изменяются.", "FSR 1 是空间升频，而非 FSR 4。它降低场景分辨率，不减少三角形；两次处理在某些 GPU 上可能更慢。导出和 PNG 不受影响。"],
     // HookyMod's: UI copy only. Workspace names, descriptions, filenames and
     // block values are user data and must never be translated.
     ["Explorer, imaginer ou assembler", "Explore, imagine or assemble", "Изучайте, придумывайте или собирайте", "探索、构思或组装"],
@@ -448,6 +570,32 @@ const HookyI18n = (() => {
     if (m) return { en: `${m[1]} · ${m[2]} frames`, ru: `${m[1]} · кадров: ${m[2]}`, zh: `${m[1]} · ${m[2]} 帧` }[language];
     m = normalize(source).match(/^(\d+) os associés(?:, (\d+) absents)? · 30 images\/s par convention · lecture expérimentale, non validée en jeu\.$/);
     if (m) return { en: `${m[1]} bones matched${m[2] ? `, ${m[2]} missing` : ""} · 30 fps by convention · experimental playback, not validated in game.`, ru: `Связано костей: ${m[1]}${m[2] ? `, отсутствует: ${m[2]}` : ""} · 30 кадров/с по соглашению · экспериментальный предпросмотр, не проверен в игре.`, zh: `已关联 ${m[1]} 根骨骼${m[2] ? `，缺少 ${m[2]} 根` : ""} · 按惯例使用 30 帧/秒 · 实验性播放，未经游戏内验证。` }[language];
+    m = normalize(source).match(/^(\d+) candidat\(s\) par nom · (\d+) affichés\. Les catégories restent indicatives\.$/);
+    if (m) return { en: `${m[1]} name-based candidate(s) · ${m[2]} shown. Categories are indicative.`, ru: `Кандидатов по имени: ${m[1]} · показано ${m[2]}. Категории приблизительны.`, zh: `按名称找到 ${m[1]} 个候选项 · 显示 ${m[2]} 个。类别仅供参考。` }[language];
+    m = normalize(source).match(/^(\d+) animation\(s\) trouvée\(s\) · (\d+) affichées\. Choisis-en une\.$/);
+    if (m) return { en: `${m[1]} animation(s) found · ${m[2]} shown. Choose one.`, ru: `Найдено анимаций: ${m[1]} · показано ${m[2]}. Выберите одну.`, zh: `找到 ${m[1]} 个动画 · 显示 ${m[2]} 个。请选择一个。` }[language];
+    m = normalize(source).match(/^(\d+) modèle\(s\) suggéré\(s\) par nom · (\d+) affichés\. À vérifier dans Player\.$/);
+    if (m) return { en: `${m[1]} model(s) suggested by name · ${m[2]} shown. Check in Player.`, ru: `Предложено моделей по имени: ${m[1]} · показано ${m[2]}. Проверьте в Player.`, zh: `按名称推荐 ${m[1]} 个模型 · 显示 ${m[2]} 个。请在 Player 中检查。` }[language];
+    m = normalize(source).match(/^(\d+) os associés(?: · (\d+) pistes absentes)? · 30 images\/s par convention\. Vérifie aussi les tenues\.$/);
+    if (m) return { en: `${m[1]} bones matched${m[2] ? ` · ${m[2]} missing tracks` : ""} · 30 fps by convention. Check outfits too.`, ru: `Связано костей: ${m[1]}${m[2] ? ` · отсутствует дорожек: ${m[2]}` : ""} · 30 кадров/с по соглашению. Проверьте и одежду.`, zh: `已关联 ${m[1]} 根骨骼${m[2] ? ` · 缺少 ${m[2]} 条轨道` : ""} · 按惯例使用 30 帧/秒。也请检查服装。` }[language];
+    m = normalize(source).match(/^(\d+) os associés · aperçu expérimental$/);
+    if (m) return { en: `${m[1]} bones matched · experimental preview`, ru: `Связано костей: ${m[1]} · экспериментальный предпросмотр`, zh: `已关联 ${m[1]} 根骨骼 · 实验性预览` }[language];
+    m = source.trim().match(/^Attaché à ([\s\S]+) · position à vérifier\.$/);
+    if (m) return { en: `Attached to ${m[1]} · check position.`, ru: `Прикреплено к ${m[1]} · проверьте положение.`, zh: `附着到 ${m[1]} · 请检查位置。` }[language];
+    m = normalize(source).match(/^(\d+) résultat\(s\) · (\d+) affichés$/);
+    if (m) return { en: `${m[1]} result(s) · ${m[2]} shown`, ru: `Результатов: ${m[1]} · показано ${m[2]}`, zh: `${m[1]} 个结果 · 显示 ${m[2]} 个` }[language];
+    m = normalize(source).match(/^(\d+) piste\(s\) sans os correspondant$/);
+    if (m) return { en: `${m[1]} track(s) without a matching bone`, ru: `Дорожек без соответствующей кости: ${m[1]}`, zh: `${m[1]} 条轨道没有对应的骨骼` }[language];
+    m = source.trim().match(/^Équipement non ajouté : ([\s\S]+) (L'ancien équipement est conservé\.|Aucun équipement n'a été ajouté\.)$/);
+    if (m) return { en: `Equipment not added: ${lookup(m[1])} ${lookup(m[2])}`, ru: `Снаряжение не добавлено: ${lookup(m[1])} ${lookup(m[2])}`, zh: `未添加装备：${lookup(m[1])} ${lookup(m[2])}` }[language];
+    m = source.trim().match(/^(Tête|Tenue|Jambes|Main droite|Main gauche) non restauré : ([\s\S]+)$/);
+    if (m) return { en: `${lookup(m[1])} not restored: ${lookup(m[2])}`, ru: `${lookup(m[1])} не восстановлено: ${lookup(m[2])}`, zh: `${lookup(m[1])}未恢复：${lookup(m[2])}` }[language];
+    m = source.trim().match(/^(Animation indisponible|Vue 3D indisponible|Squelette du modèle indisponible|Tenue statique|Tenue non affichée|Équipement non affiché|Non restauré|FSR 1 indisponible) : ([\s\S]+)$/);
+    if (m) return `${lookup(m[1])} : ${lookup(m[2])}`;
+    m = normalize(source).match(/^image plafonnée à (\d+) px \/ densité ×(\d+)$/);
+    if (m) return { en: `image capped at ${m[1]} px / density ×${m[2]}`, ru: `изображение ограничено ${m[1]} пикс. / плотность ×${m[2]}`, zh: `图像限制为 ${m[1]} 像素 / 密度 ×${m[2]}` }[language];
+    m = normalize(source).match(/^plus de (\d+) textures : certaines non affichées$/);
+    if (m) return { en: `more than ${m[1]} textures: some not displayed`, ru: `текстур больше ${m[1]}: некоторые не отображаются`, zh: `超过 ${m[1]} 个纹理：部分未显示` }[language];
     m = normalize(source).match(/^([\d.,]+ (?:B|KiB|MiB|GiB)) · (copie de travail|fichier source)$/);
     if (m) return { en: `${m[1]} · ${m[2] === "copie de travail" ? "working copy" : "source file"}`, ru: `${m[1]} · ${m[2] === "copie de travail" ? "рабочая копия" : "исходный файл"}`, zh: `${m[1]} · ${m[2] === "copie de travail" ? "工作副本" : "源文件"}` }[language];
     m = normalize(source).match(/^([\d.,]+ (?:B|KiB|MiB|GiB)) estimés sur ([\d.,]+ (?:B|KiB|MiB|GiB)) \((\d+) %\) · PNG$/);
@@ -506,8 +654,16 @@ const HookyI18n = (() => {
     if (m) return { en: `${m[1]} rigid shape(s) placed in the FSKL rest pose; triangles are retained.`, ru: `Жёстких форм в исходной позе FSKL: ${m[1]}; треугольники сохранены.`, zh: `${m[1]} 个刚性形状已放置到 FSKL 参考姿势；保留所有三角形。` }[language];
     m = normalize(source).match(/^La source doit avoir (\d+) canal\(aux\) à (\d+) Hz \(24 Mio maximum\)\. Le remplacement produit un BWAV PCM16 dans la copie de travail, même si l'original est Opus ou DSP\. BARS, événements et RESTBL ne sont pas modifiés ; fonctionnement en jeu non garanti\.$/);
     if (m) return { en: `The source must have ${m[1]} channel(s) at ${m[2]} Hz (24 MiB maximum). Replacement writes a PCM16 BWAV working copy even if the original is Opus or DSP. BARS, events and RESTBL are not changed; in-game operation is not guaranteed.`, ru: `Источник должен иметь каналов: ${m[1]}, частота: ${m[2]} Гц (не более 24 МиБ). Замена создаёт рабочую копию PCM16 BWAV, даже если оригинал — Opus или DSP. BARS, события и RESTBL не изменяются; работа в игре не гарантируется.`, zh: `源文件必须具有 ${m[1]} 个声道、采样率 ${m[2]} Hz（最多 24 MiB）。即使原文件为 Opus 或 DSP，替换也会生成 PCM16 BWAV 工作副本。不会修改 BARS、事件或 RESTBL；不保证游戏内可用。` }[language];
-    m = normalize(source).match(/^([\d\s, ]+) triangles · WebGL2 · résolution native$/);
-    if (m) return { en: `${m[1]} triangles · WebGL2 · native resolution`, ru: `Треугольников: ${m[1]} · WebGL2 · исходное разрешение`, zh: `${m[1]} 个三角形 · WebGL2 · 原生分辨率` }[language];
+    m = normalize(source).match(/^([\d\s, ]+) triangles · WebGL2 · résolution native(.*)$/);
+    if (m) {
+      const notes = m[2].split(" · ").map(lookup).join(" · ");
+      return { en: `${m[1]} triangles · WebGL2 · native resolution${notes}`, ru: `Треугольников: ${m[1]} · WebGL2 · исходное разрешение${notes}`, zh: `${m[1]} 个三角形 · WebGL2 · 原生分辨率${notes}` }[language];
+    }
+    m = normalize(source).match(/^([\d\s, ]+) triangles · FSR 1 expérimental · (\d+) %(.*)$/);
+    if (m) {
+      const notes = m[3].split(" · ").map(lookup).join(" · ");
+      return { en: `${m[1]} triangles · experimental FSR 1 · ${m[2]}%${notes}`, ru: `Треугольников: ${m[1]} · экспериментальный FSR 1 · ${m[2]}%${notes}`, zh: `${m[1]} 个三角形 · 实验性 FSR 1 · ${m[2]}%${notes}` }[language];
+    }
     return source;
   }
   function translated(value) {
