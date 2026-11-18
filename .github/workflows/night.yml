@@ -1,67 +1,129 @@
-name: Nightly Release
+name: HookyCreator Nightly
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ 'main' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
+  desktop:
+    name: Build Nightly / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            extension: ''
+            bundle: deb
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            extension: .exe
+            bundle: nsis
+          - os: macos-15
+            target: aarch64-apple-darwin
+            extension: ''
+            bundle: dmg
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            extension: ''
+            bundle: dmg
+    env:
+      PYTHONUTF8: '1'
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Use Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: '20.x'
-          cache: 'npm'
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust
+            src-tauri
 
-      - name: Install dependencies & Build
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev librsvg2-dev patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good libnss3 libnspr4
+
+      - name: Python and Tauri build dependencies
+        run: |
+          python -m pip install -r requirements-desktop-build.txt
           npm ci
-          npm run build --if-present
 
-      # ==========================================
-      # AJOUTE ICI TON ÉTAPE DE BUILD / PACKAGING 
-      # (Exemple si tu utilises Tauri ou un bundler)
-      # ==========================================
-      # - name: Build App Installers
-      #   run: npm run tauri build # ou la commande spécifique de ton projet
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build standalone sidecar including Rust core
+        run: python .github/scripts/run_ci_command.py -- python tools/build_desktop_backend.py
 
-      - name: Remove existing Nightly Tag & Release
+      - name: Smoke test the standalone sidecar
+        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-${{ matrix.target }}${{ matrix.extension }}
+
+      - name: Build native installer
+        run: python .github/scripts/run_ci_command.py -- npm run tauri -- build --bundles ${{ matrix.bundle }} -- --locked
+
+      - name: Verify packaged backend and executable
+        run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_package.py
+
+      - name: Upload Nightly installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookyCreator-${{ matrix.os }}
+          path: src-tauri/target/release/bundle/${{ matrix.bundle }}/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-nightly:
+    name: Publish Nightly Release (Win / Linux / macOS)
+    needs: [desktop]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download all 4 platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: HookyCreator-*
+          path: nightly-artifacts
+
+      - name: Assemble installers and generate SHA256SUMS.txt
+        run: python tools/assemble_beta_release.py --artifacts nightly-artifacts --output nightly-dist
+
+      - name: Replace existing 'night' release and upload assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="night"
-          git push origin --delete $TAG || true
-          gh release delete $TAG --yes || true
-          git tag -d $TAG || true
-
-      - name: Create Nightly Release & Upload Assets
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: "night"
-          name: "Nightly Build 🌙"
-          body: |
-            Automated nightly build derived from the latest changes on `main`.
-            
-            * Commit: `${{ github.sha }}`
-            * Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          draft: false
-          prerelease: true
-          # C'est ici que tu indiques les chemins vers tes installateurs générés :
-          files: |
-            dist/*
-            # Si tu utilises Tauri, les binaires se trouvent généralement dans :
-            # src-tauri/target/release/bundle/nsis/*.exe
-            # src-tauri/target/release/bundle/deb/*.deb
-            # src-tauri/target/release/bundle/dmg/*.dmg
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_DATE=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          
+          # Supprimer l'ancienne release et l'ancien tag 'night' s'ils existent
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          
+          # Créer la nouvelle release publiée (non-draft) avec tous les installateurs et checksums
+          gh release create "$TAG" nightly-dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "HookyMod Nightly 🌙" \
+            --prerelease \
+            --notes "Automated nightly build derived from \`main\`.
+          - **Commit:** \`${GITHUB_SHA}\`
+          - **Date:** ${BUILD_DATE}
+          - **Checksums:** Verify downloads against \`SHA256SUMS.txt\`."
