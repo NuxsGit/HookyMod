@@ -206,3 +206,38 @@ jobs:
           gh release create "v${version}-beta" beta-dist/* --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "HookyMod ${version} beta" \
             --draft --prerelease --notes-file docs/BETA_RELEASE_NOTES.md
+
+  release-draft:
+    name: Prepare a non-prerelease draft after all package checks
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[prepare-release]') }}
+    needs: [desktop, webgl, model-formats]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: HookyCreator-*
+          path: release-artifacts
+      - name: Require all four tested installers and create checksums
+        run: python tools/assemble_beta_release.py --artifacts release-artifacts --output release-dist
+      - name: Create an unpublished non-prerelease draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          notes="docs/RELEASE_NOTES_${version}.md"
+          test -f "$notes" || { echo "::error::Release notes missing: $notes"; exit 1; }
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v${version}" >/dev/null 2>ref-error.txt; then
+            echo "::error::Refusing to reuse existing tag v${version}"; exit 1
+          elif ! grep -q 'HTTP 404' ref-error.txt; then
+            cat ref-error.txt; exit 1
+          fi
+          gh release create "v${version}" release-dist/* --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "HookyMod ${version}" \
+            --draft --notes-file "$notes"

@@ -40,6 +40,20 @@ def test_product_versions_are_consistent():
             cargo_version(ROOT / "rust/Cargo.lock", "hookymod-core", lock=True)} == {version}
 
 
+def test_public_release_automation_only_prepares_a_gated_draft():
+    workflow = (ROOT / ".github/workflows/desktop.yml").read_text(encoding="utf-8")
+    draft = workflow.split("\n  release-draft:\n", 1)[1]
+    assert "github.event_name == 'push'" in draft
+    assert "[prepare-release]" in draft
+    assert "needs: [desktop, webgl, model-formats]" in draft
+    assert "python tools/assemble_beta_release.py --artifacts release-artifacts --output release-dist" in draft
+    assert 'gh release create "v${version}"' in draft
+    assert '--target "$GITHUB_SHA"' in draft
+    assert '--draft --notes-file "$notes"' in draft
+    assert "--prerelease" not in draft
+    assert "Refusing to reuse existing tag" in draft
+
+
 def make_artifacts(root: Path) -> list[Path]:
     paths = []
     for name, extension, _ in release.INSTALLERS:

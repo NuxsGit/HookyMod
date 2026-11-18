@@ -138,10 +138,14 @@ Blender sous Linux, y compris une animation et des poids synthétiques.
 
 Un push dont le message contient `[prepare-beta]` prépare un **brouillon non
 publié**, uniquement si ces jobs réussissent. Il regroupe les quatre
-installateurs et `SHA256SUMS.txt` sous le tag `v<version>-beta`. Le workflow ne
-publie pas automatiquement ce brouillon. Avant de le publier, contrôler aussi
-le workflow de parité Rust séparé, les notices et droits, les limites de chaque
-plateforme et la signature des paquets. Voir [PUBLICATION.md](PUBLICATION.md).
+installateurs et `SHA256SUMS.txt` sous le tag `v<version>-beta`. Un push de
+confiance marqué `[prepare-release]` prépare de la même manière un brouillon
+**non préversion** `v<version>`, avec les notes `docs/RELEASE_NOTES_<version>.md` ;
+il refuse un tag existant. Aucun des deux brouillons n'est publié
+automatiquement. Avant publication, contrôler le workflow de parité Rust
+séparé sur le **même commit**, les quatre artefacts et leurs sommes, les notices
+et droits, les limites de chaque plateforme et la signature des paquets. Voir
+[PUBLICATION.md](PUBLICATION.md).
 
 Pour lancer ces vérifications localement après construction :
 
