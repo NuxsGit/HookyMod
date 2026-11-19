@@ -102,6 +102,30 @@ async function handlersAndBatching() {
   assert.equal(await old, true);
   assert.equal(state.project.image_revision, "session-9");
   assert.equal(state.settings.cache_mb, 64);
+
+  // All GPU economy controls send their own fields and are batched together.
+  const changes = [
+    ["#set-viewer-upscale", "onchange", "fsr"], ["#set-fsr-quality", "onchange", "balanced"],
+    ["#set-fsr-sharp", "oninput", "0.3"], ["#set-viewer-msaa", "onchange", "off"],
+    ["#set-viewer-dpr", "onchange", "1"], ["#set-viewer-fps", "onchange", "15"],
+    ["#set-viewer-limit", "onchange", "800"],
+  ];
+  const pending = changes.map(([selector, event, value]) => {
+    assert.equal(typeof node(selector)[event], "function", `${selector} wired`);
+    return node(selector)[event]({ target: { value } });
+  });
+  await waitForCall(7);
+  const gpu = { viewer_upscale: "fsr", fsr_quality: "balanced", fsr_sharpness: .3, viewer_msaa: "off",
+    viewer_dpr: "1", viewer_fps: "15", viewer_limit: "800" };
+  assert.deepEqual(calls[6].patch, gpu);
+  calls[6].resolve({ settings: { ...state.settings, ...gpu } });
+  assert.deepEqual(await Promise.all(pending), changes.map(() => true));
+
+  node("#set-reset").onclick(); await waitForCall(8);
+  assert.deepEqual(Object.fromEntries(Object.keys(gpu).map((key) => [key, calls[7].patch[key]])),
+    { viewer_upscale: "native", fsr_quality: "quality", fsr_sharpness: .65, viewer_msaa: "4",
+      viewer_dpr: "2", viewer_fps: "60", viewer_limit: "1600" });
+  calls[7].resolve({ settings: { ...state.settings, ...calls[7].patch } });
 }
 
 handlersAndBatching().then(() => console.log("Settings UI: OK"))

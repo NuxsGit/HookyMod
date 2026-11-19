@@ -1,6 +1,6 @@
 [package]
 name = "hookymod-core"
-version = "11.26.1"
+version = "11.26.2"
 edition = "2021"
 rust-version = "1.87"
 description = "Noyaux et outils autonomes Rust de HookyMod"

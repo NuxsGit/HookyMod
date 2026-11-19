@@ -34,7 +34,7 @@ python -m hookymod.cli restbl /chemin/dump/romfs --get Model/MonModele.bfres
 python -m hookymod.cli restbl /chemin/dump/romfs --ensure Model/MonModele.bfres=8388608 --output nouvelle.rsizetable
 ```
 
-Le traducteur tente de mettre à jour la table lors de `pack`, sauf avec `--no-table` ; consulte son rapport. L'assemblage de mod dans HookyCreator ne met pas RESTBL à jour automatiquement. Il supprime et recrée `mods/<nom>` sans sauvegarde ; l'interface demande confirmation. Les fiches de mobs ne créent pas d'acteurs jouables.
+Le traducteur source indépendant tente de mettre à jour la table lors de `pack`, sauf avec `--no-table` ; consulte son rapport. HookyCreator ne propose plus l'assemblage de mods ni les fiches de mobs dans cette version source. L'ancien assembleur conservé dans `modmaker/` supprime et recrée `mods/<nom>` sans sauvegarde s'il est appelé directement et ne met pas RESTBL à jour. La release publique 11.26.2 conserve encore cette ancienne fonction.
 
 ## Attribution
 

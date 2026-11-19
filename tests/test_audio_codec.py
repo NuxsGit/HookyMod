@@ -128,7 +128,7 @@ def test_bad_lengths_channels_and_import_rejected():
         audio_codec.read_import(b"not audio", 48000, 2)
 
 
-def test_sound_import_writes_only_working_copy_and_is_assembled():
+def test_sound_import_writes_only_working_copy():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         root = tmp / "dump"
@@ -146,9 +146,7 @@ def test_sound_import_writes_only_working_copy_and_is_assembled():
         np.testing.assert_array_equal(audio_codec.decode(work.read_bytes())[0], pcm)
         assert server.project.sound_info("voice.bwav")["format"] == "BWAV PCM16"
         assert "voice.bwav" in server.project.edited_files()
-        built = server.project.build_mod("Synthetic")
-        assert built["files"] == 1
-        assert (root / "mods" / "Synthetic" / "romfs" / "voice.bwav").read_bytes() == work.read_bytes()
+        assert not (root / "mods").exists()
         assert (root / "voice.bwav").read_bytes() == original
         with pytest.raises(Exception):
             server.api("POST", "/api/sound/import", {}, {"path": "voice.bwav", "audio": "!"})

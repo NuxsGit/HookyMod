@@ -43,9 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(f"Noyau Rust absent : {native}")
     try:
         import PyInstaller  # noqa: F401
+        import soundfile  # noqa: F401
         import texture2ddecoder  # noqa: F401
         import zstandard  # noqa: F401
-        import soundfile  # noqa: F401
     except ImportError as exc:
         raise RuntimeError("Installer requirements-desktop-build.txt avec ce Python.") from exc
 
@@ -59,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
             "--distpath", str(temp / "dist"), "--workpath", str(temp / "build"),
             "--specpath", str(temp),
             "--collect-submodules", "hookycreator", "--collect-submodules", "hookymod",
+            # Keep source-only maker and translation CLIs out of the app bundle.
+            "--exclude-module", "hookycreator.modpackage", "--exclude-module", "modmaker",
+            "--exclude-module", "hookymod.app", "--exclude-module", "hookymod.cli",
+            "--exclude-module", "hookymod.__main__", "--exclude-module", "hookymod.translate",
             "--hidden-import", "texture2ddecoder", "--hidden-import", "zstandard",
             "--hidden-import", "soundfile", "--collect-all", "_soundfile_data",
             "--add-data", f"{ROOT / 'hookycreator' / 'web'}{os.pathsep}hookycreator/web",

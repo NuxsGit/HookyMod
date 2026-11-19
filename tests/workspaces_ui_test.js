@@ -1,6 +1,6 @@
 "use strict";
 
-// Les deux parcours et la confirmation d'écrasement, sans dépendance npm.
+// Navigation and the shared model-import chooser after separating the maker.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -13,8 +13,8 @@ function section(from, to) {
 }
 
 function workspaceNavigation() {
-  const views = ["home", "edit", "create", "models"].map((name) => ({ id: `view-${name}`, hidden: false }));
-  const rail = ["home", "edit", "create", "models"].map((name) => ({
+  const views = ["home", "edit", "player", "models"].map((name) => ({ id: `view-${name}`, hidden: false }));
+  const rail = ["home", "edit", "player", "models"].map((name) => ({
     dataset: { view: name }, current: null,
     setAttribute(_key, value) { this.current = value; },
     removeAttribute() { this.current = null; },
@@ -23,13 +23,13 @@ function workspaceNavigation() {
   const state = { view: "home", tab: "" };
   const $ = (selector) => selector === "#views" ? scroll : views.find((node) => `#${node.id}` === selector);
   const $$ = (selector) => selector === ".view" ? views : rail;
-  const ctx = vm.createContext({ state, $, $$, VIEW_LABELS: { edit: "Modification", create: "Création de mod" },
+  const ctx = vm.createContext({ state, $, $$, VIEW_LABELS: { edit: "Modification", player: "Player" },
+    window: { HookyPlayer: { show: () => calls.push("player"), hide() {} } },
     thumbnailQueue: { release: (node) => calls.push(`release:${node.id}`) },
     assetValidation: { clearScope() {} },
     hideInspector: () => calls.push("hide-inspector"),
     ensureViewTab: (view, label) => tabs.push([view, label]), renderTabs() {},
-    renderHome() {}, renderCreation: () => calls.push("creation"), renderModels() {},
-    renderEnsembles() {}, renderTextures() {}, renderMobs() {}, renderBlends() {},
+    renderHome() {}, renderModels() {}, renderEnsembles() {}, renderTextures() {},
     renderSettings() {}, refreshSystem() {},
   });
   vm.runInContext(section("function showView(", "const VIEW_LABELS ="), ctx);
@@ -41,70 +41,69 @@ function workspaceNavigation() {
   assert.equal(rail.find((node) => node.dataset.view === "edit").current, "page");
   assert.equal(scroll.scrollTop, 0);
   scroll.scrollTop = 180;
-  vm.runInContext('showView("create")', ctx);
-  assert.equal(state.tab, "view:create");
+  vm.runInContext('showView("player")', ctx);
+  assert.equal(state.tab, "view:player");
   assert.equal(scroll.scrollTop, 0);
-  assert.equal(views.find((view) => view.id === "view-create").hidden, false);
+  assert.equal(views.find((view) => view.id === "view-player").hidden, false);
   assert.equal(rail.find((node) => node.dataset.view === "edit").current, null);
-  assert.ok(calls.includes("creation"));
+  assert.ok(calls.includes("player"));
   assert.equal(calls.filter((call) => call === "hide-inspector").length, 2);
-  assert.deepEqual(tabs.map(([view]) => view), ["edit", "create"]);
+  assert.deepEqual(tabs.map(([view]) => view), ["edit", "player"]);
 }
 
-function creationReflectsTheCurrentProject() {
-  const list = { innerHTML: "" };
-  const state = { project: { edited: ["a", "b"], mobs: [{ slug: "x" }] } };
-  const ctx = vm.createContext({ state, $: () => list });
-  vm.runInContext(section("function renderCreation()", "/* ------------------------------------------------------------------ modèles */"), ctx);
-  vm.runInContext("renderCreation()", ctx);
-  assert.match(list.innerHTML, /Copies modifiées<\/span><span>2/);
-  assert.match(list.innerHTML, /Fiches de mobs préparées<\/span><span>1/);
-  state.project.edited = [];
-  vm.runInContext("renderCreation()", ctx);
-  assert.match(list.innerHTML, /Copies modifiées<\/span><span>0/);
-}
-
-async function buildingRequiresConfirmationAndCannotDoubleSubmit() {
-  const button = { disabled: false }, log = { innerHTML: "" }, messages = [], requests = [];
-  let confirm = false, resolve, reject;
-  const form = { querySelector: () => button, name: "MonMod" };
-  const event = { target: form, preventDefault() {} };
-  const ctx = vm.createContext({ event, console, esc: String, tr: String, $: () => log,
-    FormData: class { constructor(target) { this.target = target; } get() { return this.target.name; } },
-    window: { confirm: (message) => { messages.push(message); return confirm; } },
-    toast: (...args) => messages.push(args),
-    api: (url, options) => new Promise((done, fail) => {
-      requests.push([url, options]); resolve = done; reject = fail;
-    }),
+function modelImportChooserRetainsValidationAndExplicitSelection() {
+  const select = { value: "", dataset: {}, options: [] };
+  Object.defineProperty(select, "innerHTML", {
+    get() { return this.html || ""; },
+    set(html) {
+      this.html = html;
+      this.options = [...html.matchAll(/<option(?: [^>]*)? value="([^"]*)"/g)].map((m) => ({ value: m[1] }));
+      this.value = this.options[0]?.value || "";
+    },
   });
-  vm.runInContext("let modBuildPending = false;\n" +
-    section("async function buildMod(", "async function createMob("), ctx);
-  await vm.runInContext("buildMod(event)", ctx);
-  assert.equal(requests.length, 0, "annuler ne modifie rien");
-  assert.match(messages[0], /entièrement remplacé/);
-  confirm = true;
-  const first = vm.runInContext("buildMod(event)", ctx);
-  assert.equal(button.disabled, true);
-  await vm.runInContext("buildMod(event)", ctx);
-  assert.equal(requests.length, 1, "une deuxième soumission ne lance pas de construction concurrente");
-  assert.equal(requests[0][0], "/api/mod/build");
-  assert.equal(JSON.parse(requests[0][1].body).name, "MonMod");
-  resolve({ mod: "MonMod", path: "mods/MonMod", files: 2, mobs: 1 });
-  await first;
-  assert.equal(button.disabled, false);
-  assert.match(log.innerHTML, /Fiches de mobs/);
-  assert.match(log.innerHTML, /mods\/MonMod/);
-  const failed = vm.runInContext("buildMod(event)", ctx);
-  assert.equal(button.disabled, true);
-  reject(new Error("Échec de l'assemblage"));
-  await failed;
-  assert.equal(button.disabled, false, "un échec ne laisse pas le formulaire bloqué");
-  assert.ok(messages.some((item) => Array.isArray(item) && item[0] === "Échec de l'assemblage"));
+  const search = { value: "" }, more = { hidden: true }, scope = [], updates = [];
+  const assets = [
+    { kind: "model", rel: "A.bfres", name: "A" },
+    { kind: "model", rel: "B.bfres", name: "B" },
+    { kind: "model", rel: "C.bfres", name: "C" },
+    { kind: "texture", rel: "T.bntx", name: "T" },
+  ];
+  const state = { chooserModels: assets.slice(0, 3), project: { assets, image_revision: "rev" }, shown: { chooser: 2 } };
+  const ctx = vm.createContext({ state, restoredChoices: {}, esc: String,
+    $: (name) => ({ "#model-target": select, "#model-target-search": search,
+                    "#model-import-validate-more": more })[name],
+    assetValidation: {
+      valid: (_kind, rel) => rel !== "C.bfres",
+      entry: (_kind, rel) => ({ injectable: rel !== "B.bfres" }),
+      setScope: (name, items, rev) => scope.push([name, [...items], rev]),
+    },
+    matches: (asset, filter) => asset.name.toLowerCase().includes(filter),
+    updateModelImportControls: () => updates.push("controls"),
+    updateValidatedAssets: () => updates.push("validation"),
+  });
+  vm.runInContext(section("function applyRestoredChoices()", "function captureUiSession()"), ctx);
+  vm.runInContext(section("function fillModelTargets()", "function openDoc(doc)"), ctx);
+  vm.runInContext("fillModelTargets()", ctx);
+  assert.deepEqual(select.options.map((item) => item.value), ["", "A.bfres"]);
+  assert.equal(select.value, "", "never inject automatically into the first valid target");
+  ctx.restoredChoices["model-target"] = "A.bfres";
+  vm.runInContext("fillModelTargets()", ctx);
+  assert.equal(select.value, "A.bfres");
+  assert.equal(ctx.restoredChoices["model-target"], undefined);
+  ctx.restoredChoices["model-target"] = "B.bfres";
+  vm.runInContext("fillModelTargets()", ctx);
+  assert.equal(select.value, "", "an unvalidated target cannot be silently replaced");
+  assert.equal(ctx.restoredChoices["model-target"], "B.bfres");
+  vm.runInContext("requestChooserChecks()", ctx);
+  assert.deepEqual(scope[0], ["view", assets.slice(0, 2), "rev"]);
+  assert.equal(more.hidden, false);
+  search.value = "b";
+  vm.runInContext("requestChooserChecks()", ctx);
+  assert.deepEqual(scope[1], ["view", [assets[1]], "rev"]);
+  assert.equal(more.hidden, true);
+  assert.ok(updates.includes("controls") && updates.includes("validation"));
 }
 
-(async () => {
-  workspaceNavigation();
-  creationReflectsTheCurrentProject();
-  await buildingRequiresConfirmationAndCannotDoubleSubmit();
-  console.log("Workspaces UI: OK");
-})().catch((error) => { console.error(error); process.exitCode = 1; });
+workspaceNavigation();
+modelImportChooserRetainsValidationAndExplicitSelection();
+console.log("Workspaces UI: OK");

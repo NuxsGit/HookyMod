@@ -94,6 +94,47 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual((stored["theme"], stored["vram_gb"], stored["accent"]),
                              ("aurora", 13, "menthe"))
 
+    def test_webgl_settings_persist_validate_and_leave_png_geometry_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = make_server(root)
+            query = {"path": ["Model/Petit.bfres"], "w": ["96"], "h": ["72"]}
+            before_png = server.api("GET", "/api/model/preview", query, {})[0]
+            before_geometry = server.api("GET", "/api/model/geometry", query, {})[0]
+            patch = {"viewer_upscale": "fsr", "fsr_quality": "performance", "fsr_sharpness": 0.25,
+                     "viewer_msaa": "off", "viewer_dpr": "1", "viewer_fps": "15", "viewer_limit": "800"}
+            payload = json.loads(server.api("POST", "/api/settings", {}, patch)[0])["settings"]
+            self.assertEqual({key: payload[key] for key in patch}, patch)
+            stored = json.loads((root / "work" / "settings.json").read_text())
+            self.assertEqual({key: stored[key] for key in patch}, patch)
+            restarted = HookyCreatorServer(root / "dump", root / "work", host="127.0.0.1", port=0)
+            loaded = json.loads(restarted.api("GET", "/api/settings", {}, {})[0])["settings"]
+            self.assertEqual({key: loaded[key] for key in patch}, patch)
+            self.assertEqual(before_png, restarted.api("GET", "/api/model/preview", query, {})[0])
+            self.assertEqual(before_geometry, restarted.api("GET", "/api/model/geometry", query, {})[0])
+            for key, value in (("viewer_upscale", "fsr4"), ("fsr_quality", "bogus"),
+                               ("viewer_msaa", "8"), ("viewer_dpr", "3"),
+                               ("viewer_fps", "10"), ("viewer_limit", "9999"),
+                               ("fsr_sharpness", "not a number")):
+                with self.subTest(key=key), self.assertRaises(ProjectError):
+                    restarted.api("POST", "/api/settings", {}, {key: value})
+            self.assertEqual(json.loads((root / "work" / "settings.json").read_text()), stored)
+            clamped = json.loads(restarted.api("POST", "/api/settings", {}, {"fsr_sharpness": 5})[0])
+            self.assertEqual(clamped["settings"]["fsr_sharpness"], 1)
+
+    def test_old_settings_files_receive_webgl_defaults_without_losing_existing_preferences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = root / "work"; work.mkdir()
+            (work / "settings.json").write_text(json.dumps({"vram_gb": 9, "language": "en"}))
+            server = make_server(root)
+            settings = json.loads(server.api("GET", "/api/settings", {}, {})[0])["settings"]
+            self.assertEqual((settings["vram_gb"], settings["language"]), (9, "en"))
+            self.assertEqual((settings["viewer_upscale"], settings["fsr_quality"], settings["fsr_sharpness"]),
+                             ("native", "quality", 0.65))
+            self.assertEqual((settings["viewer_msaa"], settings["viewer_dpr"], settings["viewer_fps"], settings["viewer_limit"]),
+                             ("4", "2", "60", "1600"))
+
     def test_post_bad_setting_is_a_readable_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = make_server(Path(tmp))

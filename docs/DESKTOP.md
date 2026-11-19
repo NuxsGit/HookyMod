@@ -41,9 +41,11 @@ Les formats non vérifiés ou non pris en charge ne sont pas montrés comme
 utilisables. Le remplacement des sons et des vidéos est expérimental et écrit
 uniquement une copie de travail : aucun résultat n'est validé en jeu. Voir
 [`HOOKYCREATOR.md`](HOOKYCREATOR.md) pour les formats et limites, notamment
-BARS, NDVE et RESTBL non modifiés. L'assemblage d'un mod peut remplacer sans
-sauvegarde `mods/<nom>` ; l'interface demande confirmation et ne rend pas un
-mob automatiquement jouable.
+BARS, NDVE et RESTBL non modifiés. La version source de HookyCreator ne
+propose plus la conception ni l'assemblage de mods ; les fichiers existants
+restent sur disque. Les installateurs publics 11.26.2 précèdent ce retrait et
+conservent l'ancienne fonction d'assemblage, qui remplace `mods/<nom>` sans
+sauvegarde. Voir [`HOOKYMODS.md`](HOOKYMODS.md).
 
 ## Construction Windows / Linux / macOS
 
@@ -138,14 +140,19 @@ Blender sous Linux, y compris une animation et des poids synthétiques.
 
 Un push dont le message contient `[prepare-beta]` prépare un **brouillon non
 publié**, uniquement si ces jobs réussissent. Il regroupe les quatre
-installateurs et `SHA256SUMS.txt` sous le tag `v<version>-beta`. Le workflow ne
-publie pas automatiquement ce brouillon. Avant de le publier, contrôler aussi
-le workflow de parité Rust séparé, les notices et droits, les limites de chaque
-plateforme et la signature des paquets. Voir [PUBLICATION.md](PUBLICATION.md).
+installateurs et `SHA256SUMS.txt` sous le tag `v<version>-beta`. Un push de
+confiance marqué `[prepare-release]` prépare de la même manière un brouillon
+**non préversion** `v<version>`, avec les notes `docs/RELEASE_NOTES_<version>.md` ;
+il refuse un tag existant. Aucun des deux brouillons n'est publié
+automatiquement. Avant publication, contrôler le workflow de parité Rust
+séparé sur le **même commit**, les quatre artefacts et leurs sommes, les notices
+et droits, les limites de chaque plateforme et la signature des paquets. Voir
+[PUBLICATION.md](PUBLICATION.md).
 
 Pour lancer ces vérifications localement après construction :
 
 ```bash
+python tools/check_desktop_bundle.py src-tauri/binaries/hookycreator-backend-<target-triple>
 python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-<target-triple>
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 # Après installation de tauri-driver et du WebDriver natif, sous un écran ou Xvfb :

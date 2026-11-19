@@ -19,7 +19,7 @@ Le scan est un inventaire de candidats ; consulte les avertissements, notamment 
 
 Les textures BNTX sont souvent distinctes des modèles BFRES. Dans HookyCreator, les références de matériaux reconnues permettent de rechercher des images dans l'inventaire ; une référence absente, ambiguë ou non décodable reste signalée. Certaines associations par nom sont heuristiques et doivent être vérifiées.
 
-Les BFRES 10.x reconnus peuvent être décodés à partir des tables de formes, indices, matériaux et attributs du LOD 0. Un repli heuristique existe pour certaines autres dispositions ; il peut omettre ou mélanger des éléments et le signale. L'export individuel HookyCreator peut ajouter un squelette et un clip Euler compatibles dans GLB/glTF, mais reste expérimental ; OBJ/MTL sont statiques. Morphs, shaders et autres LOD ne sont pas reconstruits. L'écriture 10.x est refusée ; l'injection est limitée à certaines structures 9.x. Voir [HOOKYCREATOR.md](HOOKYCREATOR.md).
+Les BFRES 10.x reconnus peuvent être décodés à partir des tables de formes, indices, matériaux et attributs du LOD 0. Un repli heuristique existe pour certaines autres dispositions ; il peut omettre ou mélanger des éléments et le signale. Dans cette branche source, l'export individuel HookyCreator peut ajouter un squelette et un clip Euler ou quaternion compatibles dans GLB/glTF, mais reste expérimental ; ces améliorations ne figurent pas dans les installateurs 11.26.2 déjà publiés. OBJ/MTL sont statiques. Morphs, shaders et autres LOD ne sont pas reconstruits. L'écriture 10.x est refusée ; l'injection est limitée à certaines structures 9.x. Voir [HOOKYCREATOR.md](HOOKYCREATOR.md).
 
 ```bash
 python -m hookymod.cli textures texture.bntx -o images/
@@ -33,7 +33,7 @@ La CLI de modèle recherche des textures voisines par nom : seul un albédo uniq
 
 - Une interface Tk absente peut nécessiter l'installation du paquet système `python3-tk` sous Debian/Ubuntu ; la CLI et l'atelier navigateur peuvent être utilisés sans elle.
 - Les textures BC6/BC7/ASTC ont besoin de `texture2ddecoder` pour les chemins de lecture concernés. L'encodage ASTC/BC7 n'est pas fourni.
-- Une ressource modifiée dont la taille change peut nécessiter une adaptation de la table RESTBL. L'assemblage de HookyCreator ne la met pas automatiquement à jour.
+- Une ressource modifiée dont la taille change peut nécessiter une adaptation de la table RESTBL. HookyCreator ne la met pas automatiquement à jour et n'assemble plus de mod dans cette version source.
 - Les archives, animations, paramètres et formats non reconnus peuvent rester illisibles. Une exportation ou une relecture valide ne garantit pas le résultat en jeu.
 
 ## Références et attributions

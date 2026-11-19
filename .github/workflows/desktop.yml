@@ -70,10 +70,14 @@ jobs:
         run: |
           node --check hookycreator/web/app.js
           node --check hookycreator/web/i18n.js
-          node --check hookycreator/web/studio.js
+          node --check hookycreator/web/model_animation.js
+          node --check hookycreator/web/model_viewer.js
+          node --check hookycreator/web/player.js
           python -c "import glob,subprocess; [subprocess.run(['node', path], check=True) for path in glob.glob('tests/*_test.js')]"
       - name: Build standalone sidecar including Rust core
         run: python .github/scripts/run_ci_command.py -- python tools/build_desktop_backend.py
+      - name: Verify the separated maker is absent from the sidecar
+        run: python .github/scripts/run_ci_command.py -- python tools/check_desktop_bundle.py src-tauri/binaries/hookycreator-backend-${{ matrix.target }}${{ matrix.extension }}
       - name: Smoke test the standalone sidecar
         run: python .github/scripts/run_ci_command.py -- python tools/smoke_desktop_backend.py src-tauri/binaries/hookycreator-backend-${{ matrix.target }}${{ matrix.extension }}
       - name: Install isolated Chromium dependencies for the sidecar
@@ -83,9 +87,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           CHROMIUM=$(node --input-type=module -e "import c from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await c.executablePath())")
-          HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}" HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
-          HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}" HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_animated_export.js
-          HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}" HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_studio.js
+          export HOOKY_DESKTOP_BACKEND="$PWD/src-tauri/binaries/hookycreator-backend-${{ matrix.target }}"
+          export HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core"
+          python .github/scripts/run_ci_command.py -- node tools/smoke_web_media.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_animated_export.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_separation.js
       - name: Format and test Tauri Rust
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
@@ -137,10 +143,12 @@ jobs:
       - name: Exercise synthetic WebGL, animation and media workflows
         run: |
           CHROMIUM=$(node --input-type=module -e "import chromium from './tools/webgl/node_modules/@sparticuz/chromium/build/index.js'; console.log(await chromium.executablePath())")
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_webgl.js
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_animated_export.js
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_web_media.js
-          HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core" node tools/smoke_studio.js
+          export HOOKY_CHROMIUM="$CHROMIUM" HOOKY_PLAYWRIGHT="$PWD/tools/webgl/node_modules/playwright-core"
+          python .github/scripts/run_ci_command.py -- node tools/smoke_webgl.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_player.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_animated_export.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_web_media.js
+          python .github/scripts/run_ci_command.py -- node tools/smoke_separation.js
 
   model-formats:
     name: Formats OBJ / glTF et interopérabilité / Linux
@@ -168,7 +176,7 @@ jobs:
       - name: Validate static and animated GLB/glTF with Khronos
         env:
           HOOKY_TEST_GLTF_VALIDATOR: '1'
-        run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_animated_export.py tests/test_multi_animation_export.py
+        run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_animated_export.py tests/test_multi_animation_export.py tests/test_player_skeleton_variants.py
       - name: Open the standard exports in Blender
         run: python .github/scripts/run_ci_command.py -- python -m pytest -q tests/test_real_blender.py
 
@@ -199,3 +207,38 @@ jobs:
           gh release create "v${version}-beta" beta-dist/* --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "HookyMod ${version} beta" \
             --draft --prerelease --notes-file docs/BETA_RELEASE_NOTES.md
+
+  release-draft:
+    name: Prepare a non-prerelease draft after all package checks
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[prepare-release]') }}
+    needs: [desktop, webgl, model-formats]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: HookyCreator-*
+          path: release-artifacts
+      - name: Require all four tested installers and create checksums
+        run: python tools/assemble_beta_release.py --artifacts release-artifacts --output release-dist
+      - name: Create an unpublished non-prerelease draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          notes="docs/RELEASE_NOTES_${version}.md"
+          test -f "$notes" || { echo "::error::Release notes missing: $notes"; exit 1; }
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v${version}" >/dev/null 2>ref-error.txt; then
+            echo "::error::Refusing to reuse existing tag v${version}"; exit 1
+          elif ! grep -q 'HTTP 404' ref-error.txt; then
+            cat ref-error.txt; exit 1
+          fi
+          gh release create "v${version}" release-dist/* --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "HookyMod ${version}" \
+            --draft --notes-file "$notes"

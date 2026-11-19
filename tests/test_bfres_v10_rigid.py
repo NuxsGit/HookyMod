@@ -6,7 +6,6 @@ import math
 import struct
 import tempfile
 import unittest
-from pathlib import Path
 
 from hookymod import bfres_v10, blender
 from tests.test_bfres_v10_struct import structured_model
@@ -101,7 +100,7 @@ class RigidPoseTests(unittest.TestCase):
     def test_unsupported_or_damaged_skeleton_never_moves_only_part_of_a_shape(self):
         for label, patch in (
             ("cycle", lambda d: struct.pack_into("<h", d, 0x1580 + 0x22, 1)),
-            ("scale", lambda d: struct.pack_into("<f", d, 0x1580 + 0x30, 2.)),
+            ("singular scale", lambda d: struct.pack_into("<f", d, 0x1580 + 0x30, 0.)),
             ("mapping", lambda d: struct.pack_into("<H", d, 0x1702, 99)),
             ("billboard", lambda d: struct.pack_into("<I", d, 0x1580 + 0x2c, 0x11000)),
             ("nonfinite", lambda d: struct.pack_into("<f", d, 0x1580 + 0x4c, float("nan"))),

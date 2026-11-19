@@ -1,4 +1,4 @@
-"""HookyCreator : projet, textures, modèles, mobs, export de mod et API.
+"""HookyCreator : projet, textures, modèles, exports et API.
 
 Tout est fabriqué à la volée (``tests/synth.py``) : aucun asset du jeu n'est
 nécessaire. Les tests vérifient aussi les refus — un éditeur ne doit jamais
@@ -23,6 +23,7 @@ import synth  # noqa: E402
 from hookycreator.project import Project, ProjectError  # noqa: E402
 from hookycreator.server import HookyCreatorServer  # noqa: E402
 from hookymod import util  # noqa: E402
+from modmaker.legacy_project import LegacyModProject  # noqa: E402
 
 
 def _gradient_png(width: int = 64, height: int = 64) -> bytes:
@@ -123,7 +124,7 @@ class ProjectTests(unittest.TestCase):
         self.assertIn("B.obj", result["files"])
 
 
-class MobAndModTests(unittest.TestCase):
+class ArchivedMobAndModTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         (self.root / "Tex").mkdir()
@@ -131,7 +132,7 @@ class MobAndModTests(unittest.TestCase):
         (self.root / "Tex" / "Creature_Alb.bntx").write_bytes(
             synth.make_bntx(32, 32, synth.rgba8_pixels(32, 32)))
         (self.root / "Model" / "Creature.bfres").write_bytes(synth.make_bfres())
-        self.project = Project(self.root)
+        self.project = LegacyModProject(self.root)
         self.project.scan()
 
     def test_create_mob_copies_assets_and_records_todo(self):

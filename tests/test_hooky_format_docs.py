@@ -11,7 +11,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-from hookycreator import modpackage, studio
+from modmaker import modpackage, studio
 
 
 ROOT = Path(__file__).resolve().parent.parent

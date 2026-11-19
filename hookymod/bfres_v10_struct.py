@@ -8,6 +8,7 @@ animations, poids et shaders ne sont pas reconstruits.
 """
 from __future__ import annotations
 
+import itertools
 import math
 import struct
 import sys
@@ -144,7 +145,12 @@ def _uv(data, start, stride, count, fmt, offset):
 
 def _place_rigid(data, start, stride, positions, normals, attributes, skeleton, skin_count, bone_index):
     """Replace toute une forme, ou échoue sans modifier partiellement ses données."""
-    from .bfres_v10_skeleton import SkeletonError, transform
+    from .bfres_v10_skeleton import (
+        SkeletonError,
+        normal_matrix,
+        transform,
+        transform_normal,
+    )
 
     if skin_count == 0:
         if "_i0" in attributes or "_w0" in attributes:
@@ -165,8 +171,13 @@ def _place_rigid(data, start, stride, positions, normals, attributes, skeleton, 
     else:
         raise SkeletonError("forme non rigide")
     placed = [transform(matrix, position) for matrix, position in zip(matrices, positions)]
-    rotated = ([transform(matrix, normal, normal=True) for matrix, normal in zip(matrices, normals)]
-               if normals is not None else None)
+    rotated = None
+    if normals is not None:
+        # Beaucoup de sommets partagent un os : inverser chaque matrice une
+        # seule fois au lieu d'une fois par sommet.
+        normal_matrices = {matrix: normal_matrix(matrix) for matrix in set(matrices)}
+        rotated = [transform_normal(normal_matrices[matrix], normal)
+                   for matrix, normal in zip(matrices, normals)]
     return placed, rotated
 
 
@@ -247,7 +258,7 @@ def read(data: bytes, model: int, base: int, report):
                 if part_count:
                     ranges.append((byte_offset // size, byte_offset // size + part_count))
             ordered = sorted(ranges)
-            if not ranges or any(left[1] > right[0] for left, right in zip(ordered, ordered[1:])):
+            if not ranges or any(left[1] > right[0] for left, right in itertools.pairwise(ordered)):
                 raise InvalidStructure("plages de sous-maillages vides ou chevauchantes")
             total_submeshes += len(ranges)
         else:

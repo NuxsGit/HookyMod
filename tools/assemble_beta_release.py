@@ -1,7 +1,8 @@
-"""Assemble four tested installer artifacts and SHA-256 sums for a beta draft.
+"""Assemble four installer artifacts and SHA-256 sums for a release draft.
 
-This is run after the platform jobs have passed. It refuses missing, duplicate
-or empty installers and never packages local projects, user data or Git history.
+The caller must verify that the platform jobs passed for the intended commit.
+The assembler refuses missing, duplicate or empty installers and never packages
+local projects, user data or Git history. It can serve stable or beta drafts.
 """
 from __future__ import annotations
 

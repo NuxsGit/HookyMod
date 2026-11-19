@@ -16,6 +16,7 @@ import binascii
 import gzip
 import hashlib
 import hmac
+import ipaddress
 import json
 import mimetypes
 import re
@@ -30,9 +31,9 @@ from urllib.parse import parse_qs, quote, urlparse
 from hookymod import audio_codec, bntx, native, restbl, sarc, video, zs
 from hookymod.util import HookyError
 
+from . import __version__
 from . import model_import as model_import_mod
 from . import session as session_mod
-from . import studio as studio_mod
 from .project import MAX_SCAN_FILES, Project, ProjectError
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -40,27 +41,24 @@ WEB_DIR = Path(__file__).parent / "web"
 #: routes qui coûtent un rendu CPU (limitées en parallèle)
 IMAGE_ROUTES = ("/api/model/preview", "/api/texture/png")
 
-# Dans la fenêtre native, une navigation GET ne doit jamais modifier le disque.
+# Dans les deux modes, une navigation GET ne doit pas lancer d'action d'écriture.
 # Les routes sont explicites afin qu'une nouvelle action ne devienne pas
 # accidentellement accessible comme image ou lien depuis un autre site.
-DESKTOP_READ_ROUTES = frozenset({
+READ_ROUTES = frozenset({
     "/api/state", "/api/settings", "/api/model/plan", "/api/textures", "/api/models",
     "/api/asset/check", "/api/sound/info", "/api/sound/ogg", "/api/sound/convert", "/api/texture/info",
     "/api/animation/list", "/api/animation/clip", "/api/video/info", "/api/video/stream",
     "/api/texture/png", "/api/ensembles", "/api/model/info",
-    "/api/model/preview", "/api/model/geometry", "/api/model/skin", "/api/model/uv", "/api/model/uv/info", "/api/mobs",
+    "/api/model/preview", "/api/model/geometry", "/api/model/skin", "/api/model/uv", "/api/model/uv/info",
     "/api/bulk/status",
     "/api/system", "/api/thumbs/status", "/api/export/download", "/api/ui-state",
-    "/api/studio/workspaces", "/api/studio/workspace", "/api/studio/export",
 })
-DESKTOP_WRITE_ROUTES = frozenset({
+WRITE_ROUTES = frozenset({
     "/api/settings", "/api/texture/import", "/api/texture/export", "/api/sound/import", "/api/video/import",
-    "/api/model/export", "/api/model/import", "/api/model/inspect", "/api/mobs", "/api/bulk/start",
-    "/api/mod/build", "/api/thumbs/warm",
+    "/api/model/export", "/api/model/import", "/api/model/inspect", "/api/bulk/start",
+    "/api/thumbs/warm",
     "/api/thumbs/stop", "/api/cache/clear", "/api/scan", "/api/export/selection",
     "/api/shutdown", "/api/ui-state",
-    "/api/studio/workspaces", "/api/studio/workspace", "/api/studio/import",
-    "/api/studio/check", "/api/studio/simulate", "/api/studio/delete", "/api/studio/copy",
 })
 DESKTOP_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -101,7 +99,7 @@ class HookyCreatorServer:
     """Serveur HTTP + état du projet (un projet à la fois, comme un éditeur)."""
 
     def __init__(self, root: str | Path, work: str | Path | None = None,
-                 host: str = "0.0.0.0", port: int = 8765, *,
+                 host: str = "127.0.0.1", port: int = 8765, *,
                  scan_limit: int = MAX_SCAN_FILES, desktop_token: str | None = None) -> None:
         if desktop_token is not None:
             if host != "127.0.0.1" or port != 0:
@@ -111,7 +109,6 @@ class HookyCreatorServer:
         self.desktop_token = desktop_token
         self.project = Project(Path(root), Path(work) if work else None, scan_limit=scan_limit)
         self.ui_session = session_mod.SessionStore(self.project.work, self.project.root)
-        self.studio = studio_mod.WorkspaceStore(self.project.work)
         self.scan_summary = self.project.scan()
         self.host = host
         self.port = port
@@ -126,8 +123,6 @@ class HookyCreatorServer:
         # L'import peut allouer des tampons et des maillages volumineux : une
         # seule requête à la fois, avant même de lire son corps HTTP.
         self.model_import_slot = threading.BoundedSemaphore(1)
-        # Les archives et projets .hooky sont bornés et lus un à la fois.
-        self.studio_slot = threading.BoundedSemaphore(1)
         self.thumbnail_activity = ThumbnailActivity()
         self._job_lock = threading.Lock()
         self.job: dict = {"running": False, "done": 0, "total": 0, "label": "",
@@ -144,7 +139,7 @@ class HookyCreatorServer:
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         if open_browser:
-            webbrowser.open(f"http://127.0.0.1:{self.port}/")
+            webbrowser.open(self.url)
         return self
 
     def stop(self) -> None:
@@ -162,7 +157,10 @@ class HookyCreatorServer:
 
     @property
     def url(self) -> str:
-        return f"http://{self.host}:{self.port}/"
+        # 0.0.0.0 désigne toutes les interfaces pour l'écoute, pas une adresse
+        # utilisable par le navigateur. Conserver la boucle locale comme lien.
+        host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
+        return f"http://{host}:{self.port}/"
 
     # ------------------------------------------------------------------ routes
     def api(self, method: str, route: str, query: dict, body: dict) -> tuple[bytes, str]:
@@ -182,56 +180,6 @@ class HookyCreatorServer:
             except session_mod.SessionError as exc:
                 raise ProjectError(str(exc)) from exc
             return _json({"saved": saved})
-
-        # HookyMod's stores only design projects in the work directory; none of
-        # these routes build a game mod or use the legacy assembly destination.
-        if route == "/api/studio/workspaces":
-            if method == "GET":
-                return _json(self.studio.list())
-            if method == "POST":
-                if not isinstance(body, dict):
-                    raise studio_mod.StudioError("Demande de création invalide.")
-                return _json({"workspace": self.studio.create(
-                    body.get("name", ""), body.get("description", ""),
-                    body.get("author", ""), body.get("target", ""))})
-
-        if route == "/api/studio/workspace":
-            if method == "GET":
-                return _json({"workspace": self.studio.load(query.get("id", [""])[0])})
-            if method == "POST":
-                if not isinstance(body, dict):
-                    raise studio_mod.StudioError("Demande de sauvegarde invalide.")
-                return _json({"workspace": self.studio.save(body.get("workspace"))})
-
-        if route == "/api/studio/check" and method == "POST":
-            if not isinstance(body, dict):
-                raise studio_mod.StudioError("Demande de vérification invalide.")
-            return _json(studio_mod.check_workspace(body.get("workspace")))
-
-        if route == "/api/studio/simulate" and method == "POST":
-            if not isinstance(body, dict):
-                raise studio_mod.StudioError("Demande de simulation invalide.")
-            return _json(studio_mod.simulate_element(body.get("element"), body.get("event"),
-                                                     body.get("items"), body.get("flags")))
-
-        if route == "/api/studio/import" and method == "POST":
-            if not isinstance(body, dict):
-                raise studio_mod.StudioError("Demande d'import invalide.")
-            return _json({"workspace": self.studio.import_archive(body.get("archive"))})
-
-        if route == "/api/studio/copy" and method == "POST":
-            if not isinstance(body, dict):
-                raise studio_mod.StudioError("Demande de copie invalide.")
-            return _json({"workspace": self.studio.copy(body.get("workspace"))})
-
-        if route == "/api/studio/delete" and method == "POST":
-            if not isinstance(body, dict):
-                raise studio_mod.StudioError("Demande de suppression invalide.")
-            self.studio.delete(body.get("id"), body.get("revision"))
-            return _json({"deleted": True})
-
-        if route == "/api/studio/export" and method == "GET":
-            return self.studio.export(query.get("id", [""])[0]), "application/vnd.hookymod+zip"
 
         if route == "/api/settings":
             if method == "POST":
@@ -397,13 +345,6 @@ class HookyCreatorServer:
         if route == "/api/model/import" and method == "POST":
             return _json(model_import_mod.import_model(project, body))
 
-        if route == "/api/mobs":
-            if method == "POST":
-                return _json(project.create_mob(body.get("name", ""), body.get("model", ""),
-                                                body.get("textures", []),
-                                                body.get("parent", "")))
-            return _json({"mobs": project.list_mobs()})
-
         if route == "/api/bulk/start":
             return _json(self.start_bulk(body.get("kinds", ["texture", "model"]),
                                          body.get("limit")))
@@ -411,9 +352,6 @@ class HookyCreatorServer:
         if route == "/api/bulk/status":
             with self._job_lock:
                 return _json(self.job)
-
-        if route == "/api/mod/build":
-            return _json(project.build_mod(body.get("name", "HookyMod")))
 
         # -- cache, mémoire, maintenance
         if route == "/api/system":
@@ -541,9 +479,18 @@ def _json(payload: dict) -> tuple[bytes, str]:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json"
 
 
+def _loopback_host(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _make_handler(server: HookyCreatorServer):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "HookyCreator/1.0"
+        server_version = f"HookyCreator/{__version__}"
 
         def log_message(self, fmt, *args):        # journal discret
             if "--verbose" in __import__("sys").argv:
@@ -587,8 +534,12 @@ def _make_handler(server: HookyCreatorServer):
             if route == "/api/desktop/session" and method == "POST":
                 return True  # le jeton du premier échange est vérifié séparément
             if not route.startswith("/api/"):
-                return method == "GET"
-            allowed = DESKTOP_READ_ROUTES if method == "GET" else DESKTOP_WRITE_ROUTES
+                if method == "GET":
+                    return True
+                self.close_connection = True
+                self._error("Méthode ou action non autorisée.", 405)
+                return False
+            allowed = READ_ROUTES if method == "GET" else WRITE_ROUTES
             if route not in allowed:
                 self.close_connection = True
                 self._error("Méthode ou action non autorisée.", 405)
@@ -603,6 +554,62 @@ def _make_handler(server: HookyCreatorServer):
             if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token) or not hmac.compare_digest(token, server.desktop_token):
                 self.close_connection = True
                 self._error("Session native absente ou expirée.", 403)
+                return False
+            return True
+
+        def _browser_allowed(self, route: str, method: str) -> bool:
+            """Protéger le serveur navigateur local des requêtes inter-origines.
+
+            Les clients non navigateur peuvent omettre Origin, mais doivent
+            envoyer du JSON pour les POST. Les adresses externes ne sont admises
+            que si l'utilisateur a explicitement choisi une écoute non locale ;
+            dans ce cas il n'y a pas d'authentification réseau.
+            """
+            if server.desktop_token is not None:
+                return True  # le mode natif possède ses propres contrôles et cookie
+            hosts = self.headers.get_all("Host", [])
+            origins = self.headers.get_all("Origin", [])
+            sites = self.headers.get_all("Sec-Fetch-Site", [])
+            valid = len(hosts) == 1 and len(origins) <= 1 and len(sites) <= 1
+            host = hosts[0].lower() if len(hosts) == 1 else ""
+            # Refuser notamment les userinfo, espaces et chemins ambigus dans
+            # Host, tout en acceptant les hôtes transmis par un proxy de preview.
+            if not re.fullmatch(r"(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::[0-9]{1,5})?", host):
+                valid = False
+            try:
+                authority = urlparse(f"http://{host}")
+                hostname = authority.hostname or ""
+                port = authority.port
+            except ValueError:
+                hostname, port, valid = "", None, False
+            local = _loopback_host(server.host)
+            if local:
+                names = {server.host.lower()}
+                if server.host.lower() in ("127.0.0.1", "localhost"):
+                    names.update(("127.0.0.1", "localhost"))
+                if hostname not in names or (port if port is not None else 80) != server.port:
+                    valid = False  # protège aussi contre le DNS rebinding
+            schemes = ("http",) if local else ("http", "https")
+            if origins and origins[0].lower() not in {f"{scheme}://{host}" for scheme in schemes}:
+                valid = False
+            # Une prévisualisation derrière proxy peut ouvrir la page dans une
+            # iframe d'une autre origine. Autoriser uniquement cette navigation
+            # documentaire lorsque l'écoute non locale est explicite : les API
+            # et toutes les écritures gardent les contrôles inter-origines.
+            embedded_document = (not local and method == "GET"
+                                 and route in ("/", "/index.html", "/static/index.html")
+                                 and self.headers.get_all("Sec-Fetch-Mode", []) == ["navigate"]
+                                 and self.headers.get_all("Sec-Fetch-Dest", []) == ["iframe"])
+            if sites and sites[0] not in ("same-origin", "none") and not embedded_document:
+                valid = False
+            if not valid:
+                self.close_connection = True
+                self._error("Origine ou hôte refusé.", 403)
+                return False
+            allowed = READ_ROUTES if method == "GET" else WRITE_ROUTES
+            if (route.startswith("/api/") and route not in allowed) or (method != "GET" and not route.startswith("/api/")):
+                self.close_connection = True
+                self._error("Méthode ou action non autorisée.", 405)
                 return False
             return True
 
@@ -645,7 +652,7 @@ def _make_handler(server: HookyCreatorServer):
 
         def do_GET(self) -> None:                # noqa: N802 (API HTTP)
             parsed = urlparse(self.path)
-            if not self._desktop_allowed(parsed.path, "GET"):
+            if not self._desktop_allowed(parsed.path, "GET") or not self._browser_allowed(parsed.path, "GET"):
                 return
             if parsed.path == "/desktop-login" and server.desktop_token is not None:
                 parsed = parsed._replace(path="/static/desktop-login.html")
@@ -760,7 +767,7 @@ def _make_handler(server: HookyCreatorServer):
                             body, kind = server.api("GET", parsed.path, query, {})
                     else:
                         body, kind = server.api("GET", parsed.path, query, {})
-                except (ProjectError, HookyError, studio_mod.StudioError) as exc:
+                except (ProjectError, HookyError) as exc:
                     return self._error(str(exc))
                 except Exception as exc:         # jamais de trace dans l'UI
                     return self._error(f"Erreur interne : {exc}", 500)
@@ -773,9 +780,6 @@ def _make_handler(server: HookyCreatorServer):
                     return self._send(body, kind, headers={
                         "ETag": etag,
                         "Cache-Control": "public, max-age=0, must-revalidate"})
-                if parsed.path == "/api/studio/export":
-                    return self._send(body, kind, headers={"Content-Disposition":
-                                      'attachment; filename="hookymods.hooky"'})
                 if parsed.path == "/api/animation/clip" and query.get("download") == ["1"]:
                     return self._send(body, kind, headers={"Content-Disposition":
                                       'attachment; filename="hookycreator-animation.json"'})
@@ -803,16 +807,26 @@ def _make_handler(server: HookyCreatorServer):
 
         def do_POST(self) -> None:               # noqa: N802
             parsed = urlparse(self.path)
-            if not self._desktop_allowed(parsed.path, "POST"):
+            if not self._desktop_allowed(parsed.path, "POST") or not self._browser_allowed(parsed.path, "POST"):
                 return
+            # Aucun formulaire cross-origin ne peut envoyer ce type de contenu
+            # sans preflight, que le serveur ne prend pas en charge.
+            content_types = self.headers.get_all("Content-Type", [])
+            if (parsed.path != "/api/desktop/session"
+                    and (len(content_types) != 1 or self.headers.get_content_type() != "application/json")):
+                self.close_connection = True
+                return self._error("Contenu JSON requis.", 415)
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) > 1 or self.headers.get_all("Transfer-Encoding", []):
+                self.close_connection = True
+                return self._error("Longueur de requête invalide.")
             try:
-                length = int(self.headers.get("Content-Length") or 0)
+                length = int(lengths[0]) if lengths else 0
             except ValueError:
                 self.close_connection = True
                 return self._error("Longueur de requête invalide.")
-            if (length < 0 or (server.desktop_token is not None and length > 128 * 1024 * 1024)
+            if (length < 0 or length > 128 * 1024 * 1024
                     or (parsed.path == "/api/ui-state" and length > session_mod.MAX_BYTES)
-                    or (parsed.path.startswith("/api/studio/") and length > studio_mod.MAX_REQUEST_BYTES)
                     or (parsed.path == "/api/sound/import" and length > ((audio_codec.MAX_IMPORT_BYTES + 2) // 3) * 4 + 4096)
                     or (parsed.path == "/api/video/import" and length > ((video.MAX_IMPORT + 2) // 3) * 4 + 4096)
                     or (parsed.path in ("/api/model/import", "/api/model/inspect") and length > model_import_mod.MAX_REQUEST)):
@@ -832,19 +846,6 @@ def _make_handler(server: HookyCreatorServer):
                     return self._error("Session invalide.", 403)
                 cookie = f"hooky_session_{server.port}={token}; Path=/; HttpOnly; SameSite=Strict"
                 return self._send(*_json({"ok": True}), headers={"Set-Cookie": cookie})
-            if parsed.path.startswith("/api/studio/"):
-                if not server.studio_slot.acquire(blocking=False):
-                    self.close_connection = True
-                    return self._send(*_json({"error": "Une opération HookyMod's est déjà en cours."}),
-                                      status=429, headers={"Retry-After": "2"})
-                try:
-                    self.connection.settimeout(30)
-                    return self._post_json(parsed, length)
-                except TimeoutError:
-                    self.close_connection = True
-                    return self._error("Lecture du projet interrompue.", 408)
-                finally:
-                    server.studio_slot.release()
             if parsed.path in ("/api/model/import", "/api/model/inspect", "/api/video/import", "/api/sound/import"):
                 if not server.model_import_slot.acquire(blocking=False):
                     self.close_connection = True
@@ -866,11 +867,13 @@ def _make_handler(server: HookyCreatorServer):
                 body = json.loads(raw.decode("utf-8") or "{}")
             except (ValueError, RecursionError):
                 return self._error("Requête JSON invalide.")
+            if not isinstance(body, dict):
+                return self._error("Objet JSON attendu.")
             if not parsed.path.startswith("/api/"):
                 return self._error("Page inconnue", 404)
             try:
                 content, kind = server.api("POST", parsed.path, parse_qs(parsed.query), body)
-            except (ProjectError, HookyError, studio_mod.StudioError) as exc:
+            except (ProjectError, HookyError) as exc:
                 return self._error(str(exc))
             except KeyError as exc:
                 return self._error(f"Champ manquant : {exc}")
@@ -884,6 +887,6 @@ def _make_handler(server: HookyCreatorServer):
     return Handler
 
 
-def serve(root, work=None, host: str = "0.0.0.0", port: int = 8765,
+def serve(root, work=None, host: str = "127.0.0.1", port: int = 8765,
           open_browser: bool = False, *, scan_limit: int = MAX_SCAN_FILES) -> HookyCreatorServer:
     return HookyCreatorServer(root, work, host, port, scan_limit=scan_limit).start(open_browser)

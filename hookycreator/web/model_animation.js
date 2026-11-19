@@ -4,6 +4,7 @@
    are changed. The skin is applied to the already placed H3D1 rest geometry. */
 const HookyAnimation = (() => {
   const MAX_BYTES = 64 * 1024 * 1024;
+  class PoseError extends Error {}
   const finiteArray = (value, count) => Array.isArray(value) && value.length === count
     && value.every(Number.isFinite);
 
@@ -25,7 +26,13 @@ const HookyAnimation = (() => {
       if (typeof b.name !== "string" || !b.name || names.has(b.name) || !Number.isInteger(b.parent)
           || b.parent < -1 || b.parent >= header.bones.length || b.parent === index
           || !finiteArray(b.scale, 3) || !finiteArray(b.rotation, 4) || !finiteArray(b.translation, 3)
-          || !finiteArray(b.inverse, 12) || typeof b.ssc !== "boolean") throw new Error("Os de skin invalide.");
+          || !finiteArray(b.inverse, 12) || typeof b.ssc !== "boolean"
+          || (b.rotation_mode !== undefined && !["euler", "quaternion"].includes(b.rotation_mode)))
+        throw new Error("Os de skin invalide.");
+      if (b.rotation_mode === "quaternion") {
+        const length = Math.hypot(...b.rotation);
+        if (length < 0.999 || length > 1.001) throw new Error("Quaternion de repos non unitaire.");
+      }
       names.add(b.name);
     }
     // Parent-first order, checked without recursion (bones need not be ordered).
@@ -72,7 +79,31 @@ const HookyAnimation = (() => {
       + (-2*t3 + 3*t2)*v[i + 1] + (t3 - t2)*d*s[i + 1];
   }
 
+  function evaluateQuaternion(curve, frame) {
+    const f = curve.frames, v = curve.values;
+    if (f.length === 1 || frame <= f[0]) return [...v[0]];
+    if (frame >= f[f.length - 1]) return [...v[v.length - 1]];
+    let low = 0, high = f.length;
+    while (low < high) { const mid = (low + high) >> 1; if (f[mid] <= frame) low = mid + 1; else high = mid; }
+    const i = Math.min(f.length - 2, low - 1), d = f[i + 1] - f[i];
+    if (!d) return [...v[i + 1]];
+    const u = (frame - f[i]) / d, a = v[i]; let b = v[i + 1];
+    let dot = a.reduce((sum, x, j) => sum + x*b[j], 0);
+    if (dot < 0) { b = b.map((x) => -x); dot = -dot; }
+    dot = Math.min(1, Math.max(0, dot));
+    let q;
+    if (dot > 0.9995) q = a.map((x, j) => x + u*(b[j] - x));
+    else {
+      const angle = Math.acos(dot), divisor = Math.sin(angle);
+      q = a.map((x, j) => (Math.sin((1-u)*angle)*x + Math.sin(u*angle)*b[j]) / divisor);
+    }
+    const length = Math.hypot(...q);
+    if (!Number.isFinite(length) || length < 1e-8) throw new PoseError("Quaternion d'animation invalide.");
+    return q.map((x) => x / length);
+  }
+
   function bind(skin, clip) {
+    if (clip?.scale_mode === 0x300) throw new Error("Mode d'échelle Softimage FSKA non pris en charge.");
     if (!clip || !Number.isFinite(clip.frames) || clip.frames < 0 || clip.frames > 100000
         || !Number.isFinite(clip.fps) || clip.fps <= 0 || clip.fps > 240 || !Array.isArray(clip.bones))
       throw new Error("Clip d'animation invalide.");
@@ -87,13 +118,29 @@ const HookyAnimation = (() => {
       for (const [key, length] of [["scale", 3], ["translation", 3], ["rotation", 4]]) {
         if (track.base[key] !== undefined && !finiteArray(track.base[key], length)) throw new Error("Pose de base invalide.");
       }
-      for (const c of track.curves) {
-        if (!/^(scale|translation|rotation)\.[xyz]$/.test(c.target) || c.interpolation !== "cubic"
-            || !Array.isArray(c.frames) || !c.frames.length || c.frames.length > 250000
-            || !finiteArray(c.values, c.frames.length) || !finiteArray(c.slopes, c.frames.length)
-            || !c.frames.every(Number.isFinite) || c.frames.some((v, k) => k && v < c.frames[k - 1]))
-          throw new Error("Courbe de clip non prise en charge.");
+      const mode = track.rotation_mode || "euler", targets = new Set(), rotationTargets = new Set();
+      if (!["euler", "quaternion"].includes(mode)) throw new Error("Mode de rotation de clip inconnu.");
+      if (mode === "quaternion" && track.base.rotation !== undefined) {
+        const length = Math.hypot(...track.base.rotation);
+        if (length < 0.999 || length > 1.001) throw new Error("Quaternion de base non unitaire.");
       }
+      for (const c of track.curves) {
+        const quaternion = c.target === "rotation" && c.interpolation === "slerp" && mode === "quaternion";
+        const scalar = /^(scale|translation|rotation)\.[xyz]$/.test(c.target) && c.interpolation === "cubic"
+          && (mode !== "quaternion" || !c.target.startsWith("rotation."));
+        if ((!quaternion && !scalar) || targets.has(c.target)
+            || !Array.isArray(c.frames) || !c.frames.length || c.frames.length > 250000
+            || !c.frames.every(Number.isFinite) || c.frames.some((v, k) => k && v < c.frames[k - 1])
+            || (quaternion && (!Array.isArray(c.values) || c.values.length !== c.frames.length
+              || c.values.some((value) => !finiteArray(value, 4) || Math.hypot(...value) < 0.999 || Math.hypot(...value) > 1.001)))
+            || (scalar && (!finiteArray(c.values, c.frames.length) || !finiteArray(c.slopes, c.frames.length))))
+          throw new Error("Courbe de clip non prise en charge.");
+        targets.add(c.target);
+        if (c.target.startsWith("rotation.")) rotationTargets.add(c.target);
+      }
+      if (rotationTargets.size && rotationTargets.size < 3 && track.base.rotation === undefined
+          && skin.bones[i].rotation_mode === "quaternion")
+        throw new Error(`Rotation Euler partielle sans base pour l'os quaternion « ${track.name} ».`);
       tracks[i] = track; matched += 1; if (track.curves.length) animated += 1;
     }
     if (!matched || !animated) throw new Error("Aucun os animé de ce clip ne correspond au modèle.");
@@ -107,11 +154,21 @@ const HookyAnimation = (() => {
     return out;
   }
 
-  function localMatrix(s, r, t, parentScale) {
-    const [x, y, z] = r, cx = Math.cos(x), sx = Math.sin(x), cy = Math.cos(y), sy = Math.sin(y),
-      cz = Math.cos(z), sz = Math.sin(z);
-    const rot = [cz*cy, cz*sy*sx - sz*cx, cz*sy*cx + sz*sx,
-      sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx, -sy, cy*sx, cy*cx];
+  function localMatrix(s, r, t, parentScale, rotationMode) {
+    let rot;
+    if (rotationMode === "quaternion") {
+      const length = Math.hypot(...r);
+      if (!Number.isFinite(length) || length < 1e-8) throw new PoseError("Quaternion d'os invalide.");
+      const [x, y, z, w] = r.map((value) => value / length);
+      rot = [1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w),
+        2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w),
+        2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)];
+    } else {
+      const [x, y, z] = r, cx = Math.cos(x), sx = Math.sin(x), cy = Math.cos(y), sy = Math.sin(y),
+        cz = Math.cos(z), sz = Math.sin(z);
+      rot = [cz*cy, cz*sy*sx - sz*cx, cz*sy*cx + sz*sx,
+        sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx, -sy, cy*sx, cy*cx];
+    }
     // T * inverse(parent local scale) * R * S: translation is still scaled by
     // the parent; rotation and scale get Maya-style segment compensation.
     const p = parentScale || [1, 1, 1];
@@ -121,43 +178,57 @@ const HookyAnimation = (() => {
   }
 
   function normalRows(m) {
-    const a=m[0], b=m[1], c=m[2], d=m[4], e=m[5], f=m[6], g=m[8], h=m[9], i=m[10];
+    // Normalize the linear block before testing the determinant: a small but
+    // uniformly scaled transform is invertible, unlike a flattened bone.
+    const raw = [m[0],m[1],m[2],m[4],m[5],m[6],m[8],m[9],m[10]];
+    const magnitude = Math.max(...raw.map(Math.abs));
+    if (!Number.isFinite(magnitude) || magnitude === 0) throw new PoseError("Matrice d'animation singulière.");
+    const [a,b,c,d,e,f,g,h,i] = raw.map((value) => value / magnitude);
     const det = a*(e*i-f*h) - b*(d*i-f*g) + c*(d*h-e*g);
-    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return [1,0,0,0, 0,1,0,0, 0,0,1,0];
-    const q = 1/det;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) throw new PoseError("Matrice d'animation singulière.");
+    const q = 1/det/magnitude;
     return [(e*i-f*h)*q, (f*g-d*i)*q, (d*h-e*g)*q, 0,
       (c*h-b*i)*q, (a*i-c*g)*q, (b*g-a*h)*q, 0,
       (b*f-c*e)*q, (c*d-a*f)*q, (a*e-b*d)*q, 0];
   }
 
-  function palette(binding, frame) {
+  function pose(binding, frame) {
     if (!Number.isFinite(frame)) throw new Error("Temps d'animation invalide.");
     const { skin, tracks } = binding, locals = [], worlds = [], result = new Float32Array(skin.bones.length * 24);
     for (let i = 0; i < skin.bones.length; i += 1) {
       const bone = skin.bones[i], track = tracks[i], base = track?.base || {};
-      const scale = [...(base.scale || bone.scale)], rotation = [...(base.rotation || bone.rotation)],
-        translation = [...(base.translation || bone.translation)];
+      const scale = [...(base.scale || bone.scale)], translation = [...(base.translation || bone.translation)];
+      let rotation = [...(base.rotation || bone.rotation)], rotationMode = bone.rotation_mode || "euler";
+      if (base.rotation || track?.curves.some((c) => c.target === "rotation" || c.target.startsWith("rotation.")))
+        rotationMode = track?.rotation_mode || "euler";
       for (const c of track?.curves || []) {
+        if (c.target === "rotation") { rotation = evaluateQuaternion(c, frame); continue; }
         const [key, component] = c.target.split("."), axis = { x: 0, y: 1, z: 2 }[component];
         ({ scale, rotation, translation })[key][axis] = evaluate(c, frame);
       }
-      if (![...scale, ...rotation, ...translation].every(Number.isFinite)) throw new Error("Transformation non finie.");
-      locals.push({ scale, rotation, translation });
+      if (![...scale, ...rotation, ...translation].every(Number.isFinite)) throw new PoseError("Transformation non finie.");
+      locals.push({ scale, rotation, translation, rotationMode });
     }
     for (const i of skin.order) {
       const b = skin.bones[i], local = locals[i], p = b.parent;
-      const compensate = p >= 0 && (b.ssc || tracks[i]?.ssc)
-        ? locals[p].scale.map((x) => Math.abs(x) < 1e-8 ? 1 : x) : null;
-      const m = localMatrix(local.scale, local.rotation, local.translation, compensate);
+      const compensate = p >= 0 && (b.ssc || tracks[i]?.ssc) ? locals[p].scale : null;
+      if (compensate?.some((x) => Math.abs(x) < 1e-8))
+        throw new PoseError(`Compensation d'échelle impossible pour « ${b.name} » : échelle parent nulle.`);
+      const m = localMatrix(local.scale, local.rotation, local.translation, compensate, local.rotationMode);
       worlds[i] = p < 0 ? m : mul(worlds[p], m);
       const matrix = mul(worlds[i], b.inverse);
-      if (!matrix.every(Number.isFinite)) throw new Error("Matrice d'animation non finie.");
+      if (!matrix.every(Number.isFinite)) throw new PoseError("Matrice d'animation non finie.");
       result.set(matrix, i*24); result.set(normalRows(matrix), i*24 + 12);
+      if (!result.subarray(i*24, i*24 + 24).every(Number.isFinite))
+        throw new PoseError("Matrice d'animation trop grande pour WebGL.");
     }
-    return result;
+    return { palette: result, worlds };
   }
 
-  return { parseSkin, evaluate, bind, palette };
+  function palette(binding, frame) { return pose(binding, frame).palette; }
+  function restPose(skin) { return pose({ skin, tracks: [] }, 0); }
+
+  return { PoseError, parseSkin, evaluate, evaluateQuaternion, bind, palette, pose, restPose };
 })();
 if (typeof window !== "undefined") window.HookyAnimation = HookyAnimation;
 if (typeof module !== "undefined") module.exports = HookyAnimation;

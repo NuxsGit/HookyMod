@@ -1,15 +1,16 @@
 """Bounded reader for skeletal animation clips in BFRES 10.x (FSKA).
 
-This reader covers the cubic scalar curves and Euler rotations observed in the
-10.4 files supplied for testing.  It exports actual keyframes, values and
-slopes; it does not infer missing bones or rewrite game files.  Unsupported
-curve/rotation encodings are rejected rather than silently invented.
+This reader covers cubic scalar curves, Euler rotations and unquantized
+quaternion SLERP curves in the documented 10.4 layout. It exports actual
+keyframes rather than inferring missing bones or rewriting game files.
+Unsupported curve/rotation encodings are rejected rather than invented.
 
 Layout and interpolation cross-checked with NupExplorer's MIT-licensed
 ``nupx/anim.py`` (Copyright 2026 lunixxx37); see docs/PROVENANCE.md.
 """
 from __future__ import annotations
 
+import itertools
 import math
 import struct
 from typing import Any
@@ -94,10 +95,13 @@ def _clip_header(data: bytes, offset: int, index: int) -> dict[str, Any]:
     bones, = struct.unpack_from("<H", data, offset + 0x4c)
     if not 0 <= frames <= MAX_FRAMES or not 0 <= curves <= MAX_CURVES or bones > MAX_BONES:
         raise AnimationError("Nombre d'images, d'os ou de courbes trop élevé.")
+    rotation_mode, scale_mode = flags & 0x7000, flags & 0x300
     return {"index": index, "name": _name(data, name_ptr), "frames": frames,
             "fps": FPS, "loop": bool(flags & 4), "bone_count": bones,
-            "curve_count": curves, "rotation_mode": flags & 0x7000,
-            "supported": (flags & 0x7000) == 0x1000}
+            "curve_count": curves, "rotation_mode": rotation_mode, "scale_mode": scale_mode,
+            # This checks the header only; curve and skeleton compatibility are
+            # verified later when the clip is opened or exported.
+            "supported": rotation_mode in (0, 0x1000, 0x2000) and scale_mode != 0x300}
 
 
 def list_clips(data: bytes) -> list[dict[str, Any]]:
@@ -119,8 +123,10 @@ def _read_curve(data: bytes, offset: int, budget: KeyBudget | None = None) -> tu
         budget.consume(count)
     start, end, frame_scale, value_scale, value_offset = struct.unpack_from("<5f", data, offset + 0x18)
     frame_type, key_type, curve_type = flags & 3, (flags >> 2) & 3, (flags >> 4) & 7
-    if (not count or target not in _TARGETS or flags & 0x80
-            or curve_type != 0 or frame_type not in (0, 1, 2) or key_type not in (0, 1, 2)
+    quaternion = bool(flags & 0x80)
+    if (not count or target not in _TARGETS or curve_type != 0 or frame_type not in (0, 1, 2)
+            or key_type not in (0, 1, 2)
+            or (quaternion and (target != 0x20 or key_type != 0 or flags & 0x0800))
             or not _finite((start, end, frame_scale, value_scale, value_offset))):
         raise AnimationError("Courbe d'animation ou rotation non prise en charge.")
     frame_fmt, frame_size = {0: ("f", 4), 1: ("H", 2), 2: ("B", 1)}[frame_type]
@@ -129,8 +135,19 @@ def _read_curve(data: bytes, offset: int, budget: KeyBudget | None = None) -> tu
     if frame_type:
         scale = frame_scale or (1.0 / 32.0 if frame_type == 1 else 1.0)
         frames = [float(value) * scale for value in frames]
-    if not _finite(frames) or any(a > b for a, b in zip(frames, frames[1:])):
+    if not _finite(frames) or any(a > b for a, b in itertools.pairwise(frames)):
         raise AnimationError("Images-clés d'animation invalides ou non triées.")
+    if quaternion:
+        _region(data, key_ptr, count * 16)
+        raw = struct.unpack_from(f"<{count * 4}f", data, key_ptr)
+        values = []
+        for j in range(count):
+            value = raw[4*j:4*j+4]
+            length = math.hypot(*value)
+            if not math.isfinite(length) or not 0.999 <= length <= 1.001:
+                raise AnimationError("Quaternion d'animation non unitaire ou non fini.")
+            values.append([component / length for component in value])
+        return {"target": "rotation", "interpolation": "slerp", "frames": frames, "values": values}, count
     quantized = key_type != 0 or bool(flags & 0x0800)
     key_fmt, key_size = {0: ("f", 4), 1: ("H", 2), 2: ("B", 1)}[key_type]
     header = 8 if quantized else 0
@@ -160,8 +177,10 @@ def read_clip(data: bytes, index: int, *, budget: KeyBudget | None = None) -> di
         raise AnimationError("Index de clip d'animation hors limites.")
     offset = table + index * 0x50
     result = _clip_header(data, offset, index)
-    if not result["supported"]:
-        raise AnimationError("Seules les animations à rotations Euler sont prises en charge.")
+    if result["rotation_mode"] not in (0, 0x1000, 0x2000):
+        raise AnimationError(f"Mode de rotation FSKA non pris en charge (0x{result['rotation_mode']:x}).")
+    if result["scale_mode"] == 0x300:
+        raise AnimationError("Mode d'échelle Softimage FSKA non pris en charge.")
     bone_table, = struct.unpack_from("<Q", data, offset + 0x28)
     if result["bone_count"]:
         _region(data, bone_table, result["bone_count"] * 0x38)
@@ -174,8 +193,8 @@ def read_clip(data: bytes, index: int, *, budget: KeyBudget | None = None) -> di
         flags, = struct.unpack_from("<I", data, p + 0x28)
         ncurve = data[p + 0x2e]
         name = _name(data, name_ptr)
-        if name in names or flags & 0x00100000:
-            raise AnimationError("Os dupliqué ou rotation quaternion non prise en charge.")
+        if name in names:
+            raise AnimationError("Os d'animation dupliqué.")
         names.add(name)
         total_curves += ncurve
         if total_curves > MAX_CURVES:
@@ -203,13 +222,55 @@ def read_clip(data: bytes, index: int, *, budget: KeyBudget | None = None) -> di
                 raise AnimationError("Courbes dupliquées pour la même composante d'os.")
             targets.add(curve["target"])
             curves.append(curve)
+        has_quaternion = any(curve["target"] == "rotation" for curve in curves)
+        quat_bone = bool(flags & 0x00100000) or has_quaternion
+        scalar_rotation = any(curve["target"].startswith("rotation.") for curve in curves)
+        if ((quat_bone and (scalar_rotation or result["rotation_mode"] == 0x1000))
+                or (not quat_bone and "rotation.w" in targets)):
+            raise AnimationError(f"Encodage de rotation contradictoire pour l'os « {name} ».")
+        if quat_bone and "rotation" in base:
+            length = math.hypot(*base["rotation"])
+            if not 0.999 <= length <= 1.001:
+                raise AnimationError(f"Quaternion de base non unitaire pour l'os « {name} ».")
         bones.append({"name": name, "base": base, "ssc": bool(flags & 0x00800000),
-                      "curves": curves})
+                      "rotation_mode": "quaternion" if quat_bone else "euler", "curves": curves})
     if total_curves != result["curve_count"]:
         raise AnimationError("Nombre de courbes FSKA incohérent.")
     result.update({"bones": bones, "key_count": total_keys,
                    "note": "30 images/s par convention ; lecture expérimentale, non validée en jeu."})
     return result
+
+
+def evaluate_quaternion(curve: dict, frame: float) -> tuple[float, float, float, float]:
+    """Évalue une courbe quaternion par SLERP, avec prise en charge des sauts."""
+    frames, values = curve["frames"], curve["values"]
+    if not math.isfinite(frame) or not frames or len(frames) != len(values):
+        raise AnimationError("Courbe quaternion ou temps d'animation invalide.")
+    if len(frames) == 1 or frame <= frames[0]:
+        return tuple(values[0])
+    if frame >= frames[-1]:
+        return tuple(values[-1])
+    import bisect
+    index = min(len(frames) - 2, bisect.bisect_right(frames, frame) - 1)
+    duration = frames[index + 1] - frames[index]
+    if duration == 0:
+        return tuple(values[index + 1])
+    u = (frame - frames[index]) / duration
+    a, b = values[index], values[index + 1]
+    dot = sum(x*y for x, y in zip(a, b))
+    if dot < 0:
+        b, dot = [-value for value in b], -dot
+    dot = min(1.0, max(0.0, dot))
+    if dot > 0.9995:
+        result = [x + u*(y-x) for x, y in zip(a, b)]
+    else:
+        angle = math.acos(dot)
+        divisor = math.sin(angle)
+        result = [(math.sin((1-u)*angle)*x + math.sin(u*angle)*y)/divisor for x, y in zip(a, b)]
+    length = math.hypot(*result)
+    if not math.isfinite(length) or length < 1e-8:
+        raise AnimationError("Quaternion d'animation invalide.")
+    return tuple(value / length for value in result)
 
 
 def evaluate(curve: dict, frame: float) -> float:

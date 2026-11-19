@@ -2,7 +2,9 @@
 
 HookyMod's owns the `.hooky` format. This draft is intended for discussion with launcher developers, beginning with Link's Tool Box and later the official Longshot launcher. It distinguishes what the repository implements from what remains to be built. The [French reference](HOOKY_FORMAT.md) includes the full design-project schema and a more detailed integration plan.
 
-**Status:** the studio currently exports non-playable design projects. A separate source-only reference tool can package, validate and extract already prepared mod files. Neither tool converts visual blocks into game content. Direct `.hooky` import by a launcher and compatibility in Longshot have **not been verified**. The published `11.26.1-beta` installers predate this work. The package contract below is experimental and may change before launcher developers agree on a stable version; no particular launcher version has been specified.
+**Status:** the current HookyCreator source removes the design workspace, mob records and mod assembly from the app; the experimental code is retained under `modmaker/` without a standalone interface. The published 11.26.2 installers still contain the previous workspace. A source-only reference tool can package, validate and extract already prepared mod files. Neither component converts visual blocks into game content. Direct `.hooky` import by a launcher and compatibility in Longshot have **not been verified**. The contract below may change before launcher developers agree on a stable version; no particular launcher version has been specified.
+
+The old source command `python -m hookycreator.modpackage` remains a compatibility alias. Neither module is shipped in the current desktop backend.
 
 ## Dispatch by manifest, not extension
 
@@ -10,8 +12,8 @@ Both variants use ZIP and have `manifest.json` at the root. Validate `format`, i
 
 | `format` | `version` | `kind` | Meaning |
 | --- | --- | --- | --- |
-| `org.hookymod.workspace` | `1` | `design-workspace` | Studio project containing `workspace.json` and `playable: false`. It is **not a mod**. The studio can export and import it. |
-| `org.hookymod.mod` | `1` | `romfs-overlay` | Proposed mod package carrying complete, already prepared files under `romfs/`. The reference CLI can pack, inspect and unpack it; the studio does not import this variant. |
+| `org.hookymod.workspace` | `1` | `design-workspace` | Studio project containing `workspace.json` and `playable: false`. It is **not a mod**. The historical studio exported and imported it; its reader is retained in source. |
+| `org.hookymod.mod` | `1` | `romfs-overlay` | Proposed mod package carrying complete, already prepared files under `romfs/`. The reference CLI can pack, inspect and unpack it; the historical studio did not import this variant. |
 
 A launcher must not install a workspace as if it were a mod. The full workspace schema and its existing validation are documented in the [French reference](HOOKY_FORMAT.md#1-projet-de-conception-existant--orghookymodworkspace-v1).
 
@@ -76,9 +78,9 @@ Run from the repository source tree with Python 3.10+; the module uses the stand
 
 ```bash
 python -c "from pathlib import Path; p=Path('exemple-mod/romfs/Example/hello.txt'); p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b'Hello Hooky!\n')"
-python -m hookycreator.modpackage pack --romfs exemple-mod/romfs --output exemple.hooky --id org.hookymod.example --name "Synthetic example" --mod-version 0.1.0 --description "Container demonstration only, not a playable mod."
-python -m hookycreator.modpackage inspect exemple.hooky
-python -m hookycreator.modpackage unpack exemple.hooky --destination exemple-extrait
+python -m modmaker.modpackage pack --romfs exemple-mod/romfs --output exemple.hooky --id org.hookymod.example --name "Synthetic example" --mod-version 0.1.0 --description "Container demonstration only, not a playable mod."
+python -m modmaker.modpackage inspect exemple.hooky
+python -m modmaker.modpackage unpack exemple.hooky --destination exemple-extrait
 ```
 
 `inspect` validates all bytes without extraction; `unpack` revalidates then creates a **new** destination containing `romfs/`. Neither installs or launches anything. Existing destinations are never replaced, and the output archive must be outside the source `romfs`. Failed writes can leave a partial file or folder to inspect and remove manually. Collection rejects links and Windows reparse points and scans at most 8,192 source entries. These commands assume a trusted local filesystem with no hostile concurrent process; they are not a local-process sandbox.
@@ -89,7 +91,7 @@ For a Python prototype, the reference API validates the complete archive in memo
 
 ```python
 from pathlib import Path
-from hookycreator.modpackage import MAX_ARCHIVE_BYTES, PackageError, read_package
+from modmaker.modpackage import MAX_ARCHIVE_BYTES, PackageError, read_package
 
 try:
     with Path("exemple.hooky").open("rb") as source:

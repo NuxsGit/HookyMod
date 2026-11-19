@@ -6,7 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from .server import HookyCreatorServer
+from . import __version__
+from .server import HookyCreatorServer, _loopback_host
 from .project import MAX_SCAN_FILES, ProjectError
 
 
@@ -56,11 +57,12 @@ def main(argv: list[str] | None = None) -> int:
         return _export_all(argv[1:])
     parser = argparse.ArgumentParser(
         prog="hookycreator",
-        description="HookyCreator — atelier de contenu (mobs, textures, modèles).",
+        description="HookyCreator — exploration et édition de ressources (textures, modèles, sons).",
     )
+    parser.add_argument("--version", action="version", version=f"HookyCreator {__version__}")
     parser.add_argument("root", nargs="?", default=".", help="dossier du projet (romfs ou assets extraits)")
     parser.add_argument("--work", help="dossier de travail (défaut : <projet>/hookycreator_work)")
-    parser.add_argument("--host", default="0.0.0.0", help="adresse d'écoute (défaut 0.0.0.0)")
+    parser.add_argument("--host", default="127.0.0.1", help="adresse d'écoute (défaut 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="port (défaut 8765)")
     parser.add_argument("--open", action="store_true", help="ouvre le navigateur")
     parser.add_argument("--scan-limit", type=int, default=MAX_SCAN_FILES,
@@ -76,11 +78,13 @@ def main(argv: list[str] | None = None) -> int:
     server.start(open_browser=args.open)
     # Le constructeur a déjà scanné le projet avant d'ouvrir le navigateur.
     state = server.scan_summary
-    print(f"HookyCreator 1.0 — {state['count']} asset(s) "
+    print(f"HookyCreator {__version__} — {state['count']} asset(s) "
           f"({state['textures']} textures, {state['models']} modèles, "
           f"{state['bytecode']} fichiers de données)")
     print(f"  projet : {state['root']}")
-    print(f"  écoute : http://127.0.0.1:{server.port}/")
+    print(f"  écoute : {server.url}")
+    if not _loopback_host(args.host):
+        print("  Attention : accès réseau sans authentification. N'expose pas ce serveur à un réseau non fiable.")
     if state.get("truncated"):
         print("  Attention : scan limité. Relance avec --scan-limit 0 pour indexer "
               "tous les fichiers reconnus.")

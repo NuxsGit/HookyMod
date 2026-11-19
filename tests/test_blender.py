@@ -400,12 +400,16 @@ class CliTests(unittest.TestCase):
             source.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
             for fmt in ("gltf", "glb", "obj"):
                 output = folder / fmt
-                with self.subTest(fmt=fmt), contextlib.redirect_stdout(io.StringIO()):
+                stdout = io.StringIO()
+                with self.subTest(fmt=fmt), contextlib.redirect_stdout(stdout):
                     self.assertEqual(cli.main(["export-model", str(source), "-o", str(output),
                                                "--formats", fmt, "--no-textures"]), 0)
                     self.assertTrue((output / f"forme.{fmt}").is_file())
                     report = (output / "RAPPORT_MODELE.txt").read_text(encoding="utf-8")
                     self.assertIn("textures désactivé", report)
+                    expected_kind = "Wavefront OBJ" if fmt == "obj" else "glTF 2.0"
+                    self.assertIn(f"Importer ▸ {expected_kind} → {output / f'forme.{fmt}'}", stdout.getvalue())
+                    self.assertNotIn("→ None", stdout.getvalue())
             for options in (("--formats", "unsupported"), ("--scale", "nan"), ("--model", "-1")):
                 output = folder / ("bad-" + options[0][2:])
                 with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()):

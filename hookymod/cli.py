@@ -22,6 +22,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from . import __version__
 from . import bfres as bfres_mod
 from . import bntx as bntx_mod
 from . import blender as blender_mod
@@ -32,7 +33,7 @@ from . import restbl as restbl_mod
 from . import texturemaps
 from . import translate as translate_mod
 from .container import Level, detect_kind
-from .mesh import export_obj, load_obj
+from .mesh import export_obj
 from .sarc import SarcArchive, is_sarc
 from .util import FormatError, HookyError, human_size, safe_child, safe_filename_stem, write_atomic
 from .zs import (DictMissing, ZstdDicts, find_dict_files, find_dictionaries_near,
@@ -582,8 +583,8 @@ def cmd_blender(args) -> int:
         print(f"  textures : {len(unique_images)} PNG candidat(s)")
     for warning in warnings[:20]:
         print(f"  ⚠ {warning}")
-    target = written.get("gltf") or written.get("obj")
-    kind = "glTF 2.0" if "gltf" in written else "Wavefront OBJ"
+    target = written.get("gltf") or written.get("glb") or written.get("obj")
+    kind = "glTF 2.0" if "gltf" in written or "glb" in written else "Wavefront OBJ"
     print(f"\nBlender : Fichier ▸ Importer ▸ {kind} → {target}")
     return 0
 
@@ -593,8 +594,10 @@ def _parse_size(text: str) -> tuple[int, int]:
     raw = str(text).lower().replace("×", "x").replace(",", "x").replace(" ", "")
     parts = raw.split("x")
     try:
+        if len(parts) != 2:
+            raise ValueError("deux dimensions attendues")
         width, height = int(parts[0]), int(parts[1])
-    except (IndexError, ValueError):
+    except ValueError:
         raise HookyError(f"Taille invalide : « {text} » (attendu 960x720).") from None
     return max(64, min(4096, width)), max(64, min(4096, height))
 
@@ -871,7 +874,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hookymod",
         description="HookyMod — explorer / modifier les assets romfs (SARC, zstd, BFRES, BNTX).")
-    parser.add_argument("--version", action="version", version="HookyMod 4.0.0")
+    parser.add_argument("--version", action="version", version=f"HookyMod {__version__}")
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--verbose", "-v", action="store_true", help="messages détaillés")

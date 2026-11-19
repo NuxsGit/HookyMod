@@ -14,13 +14,14 @@ const state = {
   logs: [],
   models: [],
   ensembles: [],
+  ensembleAnimation: "",
   textures: [],
   busy: 0,
   selection: new Set(),
   anchor: null,
   shown: { models: 48, textures: 48, ensembles: 48, sounds: 48, animations: 48, videos: 48, chooser: 48 },
   modelCandidates: [], textureCandidates: [], ensembleCandidates: [], soundCandidates: [],
-  chooserModels: [], chooserTextures: [],
+  chooserModels: [],
   system: null,
   engine: null,
   warm: null,
@@ -46,7 +47,6 @@ let ensembleRenderSequence = 0;
 let projectSnapshotRevision = null;
 let projectRequestSequence = 0;
 let appliedProjectRequest = 0;
-let modBuildPending = false;
 // Des sélecteurs ne sont remplis qu'après la validation progressive des assets.
 let restoredChoices = {};
 let restoredModelQuality = "";
@@ -54,6 +54,16 @@ let uiSessionWriter = null;
 let uiSessionBoot = Promise.resolve();
 let sessionLoadFailed = false;
 let nativeCheckpointSerial = 0;
+
+function applyViewerSettings() {
+  const settings = state.settings || {};
+  if (modelViewport) {
+    const select = document.querySelector("#model-upscale");
+    if (select) select.value = settings.viewer_upscale || "native";
+    void modelViewport.configure(settings);
+  }
+  window.HookyPlayer?.configure(settings);
+}
 
 /* ------------------------------------------------------------------ outils */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -199,13 +209,14 @@ function closeTab(id) {
 /* ------------------------------------------------------------------ vues */
 function showView(view, options = {}) {
   if (state.view !== view) {
+    if (state.view === "player") window.HookyPlayer?.hide();
     assetValidation.clearScope("view");
     thumbnailQueue.release($(`#view-${state.view}`));
     const scroll = $("#views");
     if (scroll) scroll.scrollTop = 0;
     // Les espaces d'accueil doivent rester lisibles, surtout sur mobile où
     // l'inspecteur est superposé. L'onglet du document reste disponible.
-    if (view === "edit" || view === "create" || view === "studio" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
+    if (view === "edit" || view === "player" || globalThis.matchMedia?.("(max-width: 900px)").matches) {
       hideInspector();
     }
   }
@@ -221,15 +232,13 @@ function showView(view, options = {}) {
     renderTabs();
   }
   if (view === "home") renderHome();
-  if (view === "create") renderCreation();
-  if (view === "studio") window.HookyStudio?.show();
   if (view === "models") renderModels();
   if (view === "ensembles") renderEnsembles();
+  if (view === "player" && !options.skipPlayer) window.HookyPlayer?.show();
   if (view === "textures") renderTextures();
   if (view === "animations") renderAnimations();
   if (view === "videos") renderVideos();
   if (view === "sounds") renderSounds();
-  if (view === "mobs") renderMobs();
   if (view === "import") renderModelImport();
   if (view === "settings") { renderSettings(); refreshSystem(); }
 }
@@ -237,15 +246,13 @@ function showView(view, options = {}) {
 const VIEW_LABELS = {
   home: "Accueil",
   edit: "Modification",
-  create: "Création de mod",
-  studio: "HookyMod's",
   models: "Modèles",
   ensembles: "Ensembles",
+  player: "Player",
   textures: "Textures",
   animations: "Animations",
   videos: "Vidéos",
   sounds: "Sons",
-  mobs: "Mobs",
   import: "Importer un modèle",
   settings: "Réglages",
 };
@@ -275,8 +282,7 @@ function renderStatus() {
   const node = $("#status-counts");
   if (node) {
     node.textContent = `${count("model")} modèles repérés · ${auxiliary} ressources auxiliaires · `
-      + `${count("texture")} textures repérées · `
-      + `${state.project?.mobs?.length || 0} fiches de mobs`;
+      + `${count("texture")} textures repérées`;
   }
   const scan = state.project || {};
   const incomplete = Boolean(scan.scan_incomplete || scan.scan_truncated || scan.scan_errors);
@@ -311,7 +317,6 @@ function renderStatus() {
       <span class="chip"><b>${count("model")}</b> modèles repérés</span>
       <span class="chip"><b>${count("sound")}</b> BWAV repérés</span>
       <span class="chip"><b>${auxiliary}</b> BFRES auxiliaires</span>
-      <span class="chip"><b>${state.project?.mobs?.length || 0}</b> fiches de mobs</span>
       <span class="chip"><b>${state.project?.edited?.length || 0}</b> fichiers modifiés</span>
       <span class="chip" title="Budget mémoire des aperçus">budget
         <b>${(settings.vram_gb ?? 6).toFixed(1).replace(".0", "")} GiB</b></span>`;
@@ -333,24 +338,12 @@ function renderHome() {
     activity.innerHTML = [
       ["Racine", `<code>${esc(project.root)}</code>`],
       ["Dossier de travail", `<code>${esc(project.work)}</code>`],
-      ["Fichiers modifiés", edited.length ? `${edited.length} en attente d'assemblage` : "aucun"],
-      ["Fiches de mobs", project.mobs.length || "aucune"],
+      ["Fichiers modifiés", edited.length ? `${edited.length} dans le dossier de travail` : "aucun"],
       ["Réglages", `écrits dans <code>settings.json</code>`],
     ].map(([key, value]) => `<li><span class="k">${key}</span><span>${value}</span></li>`).join("");
   }
   renderLogs();
   renderStatus();
-}
-
-/* ------------------------------------------------------------------ création de mod */
-function renderCreation() {
-  const list = $("#creation-status");
-  if (!list || !state.project) return;
-  const edited = state.project.edited?.length || 0;
-  const mobs = state.project.mobs?.length || 0;
-  list.innerHTML = `
-    <li><span class="k">Copies modifiées</span><span>${edited}</span></li>
-    <li><span class="k">Fiches de mobs préparées</span><span>${mobs}</span></li>`;
 }
 
 /* ------------------------------------------------------------------ modèles */
@@ -384,12 +377,9 @@ function updateValidatedAssets() {
   if (state.view === "textures") errors = summary(state.textureCandidates, "texture", "texture(s)", "#texture-count").errors;
   if (state.view === "ensembles") errors = summary(state.ensembleCandidates, "model", "ensemble(s)", "#ensemble-count").errors;
   if (state.view === "sounds") errors = summary(state.soundCandidates, "sound", "son(s)", "#sound-count").errors;
-  if (state.view === "mobs" || state.view === "import") {
-    const selector = state.view === "mobs" ? "#mob-validation-status" : "#model-import-validation-status";
-    const model = summary(state.chooserModels, "model", "modèle(s)", selector);
-    const texture = summary(state.chooserTextures, "texture", "texture(s)", "#mob-texture-validation-status");
-    errors = model.errors + (state.view === "mobs" ? texture.errors : 0);
-    fillMobSelects();
+  if (state.view === "import") {
+    errors = summary(state.chooserModels, "model", "modèle(s)", "#model-import-validation-status").errors;
+    fillModelTargets();
   }
   $$("[data-validate-retry]").forEach((button) => { button.hidden = !errors; });
   updateSelectionBar();
@@ -497,9 +487,43 @@ function ensembleMatches(row) {
   return !filter || row.rel.toLowerCase().includes(filter);
 }
 
+function renderEnsembleAssociations() {
+  const catalog = window.HookyPlayerCatalog, select = $("#ensemble-animation");
+  if (!catalog || !select) return;
+  const inventory = state.project?.assets || [];
+  const current = inventory.find((asset) => asset.kind === "animation" && asset.rel === state.ensembleAnimation);
+  if (!current) state.ensembleAnimation = "";
+  const query = $("#ensemble-animation-search").value;
+  const matches = inventory.filter((asset) => asset.kind === "animation" && catalog.matches(asset, query));
+  const choices = matches.slice(0, 250);
+  if (current && !choices.includes(current)) choices.unshift(current);
+  select.innerHTML = '<option value="">Choisir une animation…</option>' + choices.map((asset) =>
+    `<option data-no-i18n value="${esc(asset.rel)}" title="${esc(asset.rel)}">${esc(asset.rel)}</option>`).join("");
+  select.value = state.ensembleAnimation;
+  select.disabled = !choices.length;
+  const status = $("#ensemble-association-status"), list = $("#ensemble-associations");
+  if (!current) {
+    status.textContent = matches.length
+      ? `${matches.length} animation(s) trouvée(s) · ${Math.min(matches.length, 250)} affichées. Choisis-en une.`
+      : "Aucune animation trouvée ; vérifie le filtre ou le scan du projet.";
+    list.innerHTML = "";
+    return;
+  }
+  const suggestions = catalog.suggestModels(inventory, current.rel), shown = suggestions.slice(0, 60);
+  status.textContent = suggestions.length
+    ? `${suggestions.length} modèle(s) suggéré(s) par nom · ${shown.length} affichés. À vérifier dans Player.`
+    : "Aucun modèle suggéré par nom. Le choix manuel reste possible dans Animations et Player.";
+  list.innerHTML = shown.map(({ asset, category, reason }) => `
+    <li><div class="association-name"><strong data-no-i18n>${esc(asset.rel)}</strong>
+      <small><span>${esc(reason)}</span> · <span>${esc(category)}</span> · <span>non vérifié</span></small></div>
+      <div class="actions"><button type="button" class="btn tiny" data-ensemble-model="${esc(asset.rel)}">Voir la fiche</button>
+      <button type="button" class="btn tiny primary" data-ensemble-player="${esc(asset.rel)}">Ouvrir comme base dans Player</button></div></li>`).join("");
+}
+
 async function renderEnsembles() {
   const grid = $("#ensemble-grid");
   if (!grid || state.view !== "ensembles") return;
+  renderEnsembleAssociations();
   const render = ++ensembleRenderSequence;
   if (!state.ensembles.length) {
     const revision = state.project?.image_revision;
@@ -599,8 +623,16 @@ function matches(asset, filter) {
 }
 
 function focusSearch() {
-  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens", sounds: "#search-sound", animations: "#search-animation", videos: "#search-video" }[state.view];
+  const selector = { models: "#search", textures: "#search-tex", ensembles: "#search-ens", player: "#player-base-search", sounds: "#search-sound", animations: "#search-animation", videos: "#search-video" }[state.view];
   if (selector) $(selector)?.focus();
+}
+
+function openPlayer(rel, options = {}) {
+  // Changer de vue avant de charger : aucun contexte 3D de l'inspecteur ne
+  // reste actif derrière la scène Player, même sur une petite machine.
+  hideInspector();
+  showView("player", { skipPlayer: true });
+  void window.HookyPlayer?.open(rel, options);
 }
 
 async function openModel(rel, options = {}) {
@@ -690,6 +722,7 @@ async function openModel(rel, options = {}) {
       <p class="hint">Les fichiers d'animation du jeu restent inchangés.</p></details>` : ""}
     <div class="actions">
       <button class="btn" id="btn-uv">Vérifier les UV</button>
+      <button class="btn" id="btn-compose-player" type="button">Composer dans Player</button>
       <button class="btn primary" id="btn-export-animations" ${animationFiles.length ? "" : "disabled"}>Télécharger 1 GLB · toutes les animations détectées</button>
       <button class="btn" id="btn-export-model">Exporter en GLB / glTF / OBJ</button>
       <button class="btn ghost" id="btn-turntable">Planche PNG</button>
@@ -773,8 +806,8 @@ async function openModel(rel, options = {}) {
       if (serial !== animationRequest || canvas !== $("#model-canvas")) return;
       const clips = result.clips.filter((clip) => clip.supported);
       animClip.innerHTML = clips.length ? clips.map((clip) => `<option value="${clip.index}">${esc(clip.name)} · ${clip.frames} images</option>`).join("")
-        : '<option value="">Aucun clip Euler pris en charge</option>';
-      if (!clips.length) { animStatus.textContent = "Aucun clip squelettique Euler pris en charge."; return; }
+        : '<option value="">Aucun clip avec en-tête pris en charge</option>';
+      if (!clips.length) { animStatus.textContent = "Aucun en-tête de clip squelettique pris en charge."; return; }
       animClip.disabled = false;
       if (preferred !== null && clips.some((clip) => clip.index === preferred)) animClip.value = String(preferred);
       await loadSelectedClip();
@@ -800,14 +833,19 @@ async function openModel(rel, options = {}) {
   const startView = () => {
     canvas.hidden = false; image.hidden = true; $("#btn-turntable").textContent = "Planche PNG";
     $("#model-flat").checked = false; $("#model-wire").checked = false;
-    $("#model-upscale").value = "native";
+    $("#model-upscale").value = state.settings?.viewer_upscale || "native";
     viewStatus.textContent = "Chargement de la géométrie complète…";
     try {
       const viewport = new ModelViewport(canvas, {
-        textured: $("#model-tex").checked, revision: info.revision,
+        textured: $("#model-tex").checked, revision: info.revision, renderSettings: settingsOrDefault(),
         onStatus: (message) => { if (modelViewport === viewport) viewStatus.textContent = message; },
         onFailure: failView,
         onModeFallback: () => { if (modelViewport === viewport) $("#model-upscale").value = "native"; },
+        onAnimationError: (message) => {
+          if (modelViewport !== viewport || !animFrame) return;
+          animFrame.disabled = true; animPlay.disabled = true;
+          animStatus.textContent = `Animation interrompue, pose de repos : ${message}`;
+        },
         onAnimationFrame: (frame, playing) => {
           if (modelViewport !== viewport || !animFrame) return;
           animFrame.value = String(frame);
@@ -817,6 +855,7 @@ async function openModel(rel, options = {}) {
       });
       modelViewport = viewport;
       modelViewportForCleanup = viewport;
+      void viewport.setMode(state.settings?.viewer_upscale || "native");
       modelReady = viewport.load(`/api/model/geometry?path=${encodeURIComponent(rel)}`).catch((error) => {
         if (modelViewport === viewport) failView(`Vue 3D indisponible : ${error.message}`);
       });
@@ -852,6 +891,11 @@ async function openModel(rel, options = {}) {
     viewStatus.textContent = "Planche PNG fixe · toutes les faces décodées";
   };
   $("#btn-export-model").onclick = () => exportModel(rel);
+  $("#btn-compose-player").onclick = () => {
+    const animationRel = animFile?.value || "";
+    const animationIndex = animClip?.value ? Number(animClip.value) : null;
+    openPlayer(rel, { animationRel, animationIndex });
+  };
   $("#btn-export-animations").onclick = () => exportAllAnimations(rel);
   $("#btn-uv").onclick = () => showUv(rel);
   $$("[data-open-texture]", document).forEach((node) => {
@@ -905,7 +949,7 @@ async function openAnimation(rel) {
   const filename = rel.split("/").pop();
   showInspector("Animation", `
     <h3 data-no-i18n>${esc(filename)}</h3><div class="sub" data-no-i18n>${esc(rel)}</div>
-    <p>${result.clips.length} clip(s) squelettique(s), ${clips.length} en rotations Euler prises en charge.</p>
+    <p>${result.clips.length} clip(s) squelettique(s), ${clips.length} avec en-tête pris en charge ; courbes vérifiées à l'ouverture.</p>
     <label>Clip <select id="animation-clip" ${clips.length ? "" : "disabled"}>
       ${clips.map((c) => `<option value="${c.index}">${esc(c.name)} · ${c.frames} images</option>`).join("")}</select></label>
     <label>Modèle à associer <select id="animation-model" ${models.length ? "" : "disabled"}>
@@ -913,6 +957,7 @@ async function openAnimation(rel) {
       ${models.map((m) => `<option data-no-i18n value="${esc(m.rel)}" ${m === candidate ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
     <div class="actions"><button class="btn primary" type="button" id="animation-open-model" ${clips.length && models.length ? "" : "disabled"}>
       Ouvrir le modèle et lire</button>
+      <button class="btn" type="button" id="animation-open-player" ${clips.length && models.length ? "" : "disabled"}>Composer dans Player</button>
       <a class="btn" id="animation-download" download="animation.json">Exporter les courbes JSON</a></div>
     <p class="hint">Association par nom proposée à titre indicatif. Ouvre un modèle : le bouton de GLB groupé inclura tous les clips de ce fichier et ceux suggérés pour le modèle. OBJ/MTL restent statiques et les fichiers du jeu ne sont pas modifiés.</p>`);
   const clipSelect = $("#animation-clip"), download = $("#animation-download");
@@ -925,6 +970,11 @@ async function openAnimation(rel) {
     const model = $("#animation-model").value;
     if (!model || !clipSelect.value) { toast("Choisis un modèle et un clip.", "error"); return; }
     void openModel(model, { animationRel: rel, animationIndex: Number(clipSelect.value) });
+  };
+  $("#animation-open-player").onclick = () => {
+    const model = $("#animation-model").value;
+    if (!model || !clipSelect.value) { toast("Choisis un modèle et un clip.", "error"); return; }
+    openPlayer(model, { animationRel: rel, animationIndex: Number(clipSelect.value) });
   };
   ensureTab({ id: `animation:${rel}`, kind: "animation", label: filename, doc: { type: "animation", rel } });
   state.tab = `animation:${rel}`; renderTabs();
@@ -1186,97 +1236,46 @@ async function openVideo(rel) {
   state.tab = `video:${rel}`; renderTabs();
 }
 
-/* ------------------------------------------------------------------ mobs */
-function fillMobSelects() {
-  const models = (state.chooserModels || []).filter((asset) => assetValidation.valid("model", asset.rel));
-  const textures = (state.chooserTextures || []).filter((asset) => assetValidation.valid("texture", asset.rel));
-  const injectable = models.filter((asset) => assetValidation.entry("model", asset.rel)?.injectable);
-  const options = (items) => items.map((asset) =>
-    `<option data-no-i18n value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
-  const setSingle = (select, items, empty, requireChoice = false) => {
-    if (!select) return;
-    const prompt = requireChoice && items.length ? "(choisir un modèle cible)" : empty;
-    const html = (requireChoice || !items.length ? `<option value="">${prompt}</option>` : "") + options(items);
-    if (select.dataset.optionsHtml === html) return;
-    const previous = select.value;
-    select.innerHTML = html;
-    select.dataset.optionsHtml = html;
-    if (items.some((item) => item.rel === previous)) select.value = previous;
-  };
-  setSingle($("#mob-model"), models, "(aucun modèle vérifié)");
-  // Ne jamais injecter par défaut dans le premier modèle validé.
-  setSingle($("#model-target"), injectable, "(aucun modèle réinjectable vérifié)", true);
-  const textureSelect = $("#mob-textures");
-  if (textureSelect) {
-    const html = options(textures);
-    if (textureSelect.dataset.optionsHtml !== html) {
-      const previous = new Set([...textureSelect.selectedOptions].map((option) => option.value));
-      textureSelect.innerHTML = html;
-      textureSelect.dataset.optionsHtml = html;
-      for (const option of textureSelect.options) option.selected = previous.has(option.value);
+/* ------------------------------------------------------------------ modèles cibles pour l'import */
+function fillModelTargets() {
+  const models = (state.chooserModels || []).filter((asset) => assetValidation.valid("model", asset.rel)
+    && assetValidation.entry("model", asset.rel)?.injectable);
+  const select = $("#model-target");
+  if (select) {
+    const prompt = models.length ? "(choisir un modèle cible)" : "(aucun modèle réinjectable vérifié)";
+    const html = `<option value="">${prompt}</option>` + models.map((asset) =>
+      `<option data-no-i18n value="${esc(asset.rel)}">${esc(asset.name)}</option>`).join("");
+    if (select.dataset.optionsHtml !== html) {
+      const previous = select.value;
+      select.innerHTML = html;
+      select.dataset.optionsHtml = html;
+      if (models.some((item) => item.rel === previous)) select.value = previous;
     }
   }
+  // Ne jamais injecter par défaut dans le premier modèle validé.
   applyRestoredChoices();
   updateModelImportControls();
 }
 
-function requestChooserChecks(includeTextures) {
+function requestChooserChecks() {
   const assets = state.project?.assets || [];
   const cap = state.shown.chooser || 48;
-  const search = $(includeTextures ? "#mob-resource-search" : "#model-target-search");
-  const filter = (search?.value || "").trim().toLowerCase();
+  const filter = ($("#model-target-search")?.value || "").trim().toLowerCase();
   const models = assets.filter((asset) => asset.kind === "model" && matches(asset, filter));
-  const textures = includeTextures
-    ? assets.filter((asset) => asset.kind === "texture" && matches(asset, filter)) : [];
   state.chooserModels = models.slice(0, cap);
-  state.chooserTextures = textures.slice(0, cap);
-  assetValidation.setScope("view", [...state.chooserModels, ...state.chooserTextures],
-                           state.project?.image_revision);
-  const more = $(includeTextures ? "#mob-validate-more" : "#model-import-validate-more");
-  if (more) more.hidden = models.length <= cap && textures.length <= cap;
+  assetValidation.setScope("view", state.chooserModels, state.project?.image_revision);
+  const more = $("#model-import-validate-more");
+  if (more) more.hidden = models.length <= cap;
   updateValidatedAssets();
 }
 
-async function renderMobs() {
-  requestChooserChecks(true);
-  const mobs = state.project?.mobs || [];
-  $("#mob-grid").innerHTML = mobs.map((mob) => `
-    <article class="tile" role="button" tabindex="0" aria-label="Ouvrir ${esc(mob.name)}"
-             data-kind="mob" data-slug="${esc(mob.slug)}">
-      <div class="meta">
-        <strong data-no-i18n>${esc(mob.name)}</strong>
-        <small><span>parent :</span> <span data-no-i18n>${esc(mob.parent)}</span></small>
-        <small>${mob.files.length} fichier(s) copié(s) · fiche préparatoire</small>
-      </div>
-    </article>`).join("") || `<p class="muted">Aucune fiche pour l'instant.</p>`;
-}
-
-function openMob(slug) {
-  const mob = (state.project?.mobs || []).find((item) => item.slug === slug);
-  if (!mob) return;
-  showInspector("Mob", `
-    <h3 data-no-i18n>${esc(mob.name)}</h3>
-    <div class="sub"><span data-no-i18n>${esc(mob.slug)}</span> · <span>parent</span> <span data-no-i18n>${esc(mob.parent)}</span></div>
-    <dl class="kv">
-      <dt>Modèle source</dt><dd data-no-i18n>${esc(mob.model_source || "—")}</dd>
-      <dt>Textures</dt><dd data-no-i18n>${mob.texture_sources.map(esc).join(", ") || "—"}</dd>
-      <dt>Fichiers</dt><dd data-no-i18n>${mob.files.map((file) => esc(file.to)).join(", ") || "—"}</dd>
-    </dl>
-    <p class="warning-note">Fiche préparatoire : aucun acteur jouable n'a été créé.</p>
-    <strong>Reste à faire côté jeu</strong>
-    <ul class="todo">${mob.todo.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`);
-  ensureTab({ id: `mob:${slug}`, kind: "mob", label: mob.name, doc: { type: "mob", slug } });
-  state.tab = `mob:${slug}`;
-  renderTabs();
-}
-
 function openDoc(doc) {
+  if (state.view === "player") showView("models", { tab: false });
   if (doc.type === "model") return openModel(doc.rel);
   if (doc.type === "texture") return openTexture(doc.rel, doc.index || 0);
   if (doc.type === "sound") return openSound(doc.rel);
   if (doc.type === "animation") return openAnimation(doc.rel);
   if (doc.type === "video") return openVideo(doc.rel);
-  if (doc.type === "mob") return openMob(doc.slug);
 }
 
 /* ------------------------------------------------------------------ import OBJ / glTF */
@@ -1299,7 +1298,7 @@ function updateModelImportControls() {
 }
 
 function renderModelImport() {
-  requestChooserChecks(false);
+  requestChooserChecks();
   updateModelImportControls();
 }
 
@@ -1447,6 +1446,8 @@ function settingsOrDefault() {
     vram_gb: 6, vram_max_gb: 25, vram_min_gb: 1, supersample: 2,
     cull: true, frustum: true, adaptive: true, max_faces: null, lod: 0,
     accent: "azur", density: "confort", theme: "light", language: "fr", export_textures: true, thumb_faces: null,
+    viewer_upscale: "native", fsr_quality: "quality", fsr_sharpness: 0.65, viewer_msaa: "4",
+    viewer_dpr: "2", viewer_fps: "60", viewer_limit: "1600",
     accents: ["menthe", "azur", "ambre", "framboise"], densities: ["confort", "compact"],
   };
 }
@@ -1475,6 +1476,14 @@ function renderSettings() {
   $("#set-cull").checked = settings.cull;
   $("#set-frustum").checked = settings.frustum;
   $("#set-adaptive").checked = settings.adaptive;
+  $("#set-viewer-upscale").value = settings.viewer_upscale || "native";
+  $("#set-fsr-quality").value = settings.fsr_quality || "quality";
+  $("#set-fsr-sharp").value = settings.fsr_sharpness ?? 0.65;
+  $("#set-fsr-sharp-out").textContent = `${Math.round((settings.fsr_sharpness ?? 0.65) * 100)} %`;
+  $("#set-viewer-msaa").value = settings.viewer_msaa || "4";
+  $("#set-viewer-dpr").value = settings.viewer_dpr || "2";
+  $("#set-viewer-fps").value = settings.viewer_fps || "60";
+  $("#set-viewer-limit").value = settings.viewer_limit || "1600";
 
   $("#set-theme").value = settings.theme || "light";
   $("#set-language").value = settings.language || "fr";
@@ -1523,6 +1532,7 @@ function saveSettings(patch, options = {}) {
   state.settings = { ...settingsOrDefault(), ...patch };
   applyUiSettings(state.settings);
   renderSettings();
+  if (typeof applyViewerSettings === "function") applyViewerSettings();
   // Regrouper toutes les modifications rapprochées, pas seulement la dernière.
   Object.assign(settingsPending, patch);
   settingsNotify ||= !options.quiet;
@@ -1570,8 +1580,7 @@ async function flushSettings() {
     if (state.view === "textures") await renderTextures();
     if (state.view === "ensembles") await renderEnsembles();
     if (state.view === "sounds") await renderSounds();
-    if (state.view === "mobs") await renderMobs();
-    if (state.view === "import") requestChooserChecks(false);
+    if (state.view === "import") requestChooserChecks();
     if (notify) toast("Réglages enregistrés");
     settingsSaveFailed = false;
     saved = true;
@@ -1605,6 +1614,13 @@ function wireSettings() {
   on("#set-cull", "onchange", (event) => saveSettings({ cull: event.target.checked }));
   on("#set-frustum", "onchange", (event) => saveSettings({ frustum: event.target.checked }));
   on("#set-adaptive", "onchange", (event) => saveSettings({ adaptive: event.target.checked }));
+  on("#set-viewer-upscale", "onchange", (event) => saveSettings({ viewer_upscale: event.target.value }));
+  on("#set-fsr-quality", "onchange", (event) => saveSettings({ fsr_quality: event.target.value }));
+  on("#set-fsr-sharp", "oninput", (event) => saveSettings({ fsr_sharpness: Number(event.target.value) }));
+  on("#set-viewer-msaa", "onchange", (event) => saveSettings({ viewer_msaa: event.target.value }));
+  on("#set-viewer-dpr", "onchange", (event) => saveSettings({ viewer_dpr: event.target.value }));
+  on("#set-viewer-fps", "onchange", (event) => saveSettings({ viewer_fps: event.target.value }));
+  on("#set-viewer-limit", "onchange", (event) => saveSettings({ viewer_limit: event.target.value }));
   on("#set-accent", "onchange", (event) => saveSettings({ accent: event.target.value }));
   on("#set-density", "onchange", (event) => saveSettings({ density: event.target.value }));
   on("#set-theme", "onchange", (event) => saveSettings({ theme: event.target.value }));
@@ -1627,6 +1643,8 @@ function wireSettings() {
     vram_gb: 6, supersample: 2, cull: true, frustum: true, adaptive: true,
     max_faces: null, lod: 0, accent: "azur", density: "confort", theme: "light", language: "fr",
     export_textures: true, thumb_faces: null, preview_faces: 0, cache_mb: 256,
+    viewer_upscale: "native", fsr_quality: "quality", fsr_sharpness: 0.65,
+    viewer_msaa: "4", viewer_dpr: "2", viewer_fps: "60", viewer_limit: "1600",
   }, { quiet: false }));
 }
 
@@ -1985,54 +2003,6 @@ async function pollBulk() {
   await refresh();
 }
 
-async function buildMod(event) {
-  event.preventDefault();
-  if (modBuildPending) return;
-  const name = new FormData(event.target).get("name");
-  if (!window.confirm(tr("Assembler ce mod ?\n\nLe nom du dossier est nettoyé : seuls les lettres, "
-      + "chiffres, tirets et _ sont conservés (ou HookyMod s'il ne reste rien). "
-      + "Si ce dossier existe déjà dans mods/, il sera entièrement remplacé, sans sauvegarde."))) return;
-  modBuildPending = true;
-  const button = event.target.querySelector('button[type="submit"]');
-  if (button) button.disabled = true;
-  try {
-    const result = await api("/api/mod/build", {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    });
-    $("#mod-log").innerHTML = `
-      <li><span class="k">Mod</span><span data-no-i18n>${esc(result.mod)}</span></li>
-      <li><span class="k">Dossier</span><code>${esc(result.path)}</code></li>
-      <li><span class="k">Fichiers</span><span>${result.files}</span></li>
-      <li><span class="k">Fiches de mobs</span><span>${result.mobs}</span></li>`;
-    toast(`Mod assemblé : ${result.path} (${result.files} fichier(s))`);
-  } catch (error) { toast(error.message, "error"); }
-  finally {
-    modBuildPending = false;
-    if (button) button.disabled = false;
-  }
-}
-
-async function createMob(event) {
-  event.preventDefault();
-  const form = new FormData(event.target);
-  const textures = [...($("#mob-textures")?.selectedOptions || [])].map((option) => option.value);
-  try {
-    const mob = await api("/api/mobs", {
-      method: "POST",
-      body: JSON.stringify({
-        name: form.get("name"),
-        parent: form.get("parent") || "",
-        model: form.get("model"),
-        textures,
-      }),
-    });
-    toast(`Fiche créée : ${mob.name}`);
-    await refresh();
-    renderMobs();
-  } catch (error) { toast(error.message, "error"); }
-}
-
 /* ------------------------------------------------------------------ menus */
 const MENUS = {
   fichier: [
@@ -2041,7 +2011,6 @@ const MENUS = {
     { label: "Exporter la sélection (ZIP)", run: () => exportSelection() },
     { sep: true },
     { label: "Exporter tout le projet", run: () => { showView("home"); startBulk(); } },
-    { label: "Assembler le mod…", run: () => { showView("create"); $("#mod-name")?.focus(); } },
     { sep: true },
     { label: "Ouvrir le dossier de travail", run: () => toast(`Dossier : ${state.project?.work || "—"}`) },
     { sep: true },
@@ -2080,8 +2049,6 @@ const MENUS = {
   affichage: [
     { label: "Accueil", hint: "Ctrl+1", run: () => showView("home") },
     { label: "Espace modification", run: () => showView("edit") },
-    { label: "HookyMod's", run: () => showView("studio") },
-    { label: "Espace création de mod", run: () => showView("create") },
     { label: "Réglages", hint: "Ctrl+6", run: () => showView("settings") },
     { sep: true },
     { label: "Journal", hint: "Ctrl+J", run: toggleConsole },
@@ -2135,19 +2102,16 @@ function paletteCommands() {
   const commands = [
     { label: "Aller à l'accueil", group: "vue", run: () => showView("home") },
     { label: "Espace modification", group: "vue", run: () => showView("edit") },
-    { label: "HookyMod's", group: "vue", run: () => showView("studio") },
-    { label: "Espace création de mod", group: "vue", run: () => showView("create") },
     { label: "Aller aux modèles", group: "vue", run: () => showView("models") },
+    { label: "Aller à Player", group: "vue", run: () => showView("player") },
     { label: "Aller aux animations", group: "vue", run: () => showView("animations") },
     { label: "Aller aux textures", group: "vue", run: () => showView("textures") },
     { label: "Aller aux sons", group: "vue", run: () => showView("sounds") },
     { label: "Aller aux vidéos", group: "vue", run: () => showView("videos") },
-    { label: "Aller aux mobs", group: "vue", run: () => showView("mobs") },
     { label: "Importer un modèle", group: "vue", run: () => showView("import") },
     { label: "Aller aux réglages", group: "vue", run: () => showView("settings") },
     { label: "Rafraîchir le projet", group: "action", run: () => refresh({ quiet: false }) },
     { label: "Exporter tout le projet", group: "action", run: () => { showView("home"); startBulk(); } },
-    { label: "Assembler le mod…", group: "action", run: () => { showView("create"); $("#mod-name")?.focus(); } },
     { label: "Analyser les fichiers choisis", group: "import", run: () => runModelImport(false) },
     { label: "Injecter le modèle source", group: "import", run: () => runModelImport(true) },
     { label: "Basculer le journal", group: "affichage", run: toggleConsole },
@@ -2389,14 +2353,13 @@ async function rescanProject() {
     renderStatus();
     if (state.view === "models") await renderModels();
     if (state.view === "ensembles") await renderEnsembles();
+    if (state.view === "player") window.HookyPlayer?.refresh();
     if (state.view === "textures") await renderTextures();
     if (state.view === "animations") renderAnimations();
     if (state.view === "videos") renderVideos();
     if (state.view === "sounds") await renderSounds();
-    if (state.view === "mobs") await renderMobs();
     if (state.view === "import") await renderModelImport();
     if (state.view === "home") renderHome();
-    if (state.view === "create") renderCreation();
     if (payload.scan.incomplete || payload.scan.truncated) {
       toast("Scan incomplet : consulte les détails à l'accueil.", "error");
     } else {
@@ -2435,7 +2398,7 @@ async function quitApp() {
   ]);
   clearTimeout(timeout);
   if (!saved && !window.confirm(tr(
-    "La session, les réglages ou le projet HookyMod's n'ont pas pu être enregistrés. Quitter quand même ?"))) {
+    "La session ou les réglages n'ont pas pu être enregistrés. Quitter quand même ?"))) {
     document.body.inert = false;
     return;
   }
@@ -2522,14 +2485,13 @@ async function refresh(options = {}) {
   applyUiSettings(state.settings);
   renderStatus();
   if (state.view === "home") renderHome();
-  if (state.view === "create") renderCreation();
   if (state.view === "models") await renderModels();
   if (state.view === "ensembles") await renderEnsembles();
+  if (state.view === "player") window.HookyPlayer?.refresh();
   if (state.view === "textures") await renderTextures();
   if (state.view === "animations") renderAnimations();
   if (state.view === "videos") renderVideos();
   if (state.view === "sounds") await renderSounds();
-  if (state.view === "mobs") await renderMobs();
   if (state.view === "import") await renderModelImport();
   if (state.view === "settings") { renderSettings(); refreshSystem(); }
   if (options.quiet === false) {
@@ -2584,7 +2546,8 @@ function handleTileNavigation(event) {
 }
 
 function wire() {
-  window.HookyStudio?.wire({ api, toast });
+  window.HookyPlayer?.wire({ api, toast, getAssets: () => state.project?.assets || [],
+    getSettings: settingsOrDefault, getRevision: () => state.project?.image_revision || "" });
   let paused = false;
   try { paused = localStorage.getItem("hooky-thumbnails-paused") === "1"; }
   catch (_) { /* stockage facultatif */ }
@@ -2625,6 +2588,17 @@ function wire() {
     state.shown.ensembles = 48;
     renderEnsembles();
   });
+  onInputDebounced("#ensemble-animation-search", renderEnsembleAssociations);
+  $("#ensemble-animation").onchange = (event) => {
+    state.ensembleAnimation = event.target.value;
+    renderEnsembleAssociations();
+  };
+  $("#ensemble-associations").onclick = (event) => {
+    const button = event.target.closest("[data-ensemble-model], [data-ensemble-player]");
+    if (!button || !state.ensembleAnimation) return;
+    if (button.dataset.ensemblePlayer) openPlayer(button.dataset.ensemblePlayer, { animationRel: state.ensembleAnimation });
+    else if (button.dataset.ensembleModel) void openModel(button.dataset.ensembleModel, { animationRel: state.ensembleAnimation });
+  };
   onInputDebounced("#search-sound", (value) => {
     state.filters.sounds = value.trim().toLowerCase();
     state.shown.sounds = 48;
@@ -2640,13 +2614,9 @@ function wire() {
     state.shown.videos = 48;
     renderVideos();
   });
-  onInputDebounced("#mob-resource-search", () => {
-    state.shown.chooser = 48;
-    requestChooserChecks(true);
-  });
   onInputDebounced("#model-target-search", () => {
     state.shown.chooser = 48;
-    requestChooserChecks(false);
+    requestChooserChecks();
   });
   $("#model-shots").onchange = renderModels;
   const ensMore = $("#ensemble-more-btn");
@@ -2688,17 +2658,12 @@ function wire() {
       if (state.view === "textures") renderTextures();
       if (state.view === "ensembles") renderEnsembles();
       if (state.view === "sounds") renderSounds();
-      if (state.view === "mobs") requestChooserChecks(true);
-      if (state.view === "import") requestChooserChecks(false);
+      if (state.view === "import") requestChooserChecks();
     };
   });
-  $("#mob-validate-more").onclick = () => {
-    state.shown.chooser += 48;
-    requestChooserChecks(true);
-  };
   $("#model-import-validate-more").onclick = () => {
     state.shown.chooser += 48;
-    requestChooserChecks(false);
+    requestChooserChecks();
   };
   $("#selection-export").onclick = () => exportSelection();
   $("#selection-clear").onclick = clearSelection;
@@ -2759,12 +2724,9 @@ function wire() {
       if (tile.dataset.kind === "sound") openSound(tile.dataset.rel);
       if (tile.dataset.kind === "animation") openAnimation(tile.dataset.rel);
       if (tile.dataset.kind === "video") openVideo(tile.dataset.rel);
-      if (tile.dataset.kind === "mob") openMob(tile.dataset.slug);
     }
   });
 
-  $("#mob-form").onsubmit = createMob;
-  $("#mod-form").onsubmit = buildMod;
   $("#bulk-start").onclick = startBulk;
 
   // Import de fichiers standards. Les fichiers ne sont jamais stockés dans la session.
@@ -2826,7 +2788,7 @@ function wire() {
     }
     if (meta && "123456".includes(event.key)) {
       event.preventDefault();
-      const views = ["home", "models", "textures", "mobs", "import", "settings"];
+      const views = ["home", "models", "textures", "player", "import", "settings"];
       showView(views[Number(event.key) - 1]);
       return;
     }
@@ -2857,34 +2819,21 @@ function wire() {
 
 /* ------------------------------------------------------------------ reprise automatique */
 const SESSION_TEXT_FIELDS = ["search", "search-tex", "search-ens", "search-sound", "search-animation", "search-video", "tex-role",
-  "mod-name", "mob-name", "mob-parent", "mob-resource-search", "model-axis", "model-scale",
+  "model-axis", "model-scale",
   "model-target-search"];
 const SESSION_CHECK_FIELDS = ["model-shots", "ens-textures", "bulk-anim", "model-fit"];
 let sessionTouchedDuringBoot = false;
 
 function applyRestoredChoices() {
-  for (const id of ["mob-model", "model-target"]) {
-    const desired = restoredChoices[id];
-    if (!desired) continue;
-    const select = $(`#${id}`);
-    if (!select) continue;
-    if ([...select.options].some((option) => option.value === desired)) {
-      select.value = desired;
-      delete restoredChoices[id];
-    } else {
-      // Ne pas soumettre par accident le premier modèle encore en cours de
-      // validation à la place de celui que l'utilisateur avait choisi.
-      select.value = "";
-    }
-  }
-  const textures = $("#mob-textures");
-  if (textures && Array.isArray(restoredChoices["mob-textures"])) {
-    const pending = new Set(restoredChoices["mob-textures"]);
-    for (const option of textures.options) {
-      if (pending.delete(option.value)) option.selected = true;
-    }
-    restoredChoices["mob-textures"] = [...pending];
-    if (!pending.size) delete restoredChoices["mob-textures"];
+  const desired = restoredChoices["model-target"];
+  const select = $("#model-target");
+  if (!desired || !select) return;
+  if ([...select.options].some((option) => option.value === desired)) {
+    select.value = desired;
+    delete restoredChoices["model-target"];
+  } else {
+    // Ne pas injecter par accident dans le premier modèle en cours de validation.
+    select.value = "";
   }
 }
 
@@ -2901,12 +2850,7 @@ function captureUiSession() {
   const quality = $("#model-quality")?.value || restoredModelQuality;
   if (quality) fields["model-quality"] = quality;
   const choices = {
-    "mob-model": restoredChoices["mob-model"] || $("#mob-model")?.value || "",
     "model-target": restoredChoices["model-target"] || $("#model-target")?.value || "",
-    "mob-textures": [...new Set([
-      ...(restoredChoices["mob-textures"] || []),
-      ...[...($("#mob-textures")?.selectedOptions || [])].map((option) => option.value),
-    ])].slice(0, 5000),
   };
   const tabs = state.tabs.slice(0, 64).map((tab) => {
     if (tab.view) return { type: "view", view: tab.view };
@@ -2930,7 +2874,6 @@ function captureUiSession() {
 async function restoreUiSession(saved) {
   if (!saved || saved.version !== 1 || !state.project) return;
   const assets = new Map((state.project.assets || []).map((asset) => [`${asset.kind}:${asset.rel}`, asset]));
-  const mobs = new Map((state.project.mobs || []).map((mob) => [mob.slug, mob]));
   if (sessionTouchedDuringBoot) return;
   for (const id of [...SESSION_TEXT_FIELDS, ...SESSION_CHECK_FIELDS]) {
     const value = saved.fields?.[id];
@@ -2953,10 +2896,7 @@ async function restoreUiSession(saved) {
     && (key.startsWith("model:") || key.startsWith("texture:"))));
   const choices = saved.choices || {};
   restoredChoices = {};
-  if (assets.has(`model:${choices["mob-model"]}`)) restoredChoices["mob-model"] = choices["mob-model"];
   if (assets.has(`model:${choices["model-target"]}`)) restoredChoices["model-target"] = choices["model-target"];
-  restoredChoices["mob-textures"] = (choices["mob-textures"] || [])
-    .filter((rel) => assets.has(`texture:${rel}`));
 
   state.tabs = [];
   ensureViewTab("home", VIEW_LABELS.home).closable = false;
@@ -2969,9 +2909,6 @@ async function restoreUiSession(saved) {
       if (asset) ensureTab({ id: `${tab.type}:${tab.rel}${index ? `#${index}` : ""}`,
                              kind: tab.type, label: asset.name,
                              doc: { type: tab.type, rel: tab.rel, ...(tab.type === "texture" ? { index } : {}) } });
-    } else if (tab.type === "mob" && mobs.has(tab.slug)) {
-      ensureTab({ id: `mob:${tab.slug}`, kind: "mob", label: mobs.get(tab.slug).name,
-                  doc: { type: "mob", slug: tab.slug } });
     }
   }
   const view = Object.hasOwn(VIEW_LABELS, saved.view) ? saved.view : "home";
@@ -3004,10 +2941,7 @@ async function saveUiCheckpoint() {
     const settingsSaved = await finishPendingSettings();
     const sessionSaved = uiSessionWriter?.enabled
       ? await uiSessionWriter.flush() : !sessionTouchedDuringBoot;
-    // La fermeture et le changement de projet natifs attendent aussi les
-    // brouillons HookyMod's ; une erreur ne doit pas les perdre silencieusement.
-    const studioSaved = await (window.HookyStudio?.flush() ?? Promise.resolve(true));
-    return settingsSaved && sessionSaved && studioSaved;
+    return settingsSaved && sessionSaved;
   } catch (error) {
     toast(`Sauvegarde de session impossible : ${error.message}`, "error");
     return false;
@@ -3028,7 +2962,7 @@ function wireUiSession() {
         sessionLoadFailed = false;
       }
     }
-    if (event?.type === "change" && ["mob-model", "mob-textures", "model-target"].includes(event.target?.id)) {
+    if (event?.type === "change" && event.target?.id === "model-target") {
       delete restoredChoices[event.target.id];
     }
     uiSessionWriter.schedule(event?.type === "input" || event?.type === "scroll" ? 250 : 100);

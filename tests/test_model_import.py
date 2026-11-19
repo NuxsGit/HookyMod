@@ -81,10 +81,9 @@ class ModelImportTests(unittest.TestCase):
         self.assertEqual(result["faces"], 1)
         self.assertTrue(any("textures de la cible" in note for note in result["notes"]))
         self.assert_written([(0., 0., 0.), (2., 0., 0.), (0., 3., 0.)])
-        built = self.project.build_mod("Test")
-        destination = self.project.root / built["path"] / "romfs" / "Model" / "Original.bfres"
-        self.assertTrue(destination.is_file())
-        self.assertEqual(destination.read_bytes(), (self.project.work / "assets/Model/Original.bfres").read_bytes())
+        self.assertIn("Model/Original.bfres", self.project.edited_files())
+        self.assertTrue((self.project.work / "assets/Model/Original.bfres").is_file())
+        self.assertFalse((self.project.root / "mods").exists())
 
     def test_gltf_external_bin_and_glb_actually_change_geometry(self):
         doc, data = fixture()

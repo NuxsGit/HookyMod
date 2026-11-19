@@ -1,6 +1,7 @@
 """Small synthetic BFRES 10.x / FSKA clip, with no game data."""
 from __future__ import annotations
 
+import math
 import struct
 
 
@@ -14,6 +15,19 @@ def named_rigid_model() -> bytes:
         struct.pack_into("<H", data, at, len(value))
         data[at + 2:at + 2 + len(value)] = value
         struct.pack_into("<Q", data, 0x1580 + i * 0x58, at)
+    return bytes(data)
+
+
+def player_variant(*, compensate=True) -> bytes:
+    """Synthetic scaled quaternion root and Euler child, with optional SSC."""
+    data = bytearray(named_rigid_model())
+    root, child = 0x1580, 0x1580 + 0x58
+    struct.pack_into("<I", data, root + 0x2c, 0)  # quaternion on Euler skeleton
+    struct.pack_into("<3f4f3f", data, root + 0x30,
+                     2., 3., 4., 0., 0., math.sin(math.pi / 4), math.cos(math.pi / 4), 5., 0., 0.)
+    struct.pack_into("<I", data, child + 0x2c, 0x1000 | (0x00800000 if compensate else 0))
+    for i in range(4):
+        struct.pack_into("<I", data, 0x2100 + i * 20 + 12, 511 | (511 << 10))
     return bytes(data)
 
 
@@ -54,6 +68,35 @@ def fska_with_jump() -> bytes:
     struct.pack_into("<H", data, 0x412, 4)
     struct.pack_into("<4f", data, 0x500, 0., 5., 5., 10.)
     struct.pack_into("<8f", data, 0x520, 0., .2, 1., .2, 3., .2, 4., .2)
+    return bytes(data)
+
+
+def fska_mixed_quaternion_fixture() -> bytes:
+    """Synthetic mixed clip: a slerped quaternion root and an Euler child."""
+    data = bytearray(fska_fixture())
+    data.extend(b"\0" * (0xa00 - len(data)))
+    struct.pack_into("<I", data, 0x104, 0x2004)  # mixed quaternion/Euler clip
+    struct.pack_into("<Q", data, 0x128, 0x600)  # bone array
+    struct.pack_into("<i", data, 0x144, 3)  # total curves
+    struct.pack_into("<H", data, 0x14c, 2)
+    struct.pack_into("<H", data, 0x2a0, 5)
+    data[0x2a2:0x2a7] = b"Child"
+    data[0x600:0x638] = data[0x300:0x338]
+    struct.pack_into("<I", data, 0x628, 8 | 16 | 32 | 0x00100000)
+    struct.pack_into("<H", data, 0x440, 0x0082)  # byte frames; float quaternion keys
+    struct.pack_into("<I", data, 0x444, 0x20)
+    struct.pack_into("<Q", data, 0x438, 0x900)
+    # The second quaternion is the negative of the same orientation; playback
+    # must use shortest-path SLERP rather than spin the long way around.
+    struct.pack_into("<8f", data, 0x900, 0., 0., 0., 1.,
+                     0., 0., -math.sin(math.pi / 4), -math.cos(math.pi / 4))
+    struct.pack_into("<QQQ", data, 0x638, 0x2a0, 0x700, 0x760)
+    struct.pack_into("<I", data, 0x660, 16)
+    data[0x666] = 1
+    struct.pack_into("<4f", data, 0x760, 0., 0., 0., 1.)
+    struct.pack_into("<QQHHI5f", data, 0x700, 0x790, 0x7b0, 0, 2, 0x28, 0, 10, 0, 0, 0)
+    struct.pack_into("<2f", data, 0x790, 0., 10.)
+    struct.pack_into("<4f", data, 0x7b0, 0., .05, .5, .05)
     return bytes(data)
 
 

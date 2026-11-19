@@ -196,7 +196,7 @@ def _build_gltf(meshes: list[MeshData], path: Path,
     gl_meshes: list[dict] = []
     copied: dict[str, str] = {}
 
-    for material_name, source in _normalised_textures(textures).items():
+    for source in _normalised_textures(textures).values():
         if not source or not Path(source).is_file():
             continue
         name = Path(source).name
@@ -548,7 +548,7 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
                                     strict_materials=material_maps is not None)
         written["mtl"] = written["obj"].with_suffix(".mtl")
 
-    for material_name, source in (textures or {}).items():
+    for source in (textures or {}).values():
         if source and Path(source).is_file():
             try:
                 shutil.copyfile(source, folder / Path(source).name)
@@ -559,9 +559,9 @@ def export_bundle(meshes: list[MeshData], directory, name: str = "modele",
     animation_note = (
         ("Les clips exportés et leur squelette commun sont présents dans GLB/glTF. "
          if animations is not None else "Le clip sélectionné et le squelette sont présents dans GLB/glTF. ")
-        + "Conversion expérimentale à 30 images/s par convention : courbes cubiques "
-        "échantillonnées et rotations Euler converties en quaternions ; vérifier le mouvement dans l'outil cible. "
-        "La boucle se règle dans le logiciel de lecture."
+        + "Conversion expérimentale à 30 images/s par convention : courbes et rotations "
+        "échantillonnées, rotations Euler converties en quaternions ; vérifier le mouvement dans l'outil cible. "
+        "La compensation d'échelle peut ajouter des os auxiliaires. La boucle se règle dans le logiciel de lecture."
         if animated else
         "Aucun clip n'a été demandé : GLB et glTF sont statiques pour cet export.")
     if animation is not None and animation.get("repeated_keys"):

@@ -19,12 +19,12 @@ WEB = ROOT / "hookycreator" / "web"
 #: éléments fabriqués à la volée par le script (panneau de détail), donc absents
 #: du HTML livré : ils sont créés par showInspector() et ses appelants.
 DYNAMIC_IDS = {
-    "btn-export-model", "btn-export-animations", "btn-export-png", "btn-import", "btn-uv", "texture-index",
+    "btn-export-model", "btn-export-animations", "btn-compose-player", "btn-export-png", "btn-import", "btn-uv", "texture-index",
     "btn-translate-model", "btn-turntable", "copy-command", "file-import",
     "model-budget", "model-budget-note", "model-quality", "model-shot", "model-canvas",
     "model-view-status", "model-reset", "model-fullscreen", "model-flat", "model-wire", "model-tex", "model-upscale",
     "uv-back", "uv-flip", "uv-normal", "uv-shot", "sound-player", "sound-import-btn", "sound-import-file",
-    "animation-clip", "animation-download", "animation-model", "animation-open-model",
+    "animation-clip", "animation-download", "animation-model", "animation-open-model", "animation-open-player",
     "model-animation-file", "model-animation-clip", "model-animation-frame", "model-animation-loop",
     "model-animation-play", "model-animation-status", "model-animation-time",
     "video-player", "video-status", "video-import-btn", "video-import-file",
@@ -51,57 +51,34 @@ class WebContractTests(unittest.TestCase):
         sections = set(re.findall(r'id="view-([a-z]+)"', self.html))
         rail = set(re.findall(r'data-view="([a-z]+)"', self.html))
         labels = set(re.findall(
-            r'^\s+(home|edit|create|studio|models|ensembles|textures|sounds|animations|videos|mobs|import|settings):',
+            r'^\s+(home|edit|create|studio|models|ensembles|player|textures|sounds|animations|videos|mobs|import|settings):',
             self.js, re.M))
         self.assertEqual(sections, rail)
         self.assertTrue(sections <= labels | {"home"})
         self.assertIn("home", sections)
 
-    def test_editing_and_mod_creation_have_separate_workspaces(self) -> None:
-        self.assertIn('data-goto="edit"', self.html)
-        self.assertIn('data-goto="create"', self.html)
-        home = self.html.split('id="view-home"', 1)[1].split('id="view-edit"', 1)[0]
-        creation = self.html.split('id="view-create"', 1)[1].split('id="view-models"', 1)[0]
-        self.assertNotIn('id="mod-form"', home)
-        self.assertIn('id="mod-form"', creation)
-        self.assertIn('id="creation-status"', creation)
-        self.assertIn('sera entièrement remplacé', creation)
-        self.assertIn("pas la création automatique d'un acteur jouable", creation)
-        self.assertIn('showView("create"); $("#mod-name")?.focus()', self.js)
-        self.assertNotIn('$("#mod-form")?.requestSubmit()', self.js)
-
-    def test_hookymods_is_a_separate_wired_design_workspace(self) -> None:
-        studio_js = _read("studio.js")
-        section = self.html.split('id="view-studio"', 1)[1].split('id="view-create"', 1)[0]
-        self.assertIn('data-view="studio"', self.html)
-        self.assertIn('data-goto="studio"', self.html)
-        self.assertIn('<script src="/static/studio.js"></script>', self.html)
-        self.assertIn("maquette ordonnée", section)
-        self.assertIn("ne créent pas encore de contenu jouable", section)
-        self.assertIn('data-studio-block="when_interact"', section)
-        self.assertIn('data-studio-kind="dungeon"', section)
-        self.assertIn("Longshot + Link's Tool Box : compatibilité", section)
-        self.assertIn("projets .hooky de conception, non jouables", section)
-        self.assertIn("fichiers de mod déjà préparés", section)
-        self.assertIn("Aucun import direct .hooky par un lanceur n'a été validé", section)
-        self.assertIn('id="studio-simulate"', section)
-        self.assertIn('Simulation en mémoire uniquement', section)
-        self.assertIn('/api/studio/simulate', studio_js)
-        self.assertIn('window.HookyStudio?.show()', self.js)
-        self.assertIn('window.HookyStudio?.flush()', self.js)
-        used = set(re.findall(r'\$\("#([A-Za-z0-9_-]+)"', studio_js))
-        present = set(re.findall(r'id="([A-Za-z0-9_-]+)"', self.html))
-        self.assertEqual(sorted(used - present), [])
-        self.assertIn('data-no-i18n title="${escape(project.name)}"', studio_js)
-        self.assertIn('data-no-i18n title="${escape(element.name)}"', studio_js)
-        self.assertIn('data-block-value="${index}" data-no-i18n', studio_js)
+    def test_maker_is_absent_but_asset_player_and_exports_remain(self) -> None:
+        for view in ("edit", "models", "player", "textures", "import", "settings"):
+            self.assertIn(f'data-view="{view}"', self.html)
+        for view in ("create", "studio", "mobs"):
+            self.assertNotIn(f'id="view-{view}"', self.html)
+            self.assertNotIn(f'data-view="{view}"', self.html)
+            self.assertNotIn(f'data-goto="{view}"', self.html)
+            self.assertNotIn(f'showView("{view}")', self.js)
+        for retired in ("/api/studio/", "/api/mod/build", "/api/mobs", "HookyStudio"):
+            self.assertNotIn(retired, self.html + self.js)
+        self.assertFalse((WEB / "studio.js").exists())
+        self.assertIn('id="model-target"', self.html)
+        self.assertIn('function fillModelTargets()', self.js)
+        self.assertIn('function exportModel(', self.js)
+        self.assertIn('window.HookyPlayer', self.js)
+        self.assertIn('"textures", "player", "import", "settings"', self.js)
 
     def test_unsupported_operations_are_described_without_promising_a_mod(self) -> None:
         self.assertIn("BFRES auxiliaires (rapport)", self.html)
         self.assertIn('kinds.push("animation", "auxiliary")', self.js)
         self.assertIn("l'écriture BFRES 10.x n'est pas disponible", self.html)
         self.assertIn("certaines structures BFRES 9.x", self.html)
-        self.assertIn("aucun acteur jouable", self.html)
 
     def test_small_screens_keep_the_inspector_visible(self) -> None:
         self.assertIn('.inspector:not([hidden])', self.css)
@@ -153,6 +130,20 @@ class WebContractTests(unittest.TestCase):
         self.assertIn("/api/ensembles", self.js)
         self.assertIn("renderEnsembles", self.js)
         self.assertIn("tex=1", self.js)
+
+    def test_player_and_reverse_animation_lookup_are_wired(self) -> None:
+        player = _read("player.js")
+        self.assertIn('<script src="/static/player.js"></script>', self.html)
+        self.assertIn('data-view="player"', self.html)
+        self.assertIn('id="ensemble-animation"', self.html)
+        self.assertIn('renderEnsembleAssociations', self.js)
+        self.assertIn('data-ensemble-player', self.js)
+        self.assertIn('id="btn-compose-player"', self.js)
+        self.assertIn('window.HookyPlayer?.hide()', self.js)
+        self.assertIn('window.HookyPlayer?.configure(settings)', self.js)
+        used = set(re.findall(r'\$\("#([A-Za-z0-9_-]+)"', player))
+        present = set(re.findall(r'id="([A-Za-z0-9_-]+)"', self.html))
+        self.assertEqual(sorted(used - present), [])
 
     def test_native_engine_status_is_visible_in_settings(self) -> None:
         self.assertIn('id="engine-list"', self.html)
@@ -214,7 +205,7 @@ class WebContractTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "node absent")
     def test_javascript_parses(self) -> None:
-        for name in ("app.js", "thumbnails.js", "model_viewer.js"):
+        for name in ("app.js", "thumbnails.js", "model_viewer.js", "model_animation.js", "player.js"):
             with self.subTest(name=name):
                 result = subprocess.run(["node", "--check", str(WEB / name)],
                                         capture_output=True, text=True)
@@ -224,6 +215,7 @@ class WebContractTests(unittest.TestCase):
     def test_javascript_behaviour(self) -> None:
         for script, message in (("thumbnail_queue_test.js", "ThumbnailQueue: OK"),
                                 ("model_viewer_test.js", "Model viewer geometry: OK"),
+                                ("player_catalog_test.js", "Player catalog associations: OK"),
                                 ("asset_checks_test.js", "Asset validation queue: OK"),
                                 ("settings_ui_test.js", "Settings UI: OK"),
                                 ("image_revision_ui_test.js", "Image revision UI: OK"),

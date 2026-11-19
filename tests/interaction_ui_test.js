@@ -48,14 +48,14 @@ async function passivePollingDoesNotInterruptThumbnails() {
     api: async (_path, opts) => { options = opts; return { running: false }; },
     toast() {}, refresh: async () => {}, esc: String,
   });
-  vm.runInContext(section("async function pollBulk()", "async function buildMod("), bulk);
+  vm.runInContext(section("async function pollBulk()", "/* ------------------------------------------------------------------ menus */"), bulk);
   await vm.runInContext("pollBulk()", bulk);
   assert.equal(options?.background, true, "le suivi de l'export est passif");
 }
 
 async function incompleteScanIsVisibleInStatusAndExport() {
   const { $ } = elements();
-  const state = { project: { root: "dump", assets: [], mobs: [], edited: [],
+  const state = { project: { root: "dump", assets: [], edited: [],
                              scan_truncated: true, scan_limit: 2 }, settings: { vram_gb: 6 } };
   const ctx = vm.createContext({ $, state, console, humanBytes: String, esc: String });
   vm.runInContext(section("function renderStatus()", "/* ------------------------------------------------------------------ accueil */"), ctx);
@@ -83,7 +83,7 @@ async function incompleteScanIsVisibleInStatusAndExport() {
     api: async () => ({ running: false, done: 1, total: 1, report }),
     toast: (...args) => toasts.push(args), refresh: async () => {}, esc: String,
   });
-  vm.runInContext(section("async function pollBulk()", "async function buildMod("), bulk);
+  vm.runInContext(section("async function pollBulk()", "/* ------------------------------------------------------------------ menus */"), bulk);
   await vm.runInContext("pollBulk()", bulk);
   assert.match($("#bulk-label").textContent, /scan incomplet/i);
   assert.ok(toasts.some(([text, kind]) => /scan incomplet/i.test(text) && kind === "error"));
@@ -117,7 +117,7 @@ async function ensembleListIsLoadedOnlyOnceWhileFiltering() {
   const state = { view: "ensembles", project: { image_revision: "one" }, ensembles: [],
     filters: { ensembles: "" }, shown: { ensembles: 48 } };
   const ctx = vm.createContext({ $, state, console, esc: String, humanSize: String,
-    ensembleMatches: () => true, ensembleThumb: () => "/image", renderBlenderState() {}, toast() {},
+    ensembleMatches: () => true, ensembleThumb: () => "/image", renderEnsembleAssociations() {}, renderBlenderState() {}, toast() {},
     assetValidation: { setScope() {} }, updateValidatedAssets() {},
     thumbnailQueue: { release: () => work.push("release"), observe: () => work.push("observe") },
     api: () => new Promise((resolve) => requests.push(resolve)),
@@ -142,7 +142,7 @@ async function olderStateResponsesCannotUndoANewerScan() {
   const ctx = vm.createContext({ $, state, console, status() {}, renderStatus() {}, renderHome() {},
     assetValidation: { revision: "session-1", setScope(_name, _items, revision) { this.revision = revision; } },
     renderModels: async () => {}, renderTextures: async () => {}, renderEnsembles: async () => {},
-    renderMobs: async () => {}, renderBlends: async () => {}, renderSettings() {},
+    renderBlends: async () => {}, renderSettings() {},
     refreshSystem() {}, refreshBlender() {}, applyUiSettings() {}, toast() {},
     api: (url) => new Promise((resolve) => requests.push({ url, resolve })),
   });
@@ -218,7 +218,7 @@ async function rescanningUpdatesEnsemblesAndRejectsAnOldList() {
   const staleState = { view: "ensembles", project: { image_revision: "old" }, ensembles: [] };
   const stale = vm.createContext({ $, state: staleState, console,
     api: () => new Promise((done) => { resolve = done; }), renderBlenderState() {},
-    toast() {},
+    renderEnsembleAssociations() {}, toast() {},
   });
   vm.runInContext("let ensembleLoad = null, ensembleRenderSequence = 0;\n" +
     section("async function renderEnsembles()", "async function renderModels()"), stale);

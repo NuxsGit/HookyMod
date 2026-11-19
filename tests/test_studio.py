@@ -5,7 +5,6 @@ import base64
 import concurrent.futures
 import copy
 import hashlib
-import http.client
 import io
 import json
 import os
@@ -22,9 +21,8 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from hookycreator import session, studio
 from hookycreator.server import HookyCreatorServer
-
+from modmaker import studio
 
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
@@ -161,7 +159,7 @@ class StudioStoreTests(unittest.TestCase):
             {"type": "when_use", "value": ""},
         ])
         before = copy.deepcopy(sketch)
-        with patch("hookycreator.studio.write_atomic", side_effect=AssertionError("simulation wrote a file")):
+        with patch("modmaker.studio.write_atomic", side_effect=AssertionError("simulation wrote a file")):
             result = studio.simulate_element(sketch, "when_interact", [" key ", "key"], ["night"])
         self.assertEqual(sketch, before)
         self.assertFalse(result["playable"])
@@ -264,7 +262,7 @@ class StudioStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(studio.StudioError, "Conflit"):
             self.store.delete(first["id"], first["revision"])
         old = self.store._path(first["id"]).read_bytes()
-        with patch("hookycreator.studio.write_atomic", side_effect=PermissionError("read only")):
+        with patch("modmaker.studio.write_atomic", side_effect=PermissionError("read only")):
             with self.assertRaisesRegex(studio.StudioError, "Impossible"):
                 self.store.save(current)
         self.assertEqual(self.store._path(first["id"]).read_bytes(), old)
@@ -334,11 +332,22 @@ class StudioStoreTests(unittest.TestCase):
         self.assertFalse((self.base / "workspace.json").exists())
 
 
-class StudioHttpTests(unittest.TestCase):
-    def test_authenticated_routes_limits_and_download_round_trip(self):
+class RetiredModMakerHttpTests(unittest.TestCase):
+    def test_old_routes_are_not_exposed_or_destructive(self):
         with tempfile.TemporaryDirectory() as directory:
-            root, work = Path(directory) / "root", Path(directory) / "work"
+            base = Path(directory)
+            root, work = base / "root", base / "work"
             root.mkdir()
+            # Existing designs, mob sheets and assembled mods must survive
+            # starting, rescanning, and requests against the retired endpoints.
+            files = {
+                work / "hookymods" / "existing.json": b"design data",
+                work / "mobs" / "mobs.json": b"mob data",
+                root / "mods" / "Existing" / "romfs" / "keep.txt": b"mod data",
+            }
+            for path, contents in files.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(contents)
             token = secrets.token_urlsafe(32)
             server = HookyCreatorServer(root, work, host="127.0.0.1", port=0, desktop_token=token).start()
             origin = f"http://127.0.0.1:{server.port}"
@@ -354,65 +363,25 @@ class StudioHttpTests(unittest.TestCase):
                     return response.status, dict(response.headers), response.read()
 
             try:
-                self.assertEqual(request("/api/studio/workspaces")[0], 403)
-                self.assertEqual(request("/api/studio/workspaces", "POST", {"name": "X"})[0], 403)
                 status, headers, _ = request("/api/desktop/session", "POST", {"token": token},
                     {"Origin": origin, "Content-Type": "application/json"})
                 self.assertEqual(status, 200)
                 cookie = headers["Set-Cookie"].split(";", 1)[0]
                 auth = {"Cookie": cookie, "Origin": origin, "Content-Type": "application/json"}
-                self.assertEqual(request("/api/studio/workspaces", "POST", {"name": "X"},
-                                         {**auth, "Origin": "https://evil.example"})[0], 403)
-                self.assertEqual(request("/api/studio/workspaces", "POST", {"name": "X"},
-                                         {"Cookie": cookie, "Content-Type": "application/json"})[0], 403)
-                self.assertEqual(request("/api/studio/delete", headers=auth)[0], 405)
-                self.assertEqual(request("/api/studio/export", "POST", {}, auth)[0], 405)
-                self.assertEqual(request("/api/studio/simulate")[0], 405)
-                status, _, data = request("/api/studio/workspaces", "POST", {"name": "HTTP"}, auth)
-                self.assertEqual(status, 200, data)
-                workspace = json.loads(data)["workspace"]
-                workspace["elements"] = [element(blocks=[{"type": "when_use", "value": ""},
-                                                       {"type": "give_item", "value": "A"}])]
-                simulation = {"element": workspace["elements"][0], "event": "when_use", "items": [], "flags": []}
-                self.assertEqual(request("/api/studio/simulate", "POST", simulation)[0], 403)
-                status, _, data = request("/api/studio/simulate", "POST", simulation, auth)
-                self.assertEqual(status, 200, data)
-                self.assertFalse(json.loads(data)["playable"])
-                self.assertEqual(json.loads(data)["items"], ["A"])
-                self.assertEqual(request("/api/studio/simulate", "POST", {**simulation, "event": "bad"}, auth)[0], 400)
-                self.assertEqual(server.studio.load(workspace["id"])["elements"], [])
-                status, _, data = request("/api/studio/check", "POST", {"workspace": workspace}, auth)
-                self.assertEqual(status, 200, data)
-                self.assertFalse(json.loads(data)["playable"])
-                status, _, data = request("/api/studio/workspace", "POST", {"workspace": workspace}, auth)
-                self.assertEqual(status, 200, data)
-                saved = json.loads(data)["workspace"]
-                url = "/api/studio/export?id=" + saved["id"]
-                self.assertEqual(request(url)[0], 403)
-                status, headers, data = request(url, headers={"Cookie": cookie})
-                self.assertEqual(status, 200)
-                self.assertEqual(headers["Content-Type"], "application/vnd.hookymod+zip")
-                self.assertIn(".hooky", headers["Content-Disposition"])
-                self.assertEqual(headers["Cache-Control"], "no-store")
-                self.assertEqual(studio.read_archive(data), saved)
-                status, _, body = request("/api/studio/import", "POST",
-                                          {"archive": base64.b64encode(data).decode()}, auth)
-                self.assertEqual(status, 200, body)
-                self.assertNotEqual(json.loads(body)["workspace"]["id"], saved["id"])
-                self.assertEqual(request("/api/studio/workspace?id=..%2Fout", headers=auth)[0], 400)
-                self.assertEqual(request("/api/studio/workspace", "POST", {"workspace": {"id": []}}, auth)[0], 400)
-                self.assertEqual(request("/api/studio/import", "POST", {"archive": "bad!"}, auth)[0], 400)
-                broken = base64.b64encode(corrupt_deflate(data)).decode()
-                self.assertEqual(request("/api/studio/import", "POST", {"archive": broken}, auth)[0], 400)
-                connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
-                connection.putrequest("POST", "/api/studio/import")
-                for key, value in auth.items(): connection.putheader(key, value)
-                connection.putheader("Content-Length", str(studio.MAX_REQUEST_BYTES + 1))
-                connection.endheaders()
-                self.assertEqual(connection.getresponse().status, 413)
-                connection.close()
-                self.assertEqual(session.validate_state({"version": 1, "view": "studio"})["view"], "studio")
-                self.assertEqual(list(root.iterdir()), [])
+                for route in ("/api/studio/workspaces", "/api/studio/workspace", "/api/studio/export",
+                              "/api/studio/import", "/api/studio/check", "/api/studio/simulate",
+                              "/api/studio/delete", "/api/studio/copy", "/api/mod/build", "/api/mobs"):
+                    with self.subTest(route=route):
+                        self.assertEqual(request(route, headers=auth)[0], 405)
+                        self.assertEqual(request(route, "POST", {"name": "Existing"}, auth)[0], 405)
+                self.assertEqual(request("/static/studio.js", headers=auth)[0], 404)
+                self.assertEqual(request("/api/scan", "POST", {}, auth)[0], 200)
+                self.assertEqual(request("/api/state", headers=auth)[0], 200)
+                self.assertFalse(hasattr(server.project, "build_mod"))
+                self.assertFalse(hasattr(server.project, "create_mob"))
+                self.assertFalse(hasattr(server, "studio"))
+                for path, contents in files.items():
+                    self.assertEqual(path.read_bytes(), contents)
             finally:
                 server.stop()
 
